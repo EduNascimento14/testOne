@@ -3,13 +3,10 @@ from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base
 import re
 
-# --- Configuração do banco e modelo ---
-
 Base = declarative_base()
 
 class Fornecedor(Base):
     __tablename__ = 'fornecedores'
-
     id = Column(Integer, primary_key=True)
     nome = Column(String, nullable=False)
     cpf_cnpj = Column(String, unique=True, nullable=False)
@@ -23,8 +20,6 @@ Session = sessionmaker(bind=engine)
 def validar_cpf_cnpj(valor):
     numeros = re.sub(r'\D', '', valor)
     return len(numeros) == 11 or len(numeros) == 14
-
-# --- Configuração dos usuários para login ---
 
 USUARIOS = {
     "usuario1": "senha1",
@@ -40,27 +35,30 @@ USUARIOS = {
 def autenticar(usuario, senha):
     return USUARIOS.get(usuario) == senha
 
-# --- Função principal do app ---
-
 def main():
     st.title("Sistema de Gerenciamento de Fornecedores - Login")
 
-    # Inicializar variáveis de sessão
     if "logado" not in st.session_state:
         st.session_state.logado = False
         st.session_state.usuario = None
 
     if not st.session_state.logado:
         st.subheader("Faça login para continuar")
-        usuario = st.text_input("Usuário")
-        senha = st.text_input("Senha", type="password")
-        if st.button("Entrar"):
+
+        with st.form("form_login"):
+            usuario = st.text_input("Usuário")
+            senha = st.text_input("Senha", type="password")
+            enviar = st.form_submit_button("Entrar")
+
+        if enviar:
             if autenticar(usuario, senha):
                 st.session_state.logado = True
                 st.session_state.usuario = usuario
                 st.success(f"Bem-vindo, {usuario}!")
+                st.experimental_rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
+
     else:
         st.sidebar.title(f"Usuário: {st.session_state.usuario}")
         menu = ["Cadastrar Fornecedor", "Listar Fornecedores", "Sair"]
