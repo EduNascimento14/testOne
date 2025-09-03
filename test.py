@@ -1,10 +1,11 @@
 import streamlit as st
-from sqlalchemy import create_engine, Column, Integer, String, Date, Boolean, ForeignKey
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy import create_engine, Column, Integer, String, Date, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload
 import re
 import os
 import json
 from datetime import datetime
+import plotly.express as px
 
 Base = declarative_base()
 
@@ -69,7 +70,7 @@ class Contrato(Base):
 
 engine = create_engine('sqlite:///fornecedores.db')
 Base.metadata.create_all(engine)
-Session = sessionmaker(bind=engine)
+Session = sessionmaker(bind=engine, expire_on_commit=False)  # Evita DetachedInstanceError
 
 # --- Funções utilitárias ---
 
@@ -132,9 +133,23 @@ def main():
         conformes = session.query(Auditoria).filter(Auditoria.classificado == "Conforme").count()
         nao_conformes = session.query(Auditoria).filter(Auditoria.classificado == "Não Conforme").count()
 
-        # Fornecedores com contrato
         fornecedores_com_contrato = session.query(Fornecedor).join(Contrato).distinct().count()
         fornecedores_sem_contrato = total_fornecedores - fornecedores_com_contrato
+
+        # Gráficos com plotly
+        fig_total = px.pie(
+            names=["Conforme", "Não Conforme"],
+            values=[conformes, nao_conformes],
+            title="Classificação da Auditoria"
+        )
+        st.plotly_chart(fig_total, use_container_width=True)
+
+        fig_contrato = px.pie(
+            names=["Com Contrato", "Sem Contrato"],
+            values=[fornecedores_com_contrato, fornecedores_sem_contrato],
+            title="Situação Contratual"
+        )
+        st.plotly_chart(fig_contrato, use_container_width=True)
 
         st.metric("Total de Fornecedores", total_fornecedores)
         st.metric("Fornecedores Conformes", conformes)
@@ -142,7 +157,6 @@ def main():
         st.metric("Fornecedores com Contrato", fornecedores_com_contrato)
         st.metric("Fornecedores sem Contrato", fornecedores_sem_contrato)
 
-        # Insights simples
         st.markdown("### Insights")
         if nao_conformes > 0:
             st.warning(f"Existem {nao_conformes} fornecedores classificados como Não Conforme. Recomenda-se auditorias e planos de ação.")
@@ -155,7 +169,6 @@ def main():
             st.success("Todos os fornecedores possuem contrato formalizado.")
 
     elif menu == "Cadastrar Fornecedor":
-        # ... (mesmo código de cadastro) ...
         st.header("Cadastrar novo fornecedor")
         with st.form("form_cadastro"):
             nome = st.text_input("Nome do fornecedor")
@@ -180,9 +193,13 @@ def main():
                     st.success("Fornecedor cadastrado com sucesso!")
 
     elif menu == "Visualizar Fornecedores":
-        # ... (mesmo código para visualizar fornecedores e abas) ...
         st.header("Fornecedores cadastrados")
-        fornecedores = session.query(Fornecedor).all()
+        fornecedores = session.query(Fornecedor).options(
+            joinedload(Fornecedor.documentos),
+            joinedload(Fornecedor.auditoria),
+            joinedload(Fornecedor.planos_acao),
+            joinedload(Fornecedor.contratos)
+        ).all()
         if not fornecedores:
             st.info("Nenhum fornecedor cadastrado.")
             return
@@ -228,11 +245,15 @@ def main():
                         session.add(doc)
                         session.commit()
                         st.success("Documento salvo com sucesso!")
+                        # Exibir preview do arquivo
+                        exibir_preview_arquivo(caminho, arquivo_doc.type)
 
                 st.markdown("### Documentos Cadastrados")
                 docs = session.query(Documento).filter_by(fornecedor_id=fornecedor_selecionado.id).all()
                 for d in docs:
-                    st.write(f"- {d.tipo} (Início: {d.data_inicio}, Validade: {d.data_validade}) - Arquivo: {d.arquivo}")
+                    st.write(f"- {d.tipo} (Início: {d.data_inicio}, Validade: {d.data_validade})")
+                    if os.path.exists(d.arquivo):
+                        exibir_preview_arquivo(d.arquivo, None)
 
             with tabs[2]:
                 st.subheader("Auditoria")
@@ -320,18 +341,39 @@ def main():
                         session.add(contrato)
                         session.commit()
                         st.success("Contrato salvo com sucesso!")
+                        # Exibir preview do arquivo
+                        exibir_preview_arquivo(caminho, arquivo_contrato.type)
 
                 contratos = session.query(Contrato).filter_by(fornecedor_id=fornecedor_selecionado.id).all()
                 for c in contratos:
-                    st.write(f"- Assinado em: {c.data_assinatura}, Validade: {c.data_validade} - Arquivo: {c.arquivo}")
+                    st.write(f"- Assinado em: {c.data_assinatura}, Validade: {c.data_validade}")
+                    if os.path.exists(c.arquivo):
+                        exibir_preview_arquivo(c.arquivo, None)
 
-def salvar_arquivo(uploaded_file, pasta_destino, nome_prefixo):
-    if not os.path.exists(pasta_destino):
-        os.makedirs(pasta_destino)
-    caminho = os.path.join(pasta_destino, f"{nome_prefixo}_{uploaded_file.name}")
-    with open(caminho, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return caminho
+def exibir_preview_arquivo(caminho, mime_type):
+    ext = os.path.splitext(caminho)[1].lower()
+    try:
+        if mime_type is None:
+            # Tenta deduzir pelo arquivo
+            if ext in ['.png', '.jpg', '.jpeg']:
+                mime_type = f"image/{ext[1:]}"
+            elif ext == '.pdf':
+                mime_type = "application/pdf"
+            else:
+                mime_type = "application/octet-stream"
+
+        if "image" in mime_type:
+            st.image(caminho)
+        elif mime_type == "application/pdf":
+            with open(caminho, "rb") as f:
+                base64_pdf = f.read()
+            st.download_button(label="Download PDF", data=base64_pdf, file_name=os.path.basename(caminho))
+            # Para visualizar PDF inline, Streamlit não tem suporte nativo, mas pode usar iframe com HTML se quiser
+            st.markdown(f"[Visualizar PDF](./{caminho})")  # Link para download/visualização externa
+        else:
+            st.write(f"Arquivo salvo: {os.path.basename(caminho)}")
+    except Exception as e:
+        st.error(f"Erro ao exibir arquivo: {e}")
 
 if __name__ == "__main__":
     main()
