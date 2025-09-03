@@ -3,6 +3,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Date, Boolean, Fo
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 import re
 import os
+import json
 from datetime import datetime
 
 Base = declarative_base()
@@ -110,8 +111,6 @@ PERGUNTAS_AUDITORIA = [
     "Os funcionários da empresa recebem, frequentemente, treinamentos sobre saúde, segurança e meio ambiente?",
 ]
 
-import json
-
 # --- App Streamlit ---
 
 def main():
@@ -120,12 +119,43 @@ def main():
     session = Session()
 
     menu = st.sidebar.selectbox("Menu", [
+        "Overview",
         "Cadastrar Fornecedor",
         "Visualizar Fornecedores",
         "Sair"
     ])
 
-    if menu == "Cadastrar Fornecedor":
+    if menu == "Overview":
+        st.header("Resumo Geral dos Fornecedores")
+
+        total_fornecedores = session.query(Fornecedor).count()
+        conformes = session.query(Auditoria).filter(Auditoria.classificado == "Conforme").count()
+        nao_conformes = session.query(Auditoria).filter(Auditoria.classificado == "Não Conforme").count()
+
+        # Fornecedores com contrato
+        fornecedores_com_contrato = session.query(Fornecedor).join(Contrato).distinct().count()
+        fornecedores_sem_contrato = total_fornecedores - fornecedores_com_contrato
+
+        st.metric("Total de Fornecedores", total_fornecedores)
+        st.metric("Fornecedores Conformes", conformes)
+        st.metric("Fornecedores Não Conformes", nao_conformes)
+        st.metric("Fornecedores com Contrato", fornecedores_com_contrato)
+        st.metric("Fornecedores sem Contrato", fornecedores_sem_contrato)
+
+        # Insights simples
+        st.markdown("### Insights")
+        if nao_conformes > 0:
+            st.warning(f"Existem {nao_conformes} fornecedores classificados como Não Conforme. Recomenda-se auditorias e planos de ação.")
+        else:
+            st.success("Todos os fornecedores estão classificados como Conforme.")
+
+        if fornecedores_sem_contrato > 0:
+            st.warning(f"Existem {fornecedores_sem_contrato} fornecedores sem contrato formalizado.")
+        else:
+            st.success("Todos os fornecedores possuem contrato formalizado.")
+
+    elif menu == "Cadastrar Fornecedor":
+        # ... (mesmo código de cadastro) ...
         st.header("Cadastrar novo fornecedor")
         with st.form("form_cadastro"):
             nome = st.text_input("Nome do fornecedor")
@@ -150,6 +180,7 @@ def main():
                     st.success("Fornecedor cadastrado com sucesso!")
 
     elif menu == "Visualizar Fornecedores":
+        # ... (mesmo código para visualizar fornecedores e abas) ...
         st.header("Fornecedores cadastrados")
         fornecedores = session.query(Fornecedor).all()
         if not fornecedores:
@@ -198,7 +229,6 @@ def main():
                         session.commit()
                         st.success("Documento salvo com sucesso!")
 
-                # Mostrar documentos cadastrados
                 st.markdown("### Documentos Cadastrados")
                 docs = session.query(Documento).filter_by(fornecedor_id=fornecedor_selecionado.id).all()
                 for d in docs:
@@ -206,7 +236,6 @@ def main():
 
             with tabs[2]:
                 st.subheader("Auditoria")
-                # Se já existe auditoria, carregar respostas
                 auditoria = session.query(Auditoria).filter_by(fornecedor_id=fornecedor_selecionado.id).first()
                 respostas = {}
                 if auditoria:
@@ -221,7 +250,6 @@ def main():
                     enviar_aud = st.form_submit_button("Salvar Auditoria")
 
                 if enviar_aud:
-                    # Calcular score
                     total = len(PERGUNTAS_AUDITORIA)
                     aprovados = sum(1 for r in respostas_form.values() if r == "Sim")
                     score = int((aprovados / total) * 100)
