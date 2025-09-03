@@ -59,7 +59,6 @@ def main():
                 st.session_state.logado = True
                 st.session_state.usuario = usuario
                 st.success(f"Bem-vindo, {usuario}!")
-                st.experimental_rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
     else:
