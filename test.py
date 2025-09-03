@@ -3,6 +3,8 @@ from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base
 import re
 
+# --- Configuração do banco e modelo ---
+
 Base = declarative_base()
 
 class Fornecedor(Base):
@@ -14,60 +16,100 @@ class Fornecedor(Base):
     endereco = Column(String)
     telefone = Column(String)
 
-def validar_cpf_cnpj(valor):
-    numeros = re.sub(r'\D', '', valor)
-    return len(numeros) == 11 or len(numeros) == 14
-
-# Configuração do banco SQLite
 engine = create_engine('sqlite:///fornecedores.db')
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 
+def validar_cpf_cnpj(valor):
+    numeros = re.sub(r'\D', '', valor)
+    return len(numeros) == 11 or len(numeros) == 14
+
+# --- Configuração dos usuários para login ---
+
+USUARIOS = {
+    "usuario1": "senha1",
+    "usuario2": "senha2",
+    "usuario3": "senha3",
+    "usuario4": "senha4",
+    "usuario5": "senha5",
+    "usuario6": "senha6",
+    "usuario7": "senha7",
+    "usuario8": "senha8",
+}
+
+def autenticar(usuario, senha):
+    return USUARIOS.get(usuario) == senha
+
+# --- Função principal do app ---
+
 def main():
-    st.title("Cadastro de Fornecedores de Destinação de Resíduos")
+    st.title("Sistema de Gerenciamento de Fornecedores - Login")
 
-    session = Session()
+    # Inicializar variáveis de sessão
+    if "logado" not in st.session_state:
+        st.session_state.logado = False
+        st.session_state.usuario = None
 
-    menu = ["Cadastrar Fornecedor", "Listar Fornecedores"]
-    escolha = st.sidebar.selectbox("Menu", menu)
-
-    if escolha == "Cadastrar Fornecedor":
-        st.header("Cadastrar novo fornecedor")
-
-        with st.form("form_cadastro"):
-            nome = st.text_input("Nome do fornecedor")
-            cpf_cnpj = st.text_input("CPF ou CNPJ")
-            endereco = st.text_area("Endereço")
-            telefone = st.text_input("Telefone")
-            enviar = st.form_submit_button("Cadastrar")
-
-        if enviar:
-            if not nome or not cpf_cnpj:
-                st.error("Por favor, preencha os campos obrigatórios: Nome e CPF/CNPJ.")
-            elif not validar_cpf_cnpj(cpf_cnpj):
-                st.error("CPF/CNPJ inválido. Deve conter 11 (CPF) ou 14 (CNPJ) dígitos numéricos.")
+    if not st.session_state.logado:
+        st.subheader("Faça login para continuar")
+        usuario = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
+        if st.button("Entrar"):
+            if autenticar(usuario, senha):
+                st.session_state.logado = True
+                st.session_state.usuario = usuario
+                st.success(f"Bem-vindo, {usuario}!")
+                st.experimental_rerun()
             else:
-                # Verificar se já existe fornecedor com mesmo CPF/CNPJ
-                existe = session.query(Fornecedor).filter_by(cpf_cnpj=cpf_cnpj).first()
-                if existe:
-                    st.warning("Fornecedor com esse CPF/CNPJ já está cadastrado.")
-                else:
-                    fornecedor = Fornecedor(nome=nome, cpf_cnpj=cpf_cnpj, endereco=endereco, telefone=telefone)
-                    session.add(fornecedor)
-                    session.commit()
-                    st.success("Fornecedor cadastrado com sucesso!")
+                st.error("Usuário ou senha incorretos.")
+    else:
+        st.sidebar.title(f"Usuário: {st.session_state.usuario}")
+        menu = ["Cadastrar Fornecedor", "Listar Fornecedores", "Sair"]
+        escolha = st.sidebar.selectbox("Menu", menu)
 
-    elif escolha == "Listar Fornecedores":
-        st.header("Fornecedores cadastrados")
-        fornecedores = session.query(Fornecedor).all()
-        if not fornecedores:
-            st.info("Nenhum fornecedor cadastrado.")
-        else:
-            for f in fornecedores:
-                st.write(f"**ID:** {f.id}  |  **Nome:** {f.nome}  |  **CPF/CNPJ:** {f.cpf_cnpj}")
-                st.write(f"Endereço: {f.endereco}")
-                st.write(f"Telefone: {f.telefone}")
-                st.markdown("---")
+        session = Session()
+
+        if escolha == "Cadastrar Fornecedor":
+            st.header("Cadastrar novo fornecedor")
+
+            with st.form("form_cadastro"):
+                nome = st.text_input("Nome do fornecedor")
+                cpf_cnpj = st.text_input("CPF ou CNPJ")
+                endereco = st.text_area("Endereço")
+                telefone = st.text_input("Telefone")
+                enviar = st.form_submit_button("Cadastrar")
+
+            if enviar:
+                if not nome or not cpf_cnpj:
+                    st.error("Por favor, preencha os campos obrigatórios: Nome e CPF/CNPJ.")
+                elif not validar_cpf_cnpj(cpf_cnpj):
+                    st.error("CPF/CNPJ inválido. Deve conter 11 (CPF) ou 14 (CNPJ) dígitos numéricos.")
+                else:
+                    existe = session.query(Fornecedor).filter_by(cpf_cnpj=cpf_cnpj).first()
+                    if existe:
+                        st.warning("Fornecedor com esse CPF/CNPJ já está cadastrado.")
+                    else:
+                        fornecedor = Fornecedor(nome=nome, cpf_cnpj=cpf_cnpj, endereco=endereco, telefone=telefone)
+                        session.add(fornecedor)
+                        session.commit()
+                        st.success("Fornecedor cadastrado com sucesso!")
+
+        elif escolha == "Listar Fornecedores":
+            st.header("Fornecedores cadastrados")
+            fornecedores = session.query(Fornecedor).all()
+            if not fornecedores:
+                st.info("Nenhum fornecedor cadastrado.")
+            else:
+                for f in fornecedores:
+                    st.write(f"**ID:** {f.id}  |  **Nome:** {f.nome}  |  **CPF/CNPJ:** {f.cpf_cnpj}")
+                    st.write(f"Endereço: {f.endereco}")
+                    st.write(f"Telefone: {f.telefone}")
+                    st.markdown("---")
+
+        elif escolha == "Sair":
+            st.session_state.logado = False
+            st.session_state.usuario = None
+            st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
