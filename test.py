@@ -86,6 +86,29 @@ def salvar_arquivo(uploaded_file, pasta_destino, nome_prefixo):
         f.write(uploaded_file.getbuffer())
     return caminho
 
+def exibir_preview_arquivo(caminho, mime_type):
+    ext = os.path.splitext(caminho)[1].lower()
+    try:
+        if mime_type is None:
+            if ext in ['.png', '.jpg', '.jpeg']:
+                mime_type = f"image/{ext[1:]}"
+            elif ext == '.pdf':
+                mime_type = "application/pdf"
+            else:
+                mime_type = "application/octet-stream"
+
+        if "image" in mime_type:
+            st.image(caminho)
+        elif mime_type == "application/pdf":
+            with open(caminho, "rb") as f:
+                base64_pdf = f.read()
+            st.download_button(label="Download PDF", data=base64_pdf, file_name=os.path.basename(caminho))
+            st.markdown(f"[Visualizar PDF](./{caminho})")
+        else:
+            st.write(f"Arquivo salvo: {os.path.basename(caminho)}")
+    except Exception as e:
+        st.error(f"Erro ao exibir arquivo: {e}")
+
 # --- Checklist da auditoria ---
 
 PERGUNTAS_AUDITORIA = [
@@ -112,19 +135,56 @@ PERGUNTAS_AUDITORIA = [
     "Os funcionários da empresa recebem, frequentemente, treinamentos sobre saúde, segurança e meio ambiente?",
 ]
 
+# --- Usuários para login ---
+USUARIOS = {
+    "usuario1": "senha1",
+    "usuario2": "senha2",
+    "usuario3": "senha3",
+    "usuario4": "senha4",
+    "usuario5": "senha5",
+    "usuario6": "senha6",
+    "usuario7": "senha7",
+    "usuario8": "senha8",
+}
+
+def autenticar(usuario, senha):
+    return USUARIOS.get(usuario) == senha
+
 # --- App Streamlit ---
 
 def main():
-    st.title("Sistema de Gerenciamento de Fornecedores de Destinação de Resíduos")
+    # Controle de login
+    if "logado" not in st.session_state:
+        st.session_state.logado = False
+        st.session_state.usuario = None
 
-    session = Session()
+    if not st.session_state.logado:
+        st.title("Sistema de Gerenciamento de Fornecedores - Login")
+        with st.form("form_login"):
+            usuario = st.text_input("Usuário")
+            senha = st.text_input("Senha", type="password")
+            enviar = st.form_submit_button("Entrar")
 
+        if enviar:
+            if autenticar(usuario, senha):
+                st.session_state.logado = True
+                st.session_state.usuario = usuario
+                st.success(f"Bem-vindo, {usuario}!")
+                st.experimental_rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
+        return
+
+    # Após login
+    st.sidebar.title(f"Usuário: {st.session_state.usuario}")
     menu = st.sidebar.selectbox("Menu", [
         "Overview",
         "Cadastrar Fornecedor",
         "Visualizar Fornecedores",
         "Sair"
     ])
+
+    session = Session()
 
     if menu == "Overview":
         st.header("Resumo Geral dos Fornecedores")
@@ -245,7 +305,6 @@ def main():
                         session.add(doc)
                         session.commit()
                         st.success("Documento salvo com sucesso!")
-                        # Exibir preview do arquivo
                         exibir_preview_arquivo(caminho, arquivo_doc.type)
 
                 st.markdown("### Documentos Cadastrados")
@@ -341,7 +400,6 @@ def main():
                         session.add(contrato)
                         session.commit()
                         st.success("Contrato salvo com sucesso!")
-                        # Exibir preview do arquivo
                         exibir_preview_arquivo(caminho, arquivo_contrato.type)
 
                 contratos = session.query(Contrato).filter_by(fornecedor_id=fornecedor_selecionado.id).all()
@@ -350,30 +408,10 @@ def main():
                     if os.path.exists(c.arquivo):
                         exibir_preview_arquivo(c.arquivo, None)
 
-def exibir_preview_arquivo(caminho, mime_type):
-    ext = os.path.splitext(caminho)[1].lower()
-    try:
-        if mime_type is None:
-            # Tenta deduzir pelo arquivo
-            if ext in ['.png', '.jpg', '.jpeg']:
-                mime_type = f"image/{ext[1:]}"
-            elif ext == '.pdf':
-                mime_type = "application/pdf"
-            else:
-                mime_type = "application/octet-stream"
-
-        if "image" in mime_type:
-            st.image(caminho)
-        elif mime_type == "application/pdf":
-            with open(caminho, "rb") as f:
-                base64_pdf = f.read()
-            st.download_button(label="Download PDF", data=base64_pdf, file_name=os.path.basename(caminho))
-            # Para visualizar PDF inline, Streamlit não tem suporte nativo, mas pode usar iframe com HTML se quiser
-            st.markdown(f"[Visualizar PDF](./{caminho})")  # Link para download/visualização externa
-        else:
-            st.write(f"Arquivo salvo: {os.path.basename(caminho)}")
-    except Exception as e:
-        st.error(f"Erro ao exibir arquivo: {e}")
+    elif menu == "Sair":
+        st.session_state.logado = False
+        st.session_state.usuario = None
+        st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
