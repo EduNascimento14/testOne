@@ -41,6 +41,7 @@ def main():
     if "logado" not in st.session_state:
         st.session_state.logado = False
         st.session_state.usuario = None
+        st.session_state.login_success = False  # flag para controlar rerun
 
     if not st.session_state.logado:
         st.subheader("Faça login para continuar")
@@ -54,10 +55,15 @@ def main():
             if autenticar(usuario, senha):
                 st.session_state.logado = True
                 st.session_state.usuario = usuario
+                st.session_state.login_success = True  # sinaliza login ok
                 st.success(f"Bem-vindo, {usuario}!")
-                st.experimental_rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
+
+        # Rerun fora do bloco do formulário, controlado pela flag
+        if st.session_state.login_success:
+            st.session_state.login_success = False
+            st.experimental_rerun()
 
     else:
         st.sidebar.title(f"Usuário: {st.session_state.usuario}")
