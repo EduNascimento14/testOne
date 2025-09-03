@@ -3,10 +3,13 @@ from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base
 import re
 
+# --- Configuração do banco e modelo ---
+
 Base = declarative_base()
 
 class Fornecedor(Base):
     __tablename__ = 'fornecedores'
+
     id = Column(Integer, primary_key=True)
     nome = Column(String, nullable=False)
     cpf_cnpj = Column(String, unique=True, nullable=False)
@@ -20,6 +23,8 @@ Session = sessionmaker(bind=engine)
 def validar_cpf_cnpj(valor):
     numeros = re.sub(r'\D', '', valor)
     return len(numeros) == 11 or len(numeros) == 14
+
+# --- Configuração dos usuários para login ---
 
 USUARIOS = {
     "usuario1": "senha1",
@@ -35,36 +40,32 @@ USUARIOS = {
 def autenticar(usuario, senha):
     return USUARIOS.get(usuario) == senha
 
-def main():
-    st.title("Sistema de Gerenciamento de Fornecedores - Login")
+# --- Função principal do app ---
 
+def main():
+    # Inicializar variáveis de sessão apenas se não existirem
     if "logado" not in st.session_state:
         st.session_state.logado = False
         st.session_state.usuario = None
-        st.session_state.login_success = False  # flag para controlar rerun
 
+    # Se não estiver logado, mostra a tela de login
     if not st.session_state.logado:
+        st.title("Sistema de Gerenciamento de Fornecedores - Login")
         st.subheader("Faça login para continuar")
-
-        with st.form("form_login"):
-            usuario = st.text_input("Usuário")
-            senha = st.text_input("Senha", type="password")
-            enviar = st.form_submit_button("Entrar")
-
-        if enviar:
+        
+        usuario = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
+        
+        if st.button("Entrar"):
             if autenticar(usuario, senha):
                 st.session_state.logado = True
                 st.session_state.usuario = usuario
-                st.session_state.login_success = True  # sinaliza login ok
-                st.success(f"Bem-vindo, {usuario}!")
+                # Força a re-execução do script imediatamente após o login
+                st.rerun() 
             else:
                 st.error("Usuário ou senha incorretos.")
-
-        # Rerun fora do bloco do formulário, controlado pela flag
-        if st.session_state.login_success:
-            st.session_state.login_success = False
-            st.experimental_rerun()
-
+    
+    # Se estiver logado, mostra a aplicação principal
     else:
         st.sidebar.title(f"Usuário: {st.session_state.usuario}")
         menu = ["Cadastrar Fornecedor", "Listar Fornecedores", "Sair"]
@@ -112,7 +113,8 @@ def main():
         elif escolha == "Sair":
             st.session_state.logado = False
             st.session_state.usuario = None
-            st.experimental_rerun()
+            # Força a re-execução para voltar à tela de login
+            st.rerun()
 
 if __name__ == "__main__":
     main()
