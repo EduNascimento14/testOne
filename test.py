@@ -1,9 +1,15 @@
-# app.py — Streamlit único
-# Novidades:
-# - Escopo 3 (resíduos): tipo, destinação, fator (tCO2e/t) e emissões (tCO2e) por MTR
-# - CDFs (Certificados de Destinação Final) ligados a MTRs
-# - KPIs no Overview: Total tCO2e e % MTRs com CDF
-# - Export Excel inclui emissões e CDFs
+# app.py — Streamlit único (com correções de gráficos e rerun)
+# Funcionalidades:
+# - Cadastro/visualização de fornecedores
+# - Documentos (upload por linha)
+# - Auditoria (modelo 0–2 ponderado)
+# - Planos de ação
+# - Contratos
+# - MTRs (upload PDF com parser; kg normalizado)
+# - Escopo 3 (tipo/destinação/fator e tCO2e por MTR)
+# - CDFs associados a MTR (indicador de MTRs com CDF)
+# - Overview com KPIs e gráficos (kg e tCO2e por fornecedor)
+# - Admin (usuários + exportação Excel)
 #
 # Execução: streamlit run app.py
 
@@ -17,6 +23,7 @@ from datetime import date, timedelta, datetime
 
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 
 import bcrypt
 from statistics import mean
@@ -68,6 +75,7 @@ Base = declarative_base()
 # =========================
 
 def _safe_rerun():
+    # Compat: Streamlit moderno usa st.rerun()
     try:
         st.rerun()
     except Exception:
@@ -359,7 +367,7 @@ class MTR(Base):
     destinacao = Column(String)                 # ex.: Aterro, Incineração...
     fator_tco2e_por_ton = Column(Float)         # tCO2e por t
     emissoes_tco2e = Column(Float)              # calculado: (kg / 1000) * fator
-    # Flag denormalizado para facilitar KPI CDF (opcional)
+    # Flag denormalizado para facilitar KPI CDF
     cdf_count = Column(Integer, default=0)
 
     created_at = Column(Date, server_default=func.current_date())
@@ -412,7 +420,6 @@ def create_user(db: Session, username: str, password: str, role: RoleEnum) -> Us
 def safe_add_column_sqlite(table: str, column: str, coltype: str):
     if not DATABASE_URL.startswith("sqlite"):
         return
-    # Verifica se coluna existe
     with engine.connect() as conn:
         res = conn.execute(text(f"PRAGMA table_info({table})")).mappings().all()
         names = [r['name'] for r in res]
@@ -421,13 +428,12 @@ def safe_add_column_sqlite(table: str, column: str, coltype: str):
 
 def run_light_migrations():
     Base.metadata.create_all(bind=engine)
-    # Adiciona colunas novas da MTR (se faltarem)
+    # Novas colunas da MTR (se faltarem)
     safe_add_column_sqlite("mtrs", "tipo_residuo", "TEXT")
     safe_add_column_sqlite("mtrs", "destinacao", "TEXT")
     safe_add_column_sqlite("mtrs", "fator_tco2e_por_ton", "REAL")
     safe_add_column_sqlite("mtrs", "emissoes_tco2e", "REAL")
     safe_add_column_sqlite("mtrs", "cdf_count", "INTEGER DEFAULT 0")
-    # Cria Tabela CDF (se não existir): Base.metadata.create_all já cuida disso.
 
 
 # =========================
@@ -743,29 +749,41 @@ if menu == "Overview":
         st.markdown(badge("Total kg (MTR)", f"{k['mtr_total_kg']:.1f} kg", True), unsafe_allow_html=True)
         st.markdown(badge("Total tCO₂e (MTR - Escopo 3)", f"{k['total_tco2e']:.2f} t", True), unsafe_allow_html=True)
 
-    # Kg por fornecedor
+    # --- Kg por fornecedor (MTR) ---
     st.markdown("### Kg destinados por fornecedor (MTR)")
-    mtr_rows = [{"Fornecedor": str(n), "Kg destinados": float(v or 0.0)} for n, v in k["mtr_por_forn"]]
+    mtr_rows = [{"Fornecedor": str(n), "Kg_destinados": float(v or 0.0)} for n, v in k["mtr_por_forn"]]
+
     if HAVE_PANDAS and mtr_rows:
-        df_mtr = pd.DataFrame(mtr_rows).sort_values("Kg destinados", ascending=False)
-        fig_bar = px.bar(df_mtr, x="Fornecedor", y="Kg destinados", title="Total de kg por fornecedor (MTR)")
+        df_mtr = pd.DataFrame(mtr_rows).sort_values("Kg_destinados", ascending=False)
+        fig_bar = px.bar(
+            df_mtr, x="Fornecedor", y="Kg_destinados",
+            title="Total de kg por fornecedor (MTR)"
+        )
     else:
-        fig_bar = px.bar(x=[r["Fornecedor"] for r in mtr_rows], y=[r["Kg destinados"] for r in mtr_rows],
-                         labels={"x": "Fornecedor", "y": "Kg destinados"},
-                         title="Total de kg por fornecedor (MTR)")
+        xs = [r["Fornecedor"] for r in mtr_rows]
+        ys = [r["Kg_destinados"] for r in mtr_rows]
+        fig_bar = go.Figure(go.Bar(x=xs, y=ys))
+        fig_bar.update_layout(title="Total de kg por fornecedor (MTR)", xaxis_title="Fornecedor", yaxis_title="Kg destinados")
+
     fig_bar.update_traces(marker_color="green")
     st.plotly_chart(fig_bar, use_container_width=True)
 
-    # tCO2e por fornecedor
+    # --- tCO2e por fornecedor (Escopo 3 - resíduos) ---
     st.markdown("### Emissões de Escopo 3 (resíduos) por fornecedor")
-    em_rows = [{"Fornecedor": str(n), "tCO₂e": float(v or 0.0)} for n, v in k["tco2e_por_forn"]]
+    em_rows = [{"Fornecedor": str(n), "tCO2e": float(v or 0.0)} for n, v in k["tco2e_por_forn"]]
+
     if HAVE_PANDAS and em_rows:
-        df_em = pd.DataFrame(em_rows).sort_values("tCO₂e", ascending=False)
-        fig_em = px.bar(df_em, x="Fornecedor", y="tCO₂e", title="tCO₂e por fornecedor (resíduos)")
+        df_em = pd.DataFrame(em_rows).sort_values("tCO2e", ascending=False)
+        fig_em = px.bar(
+            df_em, x="Fornecedor", y="tCO2e",
+            title="tCO₂e por fornecedor (resíduos)"
+        )
     else:
-        fig_em = px.bar(x=[r["Fornecedor"] for r in em_rows], y=[r["tCO₂e"] for r in em_rows],
-                        labels={"x": "Fornecedor", "y": "tCO₂e"},
-                        title="tCO₂e por fornecedor (resíduos)")
+        xs = [r["Fornecedor"] for r in em_rows]
+        ys = [r["tCO2e"] for r in em_rows]
+        fig_em = go.Figure(go.Bar(x=xs, y=ys))
+        fig_em.update_layout(title="tCO₂e por fornecedor (resíduos)", xaxis_title="Fornecedor", yaxis_title="tCO₂e")
+
     fig_em.update_traces(marker_color="red")
     st.plotly_chart(fig_em, use_container_width=True)
 
@@ -887,8 +905,7 @@ elif menu == "Visualizar Fornecedores":
                                     doc_db.updated_by = st.session_state.usuario
                                     db.commit()
                                     st.success("Documento atualizado com sucesso!")
-                                    if Path(caminho).exists():
-                                        exibir_preview_arquivo(caminho, up.type if up else None)
+                                    _safe_rerun()
 
                 st.markdown("#### Adicionar novo documento")
                 tipos_documentos = [
@@ -928,6 +945,7 @@ elif menu == "Visualizar Fornecedores":
                                 db.add(d)
                                 db.commit()
                                 st.success("Documento adicionado com sucesso!")
+                                _safe_rerun()
                             except Exception as e:
                                 db.rollback()
                                 st.error(f"Erro ao salvar documento: {e}")
@@ -945,7 +963,8 @@ elif menu == "Visualizar Fornecedores":
                         for i, pergunta in enumerate(meta["perguntas"], start=1):
                             k = f"{area_key}.{i}"
                             default = int(prev.get(k, 0))
-                            escolha = st.radio(pergunta, OPCOES, index=default, key=f"aud_{sel.id}_{k}", horizontal=True)
+                            idx = default if 0 <= default < len(OPCOES) else 0
+                            escolha = st.radio(pergunta, OPCOES, index=idx, key=f"aud_{sel.id}_{k}", horizontal=True)
                             respostas_form[k] = OPCOES.index(escolha)
                 if st.button("Salvar Auditoria", key=f"save_aud_{sel.id}"):
                     score, area_pct = calcular_score_v2(respostas_form)
@@ -1094,7 +1113,6 @@ elif menu == "Visualizar Fornecedores":
                             default_fator = fator_default(tipo_sel, dest_sel)
                             fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton or default_fator), step=0.01, format="%.4f", key=f"fator_{m.id}")
                         with c4:
-                            # cálculo on the fly
                             em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
                             st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
 
@@ -1197,7 +1215,6 @@ elif menu == "MTRs":
                         dados_raw=dados["dados_raw"],
                         updated_by=st.session_state.usuario,
                     )
-                    # inicialmente sem escopo 3 definido
                     db.add(m)
                     db.commit()
                     ok += 1
@@ -1207,7 +1224,7 @@ elif menu == "MTRs":
         st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
         _safe_rerun()
 
-    # Edição em lote: tipo/destino/fator
+    # Edição em lote: tipo/destino/fator + CDF
     st.markdown("### Edição em lote (Escopo 3)")
     with SessionLocal() as db:
         mtrs = db.query(MTR).filter(MTR.fornecedor_id == fornecedor_id).order_by(MTR.created_at.desc()).all()
