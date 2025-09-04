@@ -1,4 +1,10 @@
-streamlit
-matplotlib
-sqlalchemy
-plotly
+# App: Gerenciamento de Fornecedores Ambientais (Streamlit)
+streamlit>=1.36,<2
+sqlalchemy>=2.0,<3
+bcrypt>=4.1,<5
+plotly>=5.20,<6
+python-dateutil>=2.9,<3
+
+# Só precisa se você usar Postgres via DATABASE_URL.
+# No Streamlit Cloud (Linux) isso instala normal; no Windows é ignorado.
+psycopg2-binary>=2.9,<3 ; platform_system != "Windows"
