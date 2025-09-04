@@ -929,7 +929,7 @@ elif menu == "Visualizar Fornecedores":
                             aud.updated_by = st.session_state.usuario
                         db.commit()
                         st.success(f"Auditoria salva. Score: {score}%. Classificação: {classific}")
-                        st.experimental_rerun()
+                        st.rerun()
 
                 # Resumo por área se houver
                 aud_show = None
@@ -996,7 +996,7 @@ elif menu == "Visualizar Fornecedores":
                             db.add(plano)
                             db.commit()
                             st.success("Plano de ação adicionado.")
-                            st.experimental_rerun()
+                            st.rerun()
 
                 for p in sel.planos_acao:
                     with st.container(border=True):
@@ -1034,7 +1034,7 @@ elif menu == "Visualizar Fornecedores":
                                 db.commit()
                                 st.success("Contrato salvo com sucesso!")
                                 exibir_preview_arquivo(caminho, arquivo_contrato.type)
-                                st.experimental_rerun()
+                                st.rerun()
                             except Exception as e:
                                 db.rollback()
                                 st.error(f"Erro ao salvar contrato: {e}")
@@ -1121,7 +1121,7 @@ elif menu == "MTRs":
                 fail += 1
                 st.error(f"Erro ao processar um PDF: {e}")
         st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
-        st.experimental_rerun()
+        st.rerun()
 
     st.markdown("### MTRs cadastradas")
     with SessionLocal() as db:
@@ -1180,7 +1180,7 @@ elif menu == "Admin (Usuários)":
                 else:
                     create_user(db, username, password, RoleEnum(role))
                     st.success("Usuário criado com sucesso!")
-                    st.experimental_rerun()
+                    st.rerun()
 
     # --- Exportação de dados (Excel)
     st.subheader("Exportar dados (Excel)")
@@ -1286,4 +1286,5 @@ elif menu == "Sair":
     st.session_state.usuario = None
     st.session_state.role = None
     st.session_state.sel_forn_id = None
-    st.experimental_rerun()
+    st.rerun()
+
