@@ -519,7 +519,37 @@ def extract_and_normalize_mtr(pdf_path: str) -> dict:
         "dados_raw": dados
     }
 
+# =========================
+#         CONSTANTES
+# =========================
 
+try:
+    PERGUNTAS_AUDITORIA
+except NameError:
+    PERGUNTAS_AUDITORIA = [
+        "A empresa possui o sistema de gestão ISO 14001?",
+        "A empresa possui licença do órgão ambiental responsável? (Licença Instalação/Operação/polícia federal/CADRI/ Outorga)",
+        "Há evidências de que as restrições da licença estão sendo cumpridas?",
+        "A empresa sofreu alguma autuação ambiental nos últimos anos?",
+        "Há evidências de visitas fiscalizadoras do órgão ambiental? (3 últimos laudos de inspeção)",
+        "Existe alguma estrutura de documentação do sistema de gestão e de controle de registros?",
+        "A empresa possui uma Política (Qualidade, Meio Ambiente, Segurança) com objetivos e metas estabelecidos?",
+        "A empresa realizou levantamento de seus aspectos e impactos ambientais estabelecendo controle sobre os significativos?",
+        "O espaço físico é suficiente para receber a quantidade de material gerado?",
+        "A empresa possui ETE para tratar seus resíduos líquidos?",
+        "Caso exista ETE, são realizadas análises do efluente tratado?",
+        "A empresa possui área coberta para armazenagem dos resíduos?",
+        "A empresa possui área impermeabilizada?",
+        "Os equipamentos de transporte estão em bom estado? Controle de fumaça preta?",
+        "A empresa possui licença do IBAMA?",
+        "A empresa destina seus resíduos sólidos adequadamente?",
+        "A empresa possui Alvará do Corpo de Bombeiros e alvará municipal?",
+        "Todos os funcionários da empresa são registrados?",
+        "Os funcionários trabalham uniformizados e com EPIs pertinentes?",
+        "A empresa atende as chamadas para retiradas com pontualidade?",
+        "Os funcionários recebem treinamentos sobre saúde, segurança e meio ambiente?",
+    ]
+    
 # =========================
 #        UI / PÁGINAS
 # =========================
@@ -1165,3 +1195,4 @@ elif menu == "Sair":
     st.session_state.role = None
     st.session_state.sel_forn_id = None
     st.rerun()
+
