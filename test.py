@@ -1,4 +1,4 @@
-# app.py - Streamlit (único arquivo) com Controle de MTR por Fornecedor
+# app.py - Streamlit (único arquivo) com Auditoria 0–2 ponderada + Controle de MTR
 # Requisitos principais:
 #   streamlit, sqlalchemy>=2.0, bcrypt, plotly, python-dateutil
 # Exportação Excel:
@@ -26,6 +26,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload, Session
 import enum
+from statistics import mean
 
 # ======= (Opcional) Excel export =======
 try:
@@ -228,8 +229,8 @@ class Auditoria(Base):
     __tablename__ = "auditorias"
     id = Column(Integer, primary_key=True)
     fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
-    respostas = Column(JSON, nullable=False, default={})  # {"1": "Sim", ...}
-    score = Column(Integer, nullable=False, default=0)
+    respostas = Column(JSON, nullable=False, default={})  # v1: {"1":"Sim"} / v2: {"modelo":"v2","respostas":{"area.q":int}}
+    score = Column(Integer, nullable=False, default=0)    # 0-100
     classificado = Column(String, nullable=False, default="Não Conforme")
     created_at = Column(Date, server_default=func.current_date())
     updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
@@ -267,40 +268,34 @@ class Contrato(Base):
     updated_by = Column(String(150))
     fornecedor = relationship("Fornecedor", back_populates="contratos")
 
-# ---------- NOVO: Tabela de MTR ----------
 class MTR(Base):
     __tablename__ = "mtrs"
     id = Column(Integer, primary_key=True)
     fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
     arquivo = Column(String, nullable=False)
-    numero_mtr = Column(String)                   # ex: "123456"
+    numero_mtr = Column(String)
     gerador_razao = Column(String)
     gerador_cnpj = Column(String)
     gerador_municipio = Column(String)
     gerador_uf = Column(String)
     gerador_data_emissao = Column(Date, nullable=True)
-
     transportador_razao = Column(String)
     transportador_cnpj = Column(String)
     transportador_data_transporte = Column(Date, nullable=True)
-
     destinador_razao = Column(String)
     destinador_cnpj = Column(String)
     destinador_data_recebimento = Column(Date, nullable=True)
-
     codigo_ibama_denom = Column(String)
     estado_fisico = Column(String)
     classe = Column(String)
     acondicionamento = Column(String)
-    qtd_original = Column(String)                 # ex: "1.234,50"
-    und_original = Column(String)                 # ex: "KG" | "T"
-    qtd_kg = Column(Float)                        # convertido p/ kg
-
-    dados_raw = Column(JSON)                      # JSON completo extraído
+    qtd_original = Column(String)
+    und_original = Column(String)
+    qtd_kg = Column(Float)
+    dados_raw = Column(JSON)
     created_at = Column(Date, server_default=func.current_date())
     updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
     updated_by = Column(String(150))
-
     fornecedor = relationship("Fornecedor", back_populates="mtrs")
 
 
@@ -336,21 +331,21 @@ def documentos_status(docs) -> tuple[int, int]:
 
 def kpis_gerais(db: Session) -> dict:
     total_fornecedores = db.query(Fornecedor).count()
-    conformes = db.query(Auditoria).filter(Auditoria.classificado == "Conforme").count()
-    nao_conformes = db.query(Auditoria).filter(Auditoria.classificado == "Não Conforme").count()
+    conformes = db.query(Auditoria).filter(Auditoria.classificado == "Conforme/Adequado").count()
+    parcialmente = db.query(Auditoria).filter(Auditoria.classificado == "Parcialmente Conforme").count()
+    nao_conformes = db.query(Auditoria).filter(Auditoria.classificado == "Não Conforme/Inadequado").count()
     fornecedores_com_contrato = db.query(Fornecedor).join(Contrato).distinct().count()
     fornecedores_sem_contrato = total_fornecedores - fornecedores_com_contrato
     docs = db.query(Documento).all()
     vencidos, a_vencer = documentos_status(docs)
-    # NOVO: total kg MTR e por fornecedor
     mtr_total_kg = (db.query(func.coalesce(func.sum(MTR.qtd_kg), 0.0)).scalar() or 0.0)
-    # ranking por fornecedor
     mtr_por_forn = db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.qtd_kg), 0.0))\
                      .join(MTR, MTR.fornecedor_id == Fornecedor.id, isouter=True)\
                      .group_by(Fornecedor.id).all()
     return {
         "total_fornecedores": total_fornecedores,
         "conformes": conformes,
+        "parcial": parcialmente,
         "nao_conformes": nao_conformes,
         "forn_com_contrato": fornecedores_com_contrato,
         "forn_sem_contrato": fornecedores_sem_contrato,
@@ -380,7 +375,7 @@ def init_db_and_seed():
 # =========================
 
 def extract_pdf_data(pdf_path: str) -> dict:
-    """Extrai campos principais da MTR (1ª página), inspirado no seu script."""
+    """Extrai campos principais da MTR (1ª página)."""
     if not HAVE_PDFPLUMBER:
         raise RuntimeError("pdfplumber não está instalado. Adicione ao requirements.")
 
@@ -393,11 +388,10 @@ def extract_pdf_data(pdf_path: str) -> dict:
         mtr_match = re.search(r"MTR nº (\d+)", text)
         dados["MTR - Número"] = mtr_match.group(1).strip() if mtr_match else "N/A"
 
-        # Bloco Gerador
+        # Gerador
         g0 = text.find("Identificação do Gerador")
         g1 = text.find("Observações do Gerador")
         generator = text[g0:g1] if g0 != -1 and g1 != -1 else ""
-
         dados["Gerador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", generator).group(1).strip()
                                            if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", generator) else "N/A")
         dados["Gerador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", generator).group(1).strip()
@@ -417,14 +411,12 @@ def extract_pdf_data(pdf_path: str) -> dict:
         t0 = text.find("Identificação do Transportador")
         t1 = text.find("Nome do Motorista")
         transport = text[t0:t1] if t0 != -1 and t1 != -1 else ""
-
         dados["Transportador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", transport).group(1).strip()
                                                  if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", transport) else "N/A")
         dados["Transportador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", transport).group(1).strip()
                                              if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", transport) else "N/A")
         dados["Transportador - Endereço"] = (re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do transporte:)", transport, re.DOTALL).group(1).replace("\n", " ").strip()
                                              if re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do transporte:)", transport, re.DOTALL) else "N/A")
-        # data transporte pode vir vazia
         _dttr = re.search(r"Data do transporte:\s*(\d{2}/\d{2}/\d{4})?", transport)
         dados["Transportador - Data do transporte"] = _dttr.group(1).strip() if _dttr and _dttr.group(1) else "N/A"
         dados["Transportador - Telefone"] = (re.search(r"Telefone: (\d+)", transport).group(1).strip()
@@ -438,7 +430,6 @@ def extract_pdf_data(pdf_path: str) -> dict:
         d0 = text.find("Identificação do Destinador")
         d1 = text.find("Identificação dos Resíduos")
         destin = text[d0:d1] if d0 != -1 and d1 != -1 else ""
-
         dados["Destinador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", destin).group(1).strip()
                                               if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", destin) else "N/A")
         dados["Destinador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", destin).group(1).strip()
@@ -454,10 +445,9 @@ def extract_pdf_data(pdf_path: str) -> dict:
         dados["Destinador - UF"] = (re.search(r"UF: (\w{2})", destin).group(1).strip()
                                     if re.search(r"UF: (\w{2})", destin) else "N/A")
 
-        # Linha dos resíduos (primeiro item)
+        # Resíduos
         waste_start = text.find("Identificação dos Resíduos")
         waste_info_raw = text[waste_start:] if waste_start != -1 else text
-
         waste_line_match = re.search(
             r"^1\s+([\d-]+)-(.+?)\s+([A-Z]+)\s+CLASSE\s+(.+?)\s+([0-9,.]+)\s+([A-Z]+)\s+(.+)$",
             waste_info_raw, re.MULTILINE
@@ -485,13 +475,11 @@ def extract_pdf_data(pdf_path: str) -> dict:
     return dados
 
 def extract_and_normalize_mtr(pdf_path: str) -> dict:
-    """Extrai MTR e normaliza campos-chave, converte quantidade para kg."""
     dados = extract_pdf_data(pdf_path)
     qtd_str = dados.get("Resíduos - Qtde") or ""
     und = dados.get("Resíduos - Unidade") or ""
     qtd = to_float(qtd_str)
     qtd_kg = unidade_to_kg(qtd, und)
-
     return {
         "numero_mtr": dados.get("MTR - Número") or None,
         "gerador_razao": dados.get("Gerador - Razão Social") or None,
@@ -499,15 +487,12 @@ def extract_and_normalize_mtr(pdf_path: str) -> dict:
         "gerador_municipio": dados.get("Gerador - Município") or None,
         "gerador_uf": dados.get("Gerador - UF") or None,
         "gerador_data_emissao": parse_data_br(dados.get("Gerador - Data da emissão") or ""),
-
         "transportador_razao": dados.get("Transportador - Razão Social") or None,
         "transportador_cnpj": so_digitos(dados.get("Transportador - CPF/CNPJ") or ""),
         "transportador_data_transporte": parse_data_br(dados.get("Transportador - Data do transporte") or ""),
-
         "destinador_razao": dados.get("Destinador - Razão Social") or None,
         "destinador_cnpj": so_digitos(dados.get("Destinador - CPF/CNPJ") or ""),
         "destinador_data_recebimento": parse_data_br(dados.get("Destinador - Data do recebimento") or ""),
-
         "codigo_ibama_denom": dados.get("Resíduos - Código IBAMA e Denominação") or None,
         "estado_fisico": dados.get("Resíduos - Estado Físico") or None,
         "classe": dados.get("Resíduos - Classe") or None,
@@ -515,41 +500,98 @@ def extract_and_normalize_mtr(pdf_path: str) -> dict:
         "qtd_original": qtd_str or None,
         "und_original": und or None,
         "qtd_kg": qtd_kg,
-
         "dados_raw": dados
     }
 
+
 # =========================
-#         CONSTANTES
+# NOVO: MODELO DE AUDITORIA (v2)
 # =========================
 
-try:
-    PERGUNTAS_AUDITORIA
-except NameError:
-    PERGUNTAS_AUDITORIA = [
-        "A empresa possui o sistema de gestão ISO 14001?",
-        "A empresa possui licença do órgão ambiental responsável? (Licença Instalação/Operação/polícia federal/CADRI/ Outorga)",
-        "Há evidências de que as restrições da licença estão sendo cumpridas?",
-        "A empresa sofreu alguma autuação ambiental nos últimos anos?",
-        "Há evidências de visitas fiscalizadoras do órgão ambiental? (3 últimos laudos de inspeção)",
-        "Existe alguma estrutura de documentação do sistema de gestão e de controle de registros?",
-        "A empresa possui uma Política (Qualidade, Meio Ambiente, Segurança) com objetivos e metas estabelecidos?",
-        "A empresa realizou levantamento de seus aspectos e impactos ambientais estabelecendo controle sobre os significativos?",
-        "O espaço físico é suficiente para receber a quantidade de material gerado?",
-        "A empresa possui ETE para tratar seus resíduos líquidos?",
-        "Caso exista ETE, são realizadas análises do efluente tratado?",
-        "A empresa possui área coberta para armazenagem dos resíduos?",
-        "A empresa possui área impermeabilizada?",
-        "Os equipamentos de transporte estão em bom estado? Controle de fumaça preta?",
-        "A empresa possui licença do IBAMA?",
-        "A empresa destina seus resíduos sólidos adequadamente?",
-        "A empresa possui Alvará do Corpo de Bombeiros e alvará municipal?",
-        "Todos os funcionários da empresa são registrados?",
-        "Os funcionários trabalham uniformizados e com EPIs pertinentes?",
-        "A empresa atende as chamadas para retiradas com pontualidade?",
-        "Os funcionários recebem treinamentos sobre saúde, segurança e meio ambiente?",
-    ]
-    
+AREAS = {
+    "licenciamento": {
+        "titulo": "Licenciamento e Conformidade Legal",
+        "peso": 0.30,
+        "perguntas": [
+            "Possui licença ambiental válida do órgão competente?",
+            "Houve autuações/multas ambientais nos últimos 5 anos?",
+            "Mantém registros de atendimento às condicionantes da licença?"
+        ],
+    },
+    "gestao": {
+        "titulo": "Gestão Ambiental",
+        "peso": 0.25,
+        "perguntas": [
+            "Sistema de gestão certificado (ISO 14001 ou similar) ou equivalente implementado?",
+            "Procedimentos escritos para segregação, transporte e destinação de resíduos?",
+            "Monitora indicadores ambientais (volumes, emissões, efluentes) com registros?"
+        ],
+    },
+    "infraestrutura": {
+        "titulo": "Infraestrutura e Operação",
+        "peso": 0.20,
+        "perguntas": [
+            "Armazenamento de resíduos: coberto, sinalizado e impermeabilizado?",
+            "Plano de contingência para emergências ambientais (derramamentos/incêndios)?",
+            "Manutenção/controle de frota e emissões (ex.: fumaça preta) documentados?"
+        ],
+    },
+    "seguranca": {
+        "titulo": "Saúde, Segurança e Trabalhadores",
+        "peso": 0.15,
+        "perguntas": [
+            "Trabalhadores com registro formal?",
+            "EPIs específicos disponíveis e usados (com registros de entrega)?",
+            "Treinamentos periódicos de SSMA realizados e registrados?"
+        ],
+    },
+    "desempenho": {
+        "titulo": "Relacionamento e Desempenho",
+        "peso": 0.10,
+        "perguntas": [
+            "Atende prazos de coleta/destinação?",
+            "Registros de não conformidades/reclamações tratados com plano de ação?",
+            "Relatórios e rastreabilidade (MTRs, certificados) entregues regularmente?"
+        ],
+    },
+}
+
+OPCOES = ["Não atende (0)", "Atende parcialmente (1)", "Atende plenamente (2)"]
+
+def calcular_score_v2(respostas_v2: dict) -> tuple[int, dict]:
+    """
+    respostas_v2: dict {"licenciamento.1":0-2, ...}
+    Retorna: (score_percentual_int, area_percentuais_dict)
+    """
+    area_percentuais = {}
+    total_ponderado = 0.0
+    for area_key, meta in AREAS.items():
+        qs = meta["perguntas"]
+        vals = []
+        for i in range(1, len(qs)+1):
+            k = f"{area_key}.{i}"
+            v = respostas_v2.get(k, 0)
+            try:
+                v = int(v)
+            except Exception:
+                v = 0
+            v = max(0, min(2, v))
+            vals.append(v)
+        media_area = mean(vals) if vals else 0.0  # 0..2
+        pct_area = (media_area / 2.0) * 100.0    # 0..100
+        area_percentuais[area_key] = pct_area
+        total_ponderado += pct_area * meta["peso"]
+    score = int(round(total_ponderado))
+    return score, area_percentuais
+
+def classificar(score: int) -> str:
+    if score >= 80:
+        return "Conforme/Adequado"
+    if score >= 60:
+        return "Parcialmente Conforme"
+    return "Não Conforme/Inadequado"
+
+
 # =========================
 #        UI / PÁGINAS
 # =========================
@@ -605,11 +647,15 @@ if menu == "Overview":
 
     # Paleta verde/vermelho
     fig_total = px.pie(
-        names=["Conforme", "Não Conforme"],
-        values=[k["conformes"], k["nao_conformes"]],
-        title="Classificação da Auditoria",
-        color=["Conforme", "Não Conforme"],
-        color_discrete_map={"Conforme": "green", "Não Conforme": "red"},
+        names=["Conforme/Adequado", "Parcialmente Conforme", "Não Conforme/Inadequado"],
+        values=[k["conformes"], k["parcial"], k["nao_conformes"]],
+        title="Classificação da Auditoria (v2)",
+        color=["Conforme/Adequado", "Parcialmente Conforme", "Não Conforme/Inadequado"],
+        color_discrete_map={
+            "Conforme/Adequado": "green",
+            "Parcialmente Conforme": "orange",
+            "Não Conforme/Inadequado": "red",
+        },
     )
     fig_contrato = px.pie(
         names=["Com Contrato", "Sem Contrato"],
@@ -625,7 +671,7 @@ if menu == "Overview":
     with c2:
         st.plotly_chart(fig_contrato, use_container_width=True)
 
-    # Indicadores coloridos (HTML simples)
+    # Indicadores coloridos (HTML)
     def badge(label, value, good=True):
         color = "#2e7d32" if good else "#c62828"  # verde/vermelho
         bg = "#e8f5e9" if good else "#ffebee"
@@ -639,32 +685,23 @@ if menu == "Overview":
     colA, colB, colC = st.columns(3)
     with colA:
         st.markdown(badge("Total de Fornecedores", k["total_fornecedores"], good=True), unsafe_allow_html=True)
-        st.markdown(badge("Conformes", k["conformes"], good=True), unsafe_allow_html=True)
+        st.markdown(badge("Conformes/Adequados", k["conformes"], good=True), unsafe_allow_html=True)
     with colB:
-        st.markdown(badge("Não Conformes", k["nao_conformes"], good=False), unsafe_allow_html=True)
-        st.markdown(badge("Doc. a vencer (30d)", k["docs_a_vencer"], good=False), unsafe_allow_html=True)
+        st.markdown(badge("Parcialmente Conforme", k["parcial"], good=False), unsafe_allow_html=True)
+        st.markdown(badge("Não Conformes/Inadequados", k["nao_conformes"], good=False), unsafe_allow_html=True)
     with colC:
+        st.markdown(badge("Doc. a vencer (30d)", k["docs_a_vencer"], good=False), unsafe_allow_html=True)
         st.markdown(badge("Documentos vencidos", k["docs_vencidos"], good=False), unsafe_allow_html=True)
-        st.markdown(badge("Total kg (MTR)", f"{k['mtr_total_kg']:.1f} kg", good=True), unsafe_allow_html=True)
+
+    st.markdown(badge("Total kg (MTR)", f"{k['mtr_total_kg']:.1f} kg", good=True), unsafe_allow_html=True)
 
     st.markdown("### Kg destinados por fornecedor (MTR)")
-    # Ordena por kg desc, exibe gráfico de barras verde
     nomes = [n for n, v in k["mtr_por_forn"]]
     valores = [v for n, v in k["mtr_por_forn"]]
     fig_bar = px.bar(x=nomes, y=valores, labels={"x": "Fornecedor", "y": "Kg destinados"},
                      title="Total de kg destinados por fornecedor (MTR)")
     fig_bar.update_traces(marker_color="green")
     st.plotly_chart(fig_bar, use_container_width=True)
-
-    st.markdown("### Insights")
-    if k["nao_conformes"] > 0:
-        st.error(f"Existem {k['nao_conformes']} fornecedores 'Não Conforme'. Recomenda-se planos de ação e nova auditoria.")
-    else:
-        st.success("Todos os fornecedores estão 'Conforme'.")
-    if k["forn_sem_contrato"] > 0:
-        st.error(f"Existem {k['forn_sem_contrato']} fornecedores sem contrato formalizado.")
-    else:
-        st.success("Todos os fornecedores possuem contrato formalizado.")
 
 # ---- Cadastrar Fornecedor ----
 elif menu == "Cadastrar Fornecedor":
@@ -832,46 +869,63 @@ elif menu == "Visualizar Fornecedores":
                                 db.rollback()
                                 st.error(f"Erro ao salvar documento: {e}")
 
-            # --- Auditoria
+            # --- Auditoria (v2)
             with tabs[2]:
-                st.subheader("Auditoria")
+                st.subheader("Auditoria (modelo 0–2 com pesos)")
                 aud_exist = sel.auditoria
-                respostas_prev = aud_exist.respostas if aud_exist else {}
+                # Extrair respostas anteriores (se v2), caso contrário iniciar vazio
+                prev = {}
+                if aud_exist and isinstance(aud_exist.respostas, dict) and aud_exist.respostas.get("modelo") == "v2":
+                    prev = aud_exist.respostas.get("respostas", {}) or {}
 
-                with st.form(f"form_auditoria_{sel.id}"):
-                    respostas_form = {}
-                    for i, pergunta in enumerate(PERGUNTAS_AUDITORIA, 1):
-                        default = respostas_prev.get(str(i), "Sim")
-                        idx = 0 if default == "Sim" else 1
-                        respostas_form[str(i)] = st.radio(f"{i}) {pergunta}", ["Sim", "Não"], index=idx, key=f"aud_{sel.id}_{i}")
-                    enviar_aud = st.form_submit_button("Salvar Auditoria")
+                respostas_form = {}
+                for area_key, meta in AREAS.items():
+                    with st.expander(f"{meta['titulo']} — peso {int(meta['peso']*100)}%"):
+                        for i, pergunta in enumerate(meta["perguntas"], start=1):
+                            k = f"{area_key}.{i}"
+                            default = int(prev.get(k, 0))
+                            escolha = st.radio(
+                                pergunta, OPCOES, index=default,
+                                key=f"aud_{sel.id}_{k}", horizontal=True
+                            )
+                            respostas_form[k] = OPCOES.index(escolha)
 
-                if enviar_aud:
-                    total = len(respostas_form)
-                    aprovados = sum(1 for v in respostas_form.values() if v == "Sim")
-                    score = int((aprovados / total) * 100) if total else 0
-                    classificado = "Conforme" if score >= 80 else "Não Conforme"
+                if st.button("Salvar Auditoria", key=f"save_aud_{sel.id}"):
+                    score, area_pct = calcular_score_v2(respostas_form)
+                    classific = classificar(score)
+                    payload = {"modelo": "v2", "respostas": respostas_form, "area_pct": area_pct}
                     with SessionLocal() as db:
                         aud = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
                         if not aud:
                             aud = Auditoria(
                                 fornecedor_id=sel.id,
-                                respostas=respostas_form,
+                                respostas=payload,
                                 score=score,
-                                classificado=classificado,
+                                classificado=classific,
                                 updated_by=st.session_state.usuario,
                             )
                             db.add(aud)
                         else:
-                            aud.respostas = respostas_form
+                            aud.respostas = payload
                             aud.score = score
-                            aud.classificado = classificado
+                            aud.classificado = classific
                             aud.updated_by = st.session_state.usuario
                         db.commit()
-                        st.success(f"Auditoria salva. Score: {score}%. Classificação: {classificado}")
+                        st.success(f"Auditoria salva. Score: {score}%. Classificação: {classific}")
 
-                if sel.auditoria:
-                    st.markdown(f"**Última auditoria:** Score {sel.auditoria.score}%, Classificação: {sel.auditoria.classificado}")
+                # Resumo por área se houver
+                if aud_exist and isinstance(aud_exist.respostas, dict) and aud_exist.respostas.get("modelo") == "v2":
+                    area_pct = aud_exist.respostas.get("area_pct", {})
+                    if area_pct:
+                        nomes = [AREAS[k]["titulo"] for k in AREAS.keys()]
+                        valores = [area_pct.get(k, 0.0) for k in AREAS.keys()]
+                        fig_area = px.bar(x=nomes, y=valores, labels={"x": "Área", "y": "% atendimento"},
+                                          title="Atendimento por área (%)")
+                        fig_area.update_traces(marker_color="green")
+                        st.plotly_chart(fig_area, use_container_width=True)
+                    st.markdown(f"**Última auditoria (v2):** Score {aud_exist.score}%, Classificação: {aud_exist.classificado}")
+                elif aud_exist:
+                    st.warning("Há uma auditoria em modelo anterior (Sim/Não). Salve novamente para migrar ao modelo v2.")
 
             # --- Planos de Ação
             with tabs[3]:
@@ -994,9 +1048,7 @@ elif menu == "MTRs":
         fail = 0
         for up in uploads:
             try:
-                # Salva PDF
                 caminho = salvar_arquivo(up, "uploads/mtrs", f"{fornecedor_id}_mtr")
-                # Extrai e normaliza
                 dados = extract_and_normalize_mtr(caminho)
                 with SessionLocal() as db:
                     m = MTR(
@@ -1033,7 +1085,6 @@ elif menu == "MTRs":
         st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
         st.rerun()
 
-    # Tabela geral de MTRs
     st.markdown("### MTRs cadastradas")
     with SessionLocal() as db:
         mtrs = db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.created_at.desc()).all()
@@ -1041,7 +1092,6 @@ elif menu == "MTRs":
     if not mtrs:
         st.info("Nenhuma MTR cadastrada ainda.")
     else:
-        # Mostrar resumo em tabela simples
         rows = []
         for m, nome_f in mtrs:
             rows.append({
@@ -1132,14 +1182,18 @@ elif menu == "Admin (Usuários)":
                         })
                 pd.DataFrame(rows_d).to_excel(writer, sheet_name="Documentos", index=False)
 
-                # Auditorias
+                # Auditorias (v2-friendly)
                 rows_a = []
                 for f in fornecedores:
                     a = f.auditoria
                     if a:
+                        modelo = a.respostas.get("modelo") if isinstance(a.respostas, dict) else "v1"
+                        area_pct = a.respostas.get("area_pct") if isinstance(a.respostas, dict) else None
                         rows_a.append({
                             "fornecedor_id": f.id, "fornecedor": f.nome,
                             "score": a.score, "classificado": a.classificado,
+                            "modelo": modelo,
+                            "area_pct_json": json.dumps(area_pct, ensure_ascii=False) if area_pct else "",
                             "respostas_json": json.dumps(a.respostas, ensure_ascii=False),
                             "updated_by": a.updated_by
                         })
@@ -1195,4 +1249,3 @@ elif menu == "Sair":
     st.session_state.role = None
     st.session_state.sel_forn_id = None
     st.rerun()
-
