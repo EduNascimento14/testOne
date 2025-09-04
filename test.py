@@ -1,8 +1,9 @@
-# app.py - Streamlit (único arquivo) com Auditoria 0–2 ponderada + Controle de MTR
-# Requisitos principais:
-#   streamlit, sqlalchemy>=2.0, bcrypt, plotly, python-dateutil
-# Exportação Excel: pandas, openpyxl
-# Parsing MTR em PDF: pdfplumber, unidecode
+# app.py — Streamlit único
+# Novidades:
+# - Escopo 3 (resíduos): tipo, destinação, fator (tCO2e/t) e emissões (tCO2e) por MTR
+# - CDFs (Certificados de Destinação Final) ligados a MTRs
+# - KPIs no Overview: Total tCO2e e % MTRs com CDF
+# - Export Excel inclui emissões e CDFs
 #
 # Execução: streamlit run app.py
 
@@ -14,26 +15,27 @@ from io import BytesIO
 from pathlib import Path
 from datetime import date, timedelta, datetime
 
-import bcrypt
 import streamlit as st
 import plotly.express as px
 
+import bcrypt
+from statistics import mean
+
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Date, ForeignKey, Enum,
-    UniqueConstraint, JSON, func
+    UniqueConstraint, JSON, func, text
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload, Session
 import enum
-from statistics import mean
 
-# ======= (Opcional) Excel export =======
+# ======= (Excel / Data) =======
 try:
     import pandas as pd
     HAVE_PANDAS = True
 except Exception:
     HAVE_PANDAS = False
 
-# ======= Parsing PDF MTR =======
+# ======= PDF MTR =======
 try:
     import pdfplumber
     HAVE_PDFPLUMBER = True
@@ -41,7 +43,7 @@ except Exception:
     HAVE_PDFPLUMBER = False
 
 try:
-    import unidecode  # não usamos diretamente, mas útil para limpeza se quiser evoluir
+    import unidecode
     HAVE_UNIDECODE = True
 except Exception:
     HAVE_UNIDECODE = False
@@ -64,6 +66,15 @@ Base = declarative_base()
 # =========================
 #       UTILITÁRIOS
 # =========================
+
+def _safe_rerun():
+    try:
+        st.rerun()
+    except Exception:
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
 
 def so_digitos(valor: str) -> str:
     import re as _re
@@ -144,9 +155,6 @@ def exibir_preview_arquivo(caminho: str, mime_type: str | None):
     except Exception as e:
         st.error(f"Erro ao exibir arquivo: {e}")
 
-def validade_ok(inicio: date, validade: date) -> bool:
-    return validade >= inicio
-
 def parse_data_br(valor: str) -> date | None:
     try:
         return datetime.strptime(valor, "%d/%m/%Y").date()
@@ -154,7 +162,6 @@ def parse_data_br(valor: str) -> date | None:
         return None
 
 def to_float(num_str: str) -> float | None:
-    """Converte string numérica brasileira (com vírgula) em float."""
     if not num_str:
         return None
     s = num_str.strip().replace(".", "").replace(",", ".")
@@ -171,8 +178,63 @@ def unidade_to_kg(qtd: float | None, unidade: str | None) -> float | None:
         return qtd
     if u in ("T", "TON", "TONS", "TONELADA", "TONELADAS"):
         return qtd * 1000.0
-    # fallback: assume kg
     return qtd
+
+def kg_to_ton(kg: float | None) -> float:
+    return (kg or 0.0) / 1000.0
+
+
+# =========================
+#     FATORES DE EMISSÃO
+# =========================
+# Exemplos (IPCC/DEFRA) — ajuste conforme suas referências oficiais.
+# Unidade: tCO2e / t (tonelada)
+EMISSION_FACTORS = {
+    # tipo -> destinação -> fator tCO2e/t
+    "Plástico": {
+        "Incineração c/ recuperação energética": 2.9,
+        "Incineração s/ recuperação energética": 3.1,
+        "Aterro": 0.1,
+        "Reciclagem": -0.7,
+    },
+    "Papel": {
+        "Incineração c/ recuperação energética": 1.2,
+        "Aterro": 1.9,
+        "Reciclagem": -1.0,
+        "Compostagem": 0.1,
+    },
+    "Orgânico": {
+        "Compostagem": 0.1,
+        "Aterro": 1.2,
+        "Digestão anaeróbia": -0.2,
+    },
+    "Madeira": {
+        "Reciclagem": -0.4,
+        "Incineração c/ recuperação energética": 0.6,
+        "Aterro": 0.3,
+    },
+    "Metais": {
+        "Reciclagem": -1.5,
+        "Aterro": 0.05,
+    },
+    "Vidro": {
+        "Reciclagem": -0.3,
+        "Aterro": 0.02,
+    },
+    "Misto/Outros": {
+        "Aterro": 0.3,
+        "Incineração c/ recuperação energética": 1.5,
+        "Reciclagem": -0.2,
+    },
+}
+
+TIPOS_RESIDUO = list(EMISSION_FACTORS.keys())
+
+def destinos_para_tipo(tipo: str) -> list[str]:
+    return list(EMISSION_FACTORS.get(tipo, EMISSION_FACTORS["Misto/Outros"]).keys())
+
+def fator_default(tipo: str, destino: str) -> float:
+    return EMISSION_FACTORS.get(tipo, {}).get(destino, 0.0)
 
 
 # =========================
@@ -227,7 +289,7 @@ class Auditoria(Base):
     __tablename__ = "auditorias"
     id = Column(Integer, primary_key=True)
     fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
-    respostas = Column(JSON, nullable=False, default={})  # v1: {"1":"Sim"} / v2: {"modelo":"v2","respostas":{"area.q":int}}
+    respostas = Column(JSON, nullable=False, default={})  # v2: {"modelo":"v2","respostas":{...},"area_pct":{...}}
     score = Column(Integer, nullable=False, default=0)    # 0-100
     classificado = Column(String, nullable=False, default="Não Conforme")
     created_at = Column(Date, server_default=func.current_date())
@@ -291,10 +353,32 @@ class MTR(Base):
     und_original = Column(String)
     qtd_kg = Column(Float)
     dados_raw = Column(JSON)
+
+    # NOVOS CAMPOS (Escopo 3)
+    tipo_residuo = Column(String)               # ex.: Plástico, Papel, Orgânico, etc.
+    destinacao = Column(String)                 # ex.: Aterro, Incineração...
+    fator_tco2e_por_ton = Column(Float)         # tCO2e por t
+    emissoes_tco2e = Column(Float)              # calculado: (kg / 1000) * fator
+    # Flag denormalizado para facilitar KPI CDF (opcional)
+    cdf_count = Column(Integer, default=0)
+
     created_at = Column(Date, server_default=func.current_date())
     updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
     updated_by = Column(String(150))
     fornecedor = relationship("Fornecedor", back_populates="mtrs")
+    cdfs = relationship("CDF", back_populates="mtr", cascade="all, delete-orphan")
+
+class CDF(Base):
+    __tablename__ = "cdfs"
+    id = Column(Integer, primary_key=True)
+    mtr_id = Column(Integer, ForeignKey('mtrs.id', ondelete="CASCADE"), nullable=False)
+    arquivo = Column(String, nullable=False)
+    data_emissao = Column(Date, nullable=True)
+    observacao = Column(String)
+    created_at = Column(Date, server_default=func.current_date())
+    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
+    updated_by = Column(String(150))
+    mtr = relationship("MTR", back_populates="cdfs")
 
 
 # =========================
@@ -320,52 +404,30 @@ def create_user(db: Session, username: str, password: str, role: RoleEnum) -> Us
     db.refresh(u)
     return u
 
-def documentos_status(docs) -> tuple[int, int]:
-    hoje = date.today()
-    limite = hoje + timedelta(days=30)
-    vencidos = sum(1 for d in docs if d.data_validade and d.data_validade < hoje)
-    a_vencer = sum(1 for d in docs if d.data_validade and hoje <= d.data_validade <= limite)
-    return vencidos, a_vencer
-
-def kpis_gerais(db: Session) -> dict:
-    total_fornecedores = db.query(Fornecedor).count()
-    conformes = db.query(Auditoria).filter(Auditoria.classificado == "Conforme/Adequado").count()
-    parcialmente = db.query(Auditoria).filter(Auditoria.classificado == "Parcialmente Conforme").count()
-    nao_conformes = db.query(Auditoria).filter(Auditoria.classificado == "Não Conforme/Inadequado").count()
-    fornecedores_com_contrato = db.query(Fornecedor).join(Contrato).distinct().count()
-    fornecedores_sem_contrato = total_fornecedores - fornecedores_com_contrato
-    docs = db.query(Documento).all()
-    vencidos, a_vencer = documentos_status(docs)
-    mtr_total_kg = (db.query(func.coalesce(func.sum(MTR.qtd_kg), 0.0)).scalar() or 0.0)
-    mtr_por_forn = db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.qtd_kg), 0.0))\
-                     .join(MTR, MTR.fornecedor_id == Fornecedor.id, isouter=True)\
-                     .group_by(Fornecedor.id).all()
-    return {
-        "total_fornecedores": total_fornecedores,
-        "conformes": conformes,
-        "parcial": parcialmente,
-        "nao_conformes": nao_conformes,
-        "forn_com_contrato": fornecedores_com_contrato,
-        "forn_sem_contrato": fornecedores_sem_contrato,
-        "docs_vencidos": vencidos,
-        "docs_a_vencer": a_vencer,
-        "mtr_total_kg": float(mtr_total_kg),
-        "mtr_por_forn": [(n, float(v or 0.0)) for n, v in mtr_por_forn],
-    }
-
 
 # =========================
-#      INICIALIZAÇÃO DB
+#      MIGRAÇÃO SIMPLES
 # =========================
 
-def init_db_and_seed():
+def safe_add_column_sqlite(table: str, column: str, coltype: str):
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    # Verifica se coluna existe
+    with engine.connect() as conn:
+        res = conn.execute(text(f"PRAGMA table_info({table})")).mappings().all()
+        names = [r['name'] for r in res]
+        if column not in names:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"))
+
+def run_light_migrations():
     Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        # Seed exigido: admin Eduardo / Capitu
-        admin_user = "Eduardo"
-        admin_pass = "Capitu"
-        if not get_user_by_username(db, admin_user):
-            create_user(db, admin_user, admin_pass, RoleEnum.admin)
+    # Adiciona colunas novas da MTR (se faltarem)
+    safe_add_column_sqlite("mtrs", "tipo_residuo", "TEXT")
+    safe_add_column_sqlite("mtrs", "destinacao", "TEXT")
+    safe_add_column_sqlite("mtrs", "fator_tco2e_por_ton", "REAL")
+    safe_add_column_sqlite("mtrs", "emissoes_tco2e", "REAL")
+    safe_add_column_sqlite("mtrs", "cdf_count", "INTEGER DEFAULT 0")
+    # Cria Tabela CDF (se não existir): Base.metadata.create_all já cuida disso.
 
 
 # =========================
@@ -373,20 +435,16 @@ def init_db_and_seed():
 # =========================
 
 def extract_pdf_data(pdf_path: str) -> dict:
-    """Extrai campos principais da MTR (1ª página)."""
     if not HAVE_PDFPLUMBER:
         raise RuntimeError("pdfplumber não está instalado. Adicione ao requirements.")
-
     dados = {}
     with pdfplumber.open(pdf_path) as pdf:
         page = pdf.pages[0]
         text = page.extract_text() or ""
 
-        # MTR número
         mtr_match = re.search(r"MTR nº (\d+)", text)
         dados["MTR - Número"] = mtr_match.group(1).strip() if mtr_match else "N/A"
 
-        # Gerador
         g0 = text.find("Identificação do Gerador")
         g1 = text.find("Observações do Gerador")
         generator = text[g0:g1] if g0 != -1 and g1 != -1 else ""
@@ -394,18 +452,13 @@ def extract_pdf_data(pdf_path: str) -> dict:
                                            if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", generator) else "N/A")
         dados["Gerador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", generator).group(1).strip()
                                        if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", generator) else "N/A")
-        dados["Gerador - Endereço"] = (re.search(r"Endereço: (.*?)(?:\nTelefone:|Data da emissão:)", generator, re.DOTALL).group(1).replace("\n", " ").strip()
-                                       if re.search(r"Endereço: (.*?)(?:\nTelefone:|Data da emissão:)", generator, re.DOTALL) else "N/A")
         dados["Gerador - Data da emissão"] = (re.search(r"Data da emissão: (\d{2}/\d{2}/\d{4})", generator).group(1).strip()
                                               if re.search(r"Data da emissão: (\d{2}/\d{2}/\d{4})", generator) else "N/A")
-        dados["Gerador - Telefone"] = (re.search(r"Telefone: (\d+)", generator).group(1).strip()
-                                       if re.search(r"Telefone: (\d+)", generator) else "N/A")
         dados["Gerador - Município"] = (re.search(r"Município: (.*?) UF:", generator).group(1).strip()
                                         if re.search(r"Município: (.*?) UF:", generator) else "N/A")
         dados["Gerador - UF"] = (re.search(r"UF: (\w{2})", generator).group(1).strip()
                                  if re.search(r"UF: (\w{2})", generator) else "N/A")
 
-        # Transportador
         t0 = text.find("Identificação do Transportador")
         t1 = text.find("Nome do Motorista")
         transport = text[t0:t1] if t0 != -1 and t1 != -1 else ""
@@ -413,18 +466,9 @@ def extract_pdf_data(pdf_path: str) -> dict:
                                                  if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", transport) else "N/A")
         dados["Transportador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", transport).group(1).strip()
                                              if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", transport) else "N/A")
-        dados["Transportador - Endereço"] = (re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do transporte:)", transport, re.DOTALL).group(1).replace("\n", " ").strip()
-                                             if re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do transporte:)", transport, re.DOTALL) else "N/A")
         _dttr = re.search(r"Data do transporte:\s*(\d{2}/\d{2}/\d{4})?", transport)
         dados["Transportador - Data do transporte"] = _dttr.group(1).strip() if _dttr and _dttr.group(1) else "N/A"
-        dados["Transportador - Telefone"] = (re.search(r"Telefone: (\d+)", transport).group(1).strip()
-                                             if re.search(r"Telefone: (\d+)", transport) else "N/A")
-        dados["Transportador - Município"] = (re.search(r"Município: (.*?) UF:", transport).group(1).strip()
-                                              if re.search(r"Município: (.*?) UF:", transport) else "N/A")
-        dados["Transportador - UF"] = (re.search(r"UF: (\w{2})", transport).group(1).strip()
-                                       if re.search(r"UF: (\w{2})", transport) else "N/A")
 
-        # Destinador
         d0 = text.find("Identificação do Destinador")
         d1 = text.find("Identificação dos Resíduos")
         destin = text[d0:d1] if d0 != -1 and d1 != -1 else ""
@@ -432,18 +476,10 @@ def extract_pdf_data(pdf_path: str) -> dict:
                                               if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", destin) else "N/A")
         dados["Destinador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", destin).group(1).strip()
                                           if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", destin) else "N/A")
-        dados["Destinador - Endereço"] = (re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do recebimento:)", destin, re.DOTALL).group(1).replace("\n", " ").strip()
-                                          if re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do recebimento:)", destin, re.DOTALL) else "N/A")
         _dtrc = re.search(r"Data do recebimento:\s*(\d{2}/\d{2}/\d{4})?", destin)
         dados["Destinador - Data do recebimento"] = _dtrc.group(1).strip() if _dtrc and _dtrc.group(1) else "N/A"
-        dados["Destinador - Telefone"] = (re.search(r"Telefone: (\d+)", destin).group(1).strip()
-                                          if re.search(r"Telefone: (\d+)", destin) else "N/A")
-        dados["Destinador - Município"] = (re.search(r"Município: (.*?) UF:", destin).group(1).strip()
-                                           if re.search(r"Município: (.*?) UF:", destin) else "N/A")
-        dados["Destinador - UF"] = (re.search(r"UF: (\w{2})", destin).group(1).strip()
-                                    if re.search(r"UF: (\w{2})", destin) else "N/A")
 
-        # Resíduos (pega a primeira linha de item)
+        # Resíduos (primeiro item)
         waste_start = text.find("Identificação dos Resíduos")
         waste_info_raw = text[waste_start:] if waste_start != -1 else text
         waste_line_match = re.search(
@@ -452,23 +488,13 @@ def extract_pdf_data(pdf_path: str) -> dict:
         )
         if waste_line_match:
             codigo_completo = f"{waste_line_match.group(1)}-{waste_line_match.group(2).strip()}"
-            dados["Resíduos - Item"] = "1"
             dados["Resíduos - Código IBAMA e Denominação"] = codigo_completo[:6]
-            dados["Resíduos - Estado Físico"] = waste_line_match.group(3).strip()
-            dados["Resíduos - Classe"] = f"CLASSE {waste_line_match.group(4).strip()}"
-            dados["Resíduos - Acondicionamento"] = waste_line_match.group(4).strip()
             dados["Resíduos - Qtde"] = waste_line_match.group(5).strip()
             dados["Resíduos - Unidade"] = waste_line_match.group(6).strip()
-            dados["Resíduos - Tratamento"] = waste_line_match.group(7).strip()
         else:
-            dados["Resíduos - Item"] = ""
             dados["Resíduos - Código IBAMA e Denominação"] = ""
-            dados["Resíduos - Estado Físico"] = ""
-            dados["Resíduos - Classe"] = ""
-            dados["Resíduos - Acondicionamento"] = ""
             dados["Resíduos - Qtde"] = ""
             dados["Resíduos - Unidade"] = ""
-            dados["Resíduos - Tratamento"] = ""
 
     return dados
 
@@ -492,9 +518,6 @@ def extract_and_normalize_mtr(pdf_path: str) -> dict:
         "destinador_cnpj": so_digitos(dados.get("Destinador - CPF/CNPJ") or ""),
         "destinador_data_recebimento": parse_data_br(dados.get("Destinador - Data do recebimento") or ""),
         "codigo_ibama_denom": dados.get("Resíduos - Código IBAMA e Denominação") or None,
-        "estado_fisico": dados.get("Resíduos - Estado Físico") or None,
-        "classe": dados.get("Resíduos - Classe") or None,
-        "acondicionamento": dados.get("Resíduos - Acondicionamento") or None,
         "qtd_original": qtd_str or None,
         "und_original": und or None,
         "qtd_kg": qtd_kg,
@@ -503,64 +526,24 @@ def extract_and_normalize_mtr(pdf_path: str) -> dict:
 
 
 # =========================
-# NOVO: MODELO DE AUDITORIA (v2)
+# AUDITORIA v2 (0–2 ponderado)
 # =========================
 
 AREAS = {
-    "licenciamento": {
-        "titulo": "Licenciamento e Conformidade Legal",
-        "peso": 0.30,
-        "perguntas": [
-            "Possui licença ambiental válida do órgão competente?",
-            "Houve autuações/multas ambientais nos últimos 5 anos?",
-            "Mantém registros de atendimento às condicionantes da licença?"
-        ],
-    },
-    "gestao": {
-        "titulo": "Gestão Ambiental",
-        "peso": 0.25,
-        "perguntas": [
-            "Sistema de gestão certificado (ISO 14001 ou similar) ou equivalente implementado?",
-            "Procedimentos escritos para segregação, transporte e destinação de resíduos?",
-            "Monitora indicadores ambientais (volumes, emissões, efluentes) com registros?"
-        ],
-    },
-    "infraestrutura": {
-        "titulo": "Infraestrutura e Operação",
-        "peso": 0.20,
-        "perguntas": [
-            "Armazenamento de resíduos: coberto, sinalizado e impermeabilizado?",
-            "Plano de contingência para emergências ambientais (derramamentos/incêndios)?",
-            "Manutenção/controle de frota e emissões (ex.: fumaça preta) documentados?"
-        ],
-    },
-    "seguranca": {
-        "titulo": "Saúde, Segurança e Trabalhadores",
-        "peso": 0.15,
-        "perguntas": [
-            "Trabalhadores com registro formal?",
-            "EPIs específicos disponíveis e usados (com registros de entrega)?",
-            "Treinamentos periódicos de SSMA realizados e registrados?"
-        ],
-    },
-    "desempenho": {
-        "titulo": "Relacionamento e Desempenho",
-        "peso": 0.10,
-        "perguntas": [
-            "Atende prazos de coleta/destinação?",
-            "Registros de não conformidades/reclamações tratados com plano de ação?",
-            "Relatórios e rastreabilidade (MTRs, certificados) entregues regularmente?"
-        ],
-    },
+    "licenciamento": {"titulo": "Licenciamento e Conformidade Legal", "peso": 0.30,
+        "perguntas": ["Licença válida?", "Ocorrência de autuações?", "Condição e registros de condicionantes?"]},
+    "gestao": {"titulo": "Gestão Ambiental", "peso": 0.25,
+        "perguntas": ["SGA/ISO 14001 ou equivalente?", "Procedimentos escritos (segregação/transporte/destino)?", "Indicadores e registros?"]},
+    "infraestrutura": {"titulo": "Infraestrutura e Operação", "peso": 0.20,
+        "perguntas": ["Armazenamento adequado (coberto/impermeável)?", "Plano de contingência?", "Manutenção de frota/emissões?"]},
+    "seguranca": {"titulo": "Saúde, Segurança e Trabalhadores", "peso": 0.15,
+        "perguntas": ["Trabalhadores registrados?", "EPIs entregues/usados (evidências)?", "Treinamentos periódicos de SSMA?"]},
+    "desempenho": {"titulo": "Relacionamento e Desempenho", "peso": 0.10,
+        "perguntas": ["Cumpre prazos?", "Trata N/C com plano?", "Relatórios/MTRs regulares?"]},
 }
-
 OPCOES = ["Não atende (0)", "Atende parcialmente (1)", "Atende plenamente (2)"]
 
 def calcular_score_v2(respostas_v2: dict) -> tuple[int, dict]:
-    """
-    respostas_v2: dict {"licenciamento.1":0-2, ...}
-    Retorna: (score_percentual_int, area_percentuais_dict)
-    """
     area_percentuais = {}
     total_ponderado = 0.0
     for area_key, meta in AREAS.items():
@@ -575,8 +558,8 @@ def calcular_score_v2(respostas_v2: dict) -> tuple[int, dict]:
                 v = 0
             v = max(0, min(2, v))
             vals.append(v)
-        media_area = mean(vals) if vals else 0.0  # 0..2
-        pct_area = (media_area / 2.0) * 100.0    # 0..100
+        media_area = mean(vals) if vals else 0.0
+        pct_area = (media_area / 2.0) * 100.0
         area_percentuais[area_key] = pct_area
         total_ponderado += pct_area * meta["peso"]
     score = int(round(total_ponderado))
@@ -588,6 +571,74 @@ def classificar(score: int) -> str:
     if score >= 60:
         return "Parcialmente Conforme"
     return "Não Conforme/Inadequado"
+
+
+# =========================
+#      INICIALIZAÇÃO DB
+# =========================
+
+def init_db_and_seed():
+    run_light_migrations()
+    with SessionLocal() as db:
+        admin_user = "Eduardo"
+        admin_pass = "Capitu"
+        if not get_user_by_username(db, admin_user):
+            create_user(db, admin_user, admin_pass, RoleEnum.admin)
+
+
+# =========================
+#        KPIs / HELPERS
+# =========================
+
+def documentos_status(docs) -> tuple[int, int]:
+    hoje = date.today()
+    limite = hoje + timedelta(days=30)
+    vencidos = sum(1 for d in docs if d.data_validade and d.data_validade < hoje)
+    a_vencer = sum(1 for d in docs if d.data_validade and hoje <= d.data_validade <= limite)
+    return vencidos, a_vencer
+
+def kpis_gerais(db: Session) -> dict:
+    total_fornecedores = db.query(Fornecedor).count()
+    conformes = db.query(Auditoria).filter(Auditoria.classificado == "Conforme/Adequado").count()
+    parcialmente = db.query(Auditoria).filter(Auditoria.classificado == "Parcialmente Conforme").count()
+    nao_conformes = db.query(Auditoria).filter(Auditoria.classificado == "Não Conforme/Inadequado").count()
+    fornecedores_com_contrato = db.query(Fornecedor).join(Contrato).distinct().count()
+    fornecedores_sem_contrato = total_fornecedores - fornecedores_com_contrato
+
+    docs = db.query(Documento).all()
+    vencidos, a_vencer = documentos_status(docs)
+
+    mtr_total_kg = float(db.query(func.coalesce(func.sum(MTR.qtd_kg), 0.0)).scalar() or 0.0)
+    mtr_por_forn = db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.qtd_kg), 0.0))\
+                     .join(MTR, MTR.fornecedor_id == Fornecedor.id, isouter=True)\
+                     .group_by(Fornecedor.id).all()
+
+    # NOVO: emissões tCO2e
+    total_tco2e = float(db.query(func.coalesce(func.sum(MTR.emissoes_tco2e), 0.0)).scalar() or 0.0)
+    tco2e_por_forn = db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.emissoes_tco2e), 0.0))\
+                       .join(MTR, MTR.fornecedor_id == Fornecedor.id, isouter=True)\
+                       .group_by(Fornecedor.id).all()
+
+    # KPI de CDFs: quantas MTRs já possuem pelo menos 1 CDF
+    total_mtrs = int(db.query(MTR).count())
+    mtrs_com_cdf = int(db.query(MTR).filter(MTR.cdf_count > 0).count())
+
+    return {
+        "total_fornecedores": total_fornecedores,
+        "conformes": conformes,
+        "parcial": parcialmente,
+        "nao_conformes": nao_conformes,
+        "forn_com_contrato": fornecedores_com_contrato,
+        "forn_sem_contrato": fornecedores_sem_contrato,
+        "docs_vencidos": vencidos,
+        "docs_a_vencer": a_vencer,
+        "mtr_total_kg": mtr_total_kg,
+        "mtr_por_forn": [(n, float(v or 0.0)) for n, v in mtr_por_forn],
+        "total_tco2e": total_tco2e,
+        "tco2e_por_forn": [(n, float(v or 0.0)) for n, v in tco2e_por_forn],
+        "total_mtrs": total_mtrs,
+        "mtrs_com_cdf": mtrs_com_cdf,
+    }
 
 
 # =========================
@@ -618,7 +669,7 @@ def pagina_login():
                 st.session_state.usuario = u.username
                 st.session_state.role = u.role.value
                 st.success(f"Bem-vindo, {u.username}!")
-                st.rerun()
+                _safe_rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
 
@@ -626,7 +677,7 @@ if not st.session_state.logado:
     pagina_login()
     st.stop()
 
-# Menu adaptado por perfil
+# Menu por perfil
 if st.session_state.role == RoleEnum.leitor.value:
     menu = st.sidebar.selectbox("Menu", ["Overview", "Sair"])
 else:
@@ -643,16 +694,14 @@ if menu == "Overview":
     with SessionLocal() as db:
         k = kpis_gerais(db)
 
-    # Paleta verde/vermelho
+    # Pizza classif auditoria
     fig_total = px.pie(
         names=["Conforme/Adequado", "Parcialmente Conforme", "Não Conforme/Inadequado"],
         values=[k["conformes"], k["parcial"], k["nao_conformes"]],
         title="Classificação da Auditoria (v2)",
         color=["Conforme/Adequado", "Parcialmente Conforme", "Não Conforme/Inadequado"],
         color_discrete_map={
-            "Conforme/Adequado": "green",
-            "Parcialmente Conforme": "orange",
-            "Não Conforme/Inadequado": "red",
+            "Conforme/Adequado": "green", "Parcialmente Conforme": "orange", "Não Conforme/Inadequado": "red",
         },
     )
     fig_contrato = px.pie(
@@ -669,9 +718,9 @@ if menu == "Overview":
     with c2:
         st.plotly_chart(fig_contrato, use_container_width=True)
 
-    # Indicadores coloridos (HTML)
+    # Badges
     def badge(label, value, good=True):
-        color = "#2e7d32" if good else "#c62828"  # verde/vermelho
+        color = "#2e7d32" if good else "#c62828"
         bg = "#e8f5e9" if good else "#ffebee"
         return f"""
         <div style="padding:10px;border-radius:8px;background:{bg};margin-bottom:8px;">
@@ -682,43 +731,43 @@ if menu == "Overview":
 
     colA, colB, colC = st.columns(3)
     with colA:
-        st.markdown(badge("Total de Fornecedores", k["total_fornecedores"], good=True), unsafe_allow_html=True)
-        st.markdown(badge("Conformes/Adequados", k["conformes"], good=True), unsafe_allow_html=True)
+        st.markdown(badge("Total de Fornecedores", k["total_fornecedores"], True), unsafe_allow_html=True)
+        st.markdown(badge("Conformes/Adequados", k["conformes"], True), unsafe_allow_html=True)
+        st.markdown(badge("MTRs com CDF", f"{k['mtrs_com_cdf']}/{k['total_mtrs']}", True), unsafe_allow_html=True)
     with colB:
-        st.markdown(badge("Parcialmente Conforme", k["parcial"], good=False), unsafe_allow_html=True)
-        st.markdown(badge("Não Conformes/Inadequados", k["nao_conformes"], good=False), unsafe_allow_html=True)
+        st.markdown(badge("Parcialmente Conforme", k["parcial"], False), unsafe_allow_html=True)
+        st.markdown(badge("Não Conformes/Inadequados", k["nao_conformes"], False), unsafe_allow_html=True)
+        st.markdown(badge("Doc. a vencer (30d)", k["docs_a_vencer"], False), unsafe_allow_html=True)
     with colC:
-        st.markdown(badge("Doc. a vencer (30d)", k["docs_a_vencer"], good=False), unsafe_allow_html=True)
-        st.markdown(badge("Documentos vencidos", k["docs_vencidos"], good=False), unsafe_allow_html=True)
+        st.markdown(badge("Documentos vencidos", k["docs_vencidos"], False), unsafe_allow_html=True)
+        st.markdown(badge("Total kg (MTR)", f"{k['mtr_total_kg']:.1f} kg", True), unsafe_allow_html=True)
+        st.markdown(badge("Total tCO₂e (MTR - Escopo 3)", f"{k['total_tco2e']:.2f} t", True), unsafe_allow_html=True)
 
-    st.markdown(badge("Total kg (MTR)", f"{k['mtr_total_kg']:.1f} kg", good=True), unsafe_allow_html=True)
-
+    # Kg por fornecedor
     st.markdown("### Kg destinados por fornecedor (MTR)")
-    # --- Correção: construir DataFrame para evitar erro de listas em x/y
-    mtr_rows = []
-    for nome, kg in k["mtr_por_forn"]:
-        mtr_rows.append({"Fornecedor": str(nome), "Kg destinados": float(kg or 0.0)})
-
+    mtr_rows = [{"Fornecedor": str(n), "Kg destinados": float(v or 0.0)} for n, v in k["mtr_por_forn"]]
     if HAVE_PANDAS and mtr_rows:
         df_mtr = pd.DataFrame(mtr_rows).sort_values("Kg destinados", ascending=False)
-        fig_bar = px.bar(
-            data_frame=df_mtr,
-            x="Fornecedor",
-            y="Kg destinados",
-            title="Total de kg destinados por fornecedor (MTR)",
-        )
+        fig_bar = px.bar(df_mtr, x="Fornecedor", y="Kg destinados", title="Total de kg por fornecedor (MTR)")
     else:
-        xs = [r["Fornecedor"] for r in mtr_rows]
-        ys = [r["Kg destinados"] for r in mtr_rows]
-        fig_bar = px.bar(
-            x=xs,
-            y=ys,
-            labels={"x": "Fornecedor", "y": "Kg destinados"},
-            title="Total de kg destinados por fornecedor (MTR)",
-        )
-
+        fig_bar = px.bar(x=[r["Fornecedor"] for r in mtr_rows], y=[r["Kg destinados"] for r in mtr_rows],
+                         labels={"x": "Fornecedor", "y": "Kg destinados"},
+                         title="Total de kg por fornecedor (MTR)")
     fig_bar.update_traces(marker_color="green")
     st.plotly_chart(fig_bar, use_container_width=True)
+
+    # tCO2e por fornecedor
+    st.markdown("### Emissões de Escopo 3 (resíduos) por fornecedor")
+    em_rows = [{"Fornecedor": str(n), "tCO₂e": float(v or 0.0)} for n, v in k["tco2e_por_forn"]]
+    if HAVE_PANDAS and em_rows:
+        df_em = pd.DataFrame(em_rows).sort_values("tCO₂e", ascending=False)
+        fig_em = px.bar(df_em, x="Fornecedor", y="tCO₂e", title="tCO₂e por fornecedor (resíduos)")
+    else:
+        fig_em = px.bar(x=[r["Fornecedor"] for r in em_rows], y=[r["tCO₂e"] for r in em_rows],
+                        labels={"x": "Fornecedor", "y": "tCO₂e"},
+                        title="tCO₂e por fornecedor (resíduos)")
+    fig_em.update_traces(marker_color="red")
+    st.plotly_chart(fig_em, use_container_width=True)
 
 # ---- Cadastrar Fornecedor ----
 elif menu == "Cadastrar Fornecedor":
@@ -758,7 +807,7 @@ elif menu == "Cadastrar Fornecedor":
                 db.commit()
                 st.success(f"Fornecedor '{f.nome}' cadastrado com sucesso!")
 
-# ---- Visualizar Fornecedores (lista clicável) ----
+# ---- Visualizar Fornecedores ----
 elif menu == "Visualizar Fornecedores":
     if st.session_state.role not in (RoleEnum.admin.value, RoleEnum.auditor.value):
         st.error("Acesso restrito. Seu perfil é Leitor e possui acesso apenas ao Overview.")
@@ -773,7 +822,7 @@ elif menu == "Visualizar Fornecedores":
             joinedload(Fornecedor.auditoria),
             joinedload(Fornecedor.planos_acao),
             joinedload(Fornecedor.contratos),
-            joinedload(Fornecedor.mtrs),
+            joinedload(Fornecedor.mtrs).joinedload(MTR.cdfs),
         )
         if termo:
             fornecedores = fornecedores.filter(Fornecedor.nome.ilike(f"%{termo.strip()}%"))
@@ -784,8 +833,6 @@ elif menu == "Visualizar Fornecedores":
         st.stop()
 
     col_left, col_right = st.columns([0.35, 0.65])
-
-    # Lista clicável na esquerda
     with col_left:
         st.subheader("Lista")
         for f in fornecedores:
@@ -795,7 +842,6 @@ elif menu == "Visualizar Fornecedores":
                 st.session_state.sel_forn_id = f.id
             st.markdown(f"<div style='height:6px;{style}'></div>", unsafe_allow_html=True)
 
-    # Painel de detalhes à direita
     with col_right:
         sel = next((f for f in fornecedores if f.id == st.session_state.sel_forn_id), None)
         if sel is None:
@@ -804,13 +850,13 @@ elif menu == "Visualizar Fornecedores":
             st.subheader(f"Detalhes — {sel.nome}")
             tabs = st.tabs(["Informações", "Documentos", "Auditoria", "Planos de Ação", "Contratos", "MTRs"])
 
-            # --- Informações
+            # Info
             with tabs[0]:
                 st.write(f"**CPF/CNPJ:** {formatar_cpf_cnpj(sel.cpf_cnpj)}")
                 st.write(f"**Endereço:** {sel.endereco or '-'}")
                 st.write(f"**Telefone:** {sel.telefone or '-'}")
 
-            # --- Documentos (linha editável)
+            # Documentos
             with tabs[1]:
                 st.markdown("#### Documentos do fornecedor")
                 if not sel.documentos:
@@ -886,27 +932,21 @@ elif menu == "Visualizar Fornecedores":
                                 db.rollback()
                                 st.error(f"Erro ao salvar documento: {e}")
 
-            # --- Auditoria (v2)
+            # Auditoria
             with tabs[2]:
-                st.subheader("Auditoria (modelo 0–2 com pesos)")
+                st.subheader("Auditoria (0–2 ponderada)")
                 aud_exist = sel.auditoria
-                # Extrair respostas anteriores (se v2), caso contrário iniciar vazio
                 prev = {}
                 if aud_exist and isinstance(aud_exist.respostas, dict) and aud_exist.respostas.get("modelo") == "v2":
                     prev = aud_exist.respostas.get("respostas", {}) or {}
-
                 respostas_form = {}
                 for area_key, meta in AREAS.items():
                     with st.expander(f"{meta['titulo']} — peso {int(meta['peso']*100)}%"):
                         for i, pergunta in enumerate(meta["perguntas"], start=1):
                             k = f"{area_key}.{i}"
                             default = int(prev.get(k, 0))
-                            escolha = st.radio(
-                                pergunta, OPCOES, index=default,
-                                key=f"aud_{sel.id}_{k}", horizontal=True
-                            )
+                            escolha = st.radio(pergunta, OPCOES, index=default, key=f"aud_{sel.id}_{k}", horizontal=True)
                             respostas_form[k] = OPCOES.index(escolha)
-
                 if st.button("Salvar Auditoria", key=f"save_aud_{sel.id}"):
                     score, area_pct = calcular_score_v2(respostas_form)
                     classific = classificar(score)
@@ -929,13 +969,10 @@ elif menu == "Visualizar Fornecedores":
                             aud.updated_by = st.session_state.usuario
                         db.commit()
                         st.success(f"Auditoria salva. Score: {score}%. Classificação: {classific}")
-                        st.rerun()
+                        _safe_rerun()
 
-                # Resumo por área se houver
-                aud_show = None
                 with SessionLocal() as db:
                     aud_show = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
-
                 if aud_show and isinstance(aud_show.respostas, dict) and aud_show.respostas.get("modelo") == "v2":
                     area_pct = aud_show.respostas.get("area_pct", {})
                     if area_pct:
@@ -944,26 +981,16 @@ elif menu == "Visualizar Fornecedores":
                                 "Área": [AREAS[k]["titulo"] for k in AREAS.keys()],
                                 "% atendimento": [area_pct.get(k, 0.0) for k in AREAS.keys()],
                             })
-                            fig_area = px.bar(
-                                data_frame=df_area,
-                                x="Área", y="% atendimento",
-                                title="Atendimento por área (%)",
-                            )
+                            fig_area = px.bar(df_area, x="Área", y="% atendimento", title="Atendimento por área (%)")
                         else:
                             nomes = [AREAS[k]["titulo"] for k in AREAS.keys()]
                             valores = [area_pct.get(k, 0.0) for k in AREAS.keys()]
-                            fig_area = px.bar(
-                                x=nomes, y=valores, labels={"x": "Área", "y": "% atendimento"},
-                                title="Atendimento por área (%)",
-                            )
+                            fig_area = px.bar(x=nomes, y=valores, labels={"x": "Área", "y": "%"}, title="Atendimento por área (%)")
                         fig_area.update_traces(marker_color="green")
                         st.plotly_chart(fig_area, use_container_width=True)
+                    st.markdown(f"**Última auditoria:** Score {aud_show.score}%, Classificação: {aud_show.classificado}")
 
-                    st.markdown(f"**Última auditoria (v2):** Score {aud_show.score}%, Classificação: {aud_show.classificado}")
-                elif aud_show:
-                    st.warning("Há uma auditoria em modelo anterior (Sim/Não). Salve novamente para migrar ao modelo v2.")
-
-            # --- Planos de Ação
+            # Planos de ação
             with tabs[3]:
                 st.subheader("Planos de Ação")
                 descricao = st.text_area("Descrição da Ação")
@@ -996,7 +1023,7 @@ elif menu == "Visualizar Fornecedores":
                             db.add(plano)
                             db.commit()
                             st.success("Plano de ação adicionado.")
-                            st.rerun()
+                            _safe_rerun()
 
                 for p in sel.planos_acao:
                     with st.container(border=True):
@@ -1007,7 +1034,7 @@ elif menu == "Visualizar Fornecedores":
                                 if Path(ev).exists():
                                     exibir_preview_arquivo(ev, None)
 
-            # --- Contratos
+            # Contratos
             with tabs[4]:
                 st.subheader("Contratos")
                 arquivo_contrato = st.file_uploader("Anexar Contrato", type=["pdf", "docx", "doc"], key=f"contr_{sel.id}")
@@ -1034,7 +1061,7 @@ elif menu == "Visualizar Fornecedores":
                                 db.commit()
                                 st.success("Contrato salvo com sucesso!")
                                 exibir_preview_arquivo(caminho, arquivo_contrato.type)
-                                st.rerun()
+                                _safe_rerun()
                             except Exception as e:
                                 db.rollback()
                                 st.error(f"Erro ao salvar contrato: {e}")
@@ -1045,21 +1072,81 @@ elif menu == "Visualizar Fornecedores":
                         if Path(c.arquivo).exists():
                             exibir_preview_arquivo(c.arquivo, None)
 
-            # --- MTRs do fornecedor (lista)
+            # MTRs do fornecedor
             with tabs[5]:
                 st.subheader("MTRs do fornecedor")
                 total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
-                st.write(f"**Total destinado (kg):** {total_kg:.1f}")
-                if not sel.mtrs:
-                    st.info("Nenhuma MTR para este fornecedor.")
-                else:
-                    for m in sel.mtrs:
-                        with st.container(border=True):
-                            st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Recebimento**: {m.destinador_data_recebimento or '-'} | **Qtd (kg)**: {m.qtd_kg if m.qtd_kg is not None else '-'}")
-                            if Path(m.arquivo).exists():
-                                exibir_preview_arquivo(m.arquivo, "application/pdf")
+                total_t = sum(m.emissoes_tco2e or 0.0 for m in sel.mtrs)
+                st.write(f"**Total destinado (kg):** {total_kg:.1f} | **Total tCO₂e:** {total_t:.2f}")
 
-# ---- Página MTRs (controle centralizado) ----
+                for m in sel.mtrs:
+                    with st.container(border=True):
+                        st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Receb.:** {m.destinador_data_recebimento or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
+
+                        # Edição escopo 3
+                        c1, c2, c3, c4 = st.columns([0.25, 0.25, 0.25, 0.25])
+                        with c1:
+                            tipo_sel = st.selectbox("Tipo de resíduo", TIPOS_RESIDUO, index=TIPOS_RESIDUO.index(m.tipo_residuo) if m.tipo_residuo in TIPOS_RESIDUO else TIPOS_RESIDUO.index("Misto/Outros"), key=f"tipo_{m.id}")
+                        with c2:
+                            destinos_opts = destinos_para_tipo(tipo_sel)
+                            dest_sel = st.selectbox("Destinação", destinos_opts, index=(destinos_opts.index(m.destinacao) if m.destinacao in destinos_opts else 0), key=f"dest_{m.id}")
+                        with c3:
+                            default_fator = fator_default(tipo_sel, dest_sel)
+                            fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton or default_fator), step=0.01, format="%.4f", key=f"fator_{m.id}")
+                        with c4:
+                            # cálculo on the fly
+                            em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
+                            st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
+
+                        if st.button("Salvar MTR (Escopo 3)", key=f"salvar_mtr_{m.id}"):
+                            with SessionLocal() as db:
+                                mm = db.query(MTR).get(m.id)
+                                mm.tipo_residuo = tipo_sel
+                                mm.destinacao = dest_sel
+                                mm.fator_tco2e_por_ton = float(fator or 0.0)
+                                mm.emissoes_tco2e = kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
+                                mm.updated_by = st.session_state.usuario
+                                db.commit()
+                                st.success("MTR atualizada (escopo 3).")
+                                _safe_rerun()
+
+                        # CDFs
+                        st.markdown("**CDF(s):**")
+                        if m.cdfs:
+                            for cdf in m.cdfs:
+                                with st.container():
+                                    st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
+                                    if Path(cdf.arquivo).exists():
+                                        exibir_preview_arquivo(cdf.arquivo, None)
+                        up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf", "jpg", "jpeg", "png"], key=f"cdf_up_{m.id}")
+                        cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_{m.id}")
+                        cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_{m.id}")
+                        if st.button("Adicionar CDF", key=f"cdf_add_{m.id}"):
+                            if not up_cdf:
+                                st.error("Envie um arquivo de CDF.")
+                            else:
+                                caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{m.id}_cdf")
+                                with SessionLocal() as db:
+                                    try:
+                                        novo = CDF(
+                                            mtr_id=m.id,
+                                            arquivo=caminho,
+                                            data_emissao=cdf_data,
+                                            observacao=cdf_obs.strip() or None,
+                                            updated_by=st.session_state.usuario,
+                                        )
+                                        db.add(novo)
+                                        # atualiza contador
+                                        mm = db.query(MTR).get(m.id)
+                                        mm.cdf_count = (mm.cdf_count or 0) + 1
+                                        db.commit()
+                                        st.success("CDF anexado com sucesso!")
+                                        _safe_rerun()
+                                    except Exception as e:
+                                        db.rollback()
+                                        st.error(f"Erro ao salvar CDF: {e}")
+
+# ---- Página MTRs ----
 elif menu == "MTRs":
     if st.session_state.role not in (RoleEnum.admin.value, RoleEnum.auditor.value):
         st.error("Acesso restrito. Seu perfil é Leitor e possui acesso apenas ao Overview.")
@@ -1067,7 +1154,7 @@ elif menu == "MTRs":
 
     st.header("Controle de MTRs por Fornecedor")
     if not HAVE_PDFPLUMBER:
-        st.error("pdfplumber não está instalado. Adicione no requirements: pdfplumber>=0.11,<1")
+        st.error("pdfplumber não está instalado. Adicione no requirements.")
         st.stop()
 
     with SessionLocal() as db:
@@ -1077,13 +1164,12 @@ elif menu == "MTRs":
         st.stop()
 
     forn_map = {f"{f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}": f.id for f in fornecedores}
-    forn_label = st.selectbox("Selecione o fornecedor para associar as MTRs", list(forn_map.keys()))
+    forn_label = st.selectbox("Associar MTRs ao fornecedor", list(forn_map.keys()))
     fornecedor_id = forn_map[forn_label]
 
     uploads = st.file_uploader("Enviar PDFs de MTR", type=["pdf"], accept_multiple_files=True)
     if uploads and st.button("Processar MTRs"):
-        ok = 0
-        fail = 0
+        ok, fail = 0, 0
         for up in uploads:
             try:
                 caminho = salvar_arquivo(up, "uploads/mtrs", f"{fornecedor_id}_mtr")
@@ -1105,15 +1191,13 @@ elif menu == "MTRs":
                         destinador_cnpj=dados["destinador_cnpj"],
                         destinador_data_recebimento=dados["destinador_data_recebimento"],
                         codigo_ibama_denom=dados["codigo_ibama_denom"],
-                        estado_fisico=dados["estado_fisico"],
-                        classe=dados["classe"],
-                        acondicionamento=dados["acondicionamento"],
                         qtd_original=dados["qtd_original"],
                         und_original=dados["und_original"],
                         qtd_kg=dados["qtd_kg"],
                         dados_raw=dados["dados_raw"],
                         updated_by=st.session_state.usuario,
                     )
+                    # inicialmente sem escopo 3 definido
                     db.add(m)
                     db.commit()
                     ok += 1
@@ -1121,23 +1205,80 @@ elif menu == "MTRs":
                 fail += 1
                 st.error(f"Erro ao processar um PDF: {e}")
         st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
-        st.rerun()
+        _safe_rerun()
+
+    # Edição em lote: tipo/destino/fator
+    st.markdown("### Edição em lote (Escopo 3)")
+    with SessionLocal() as db:
+        mtrs = db.query(MTR).filter(MTR.fornecedor_id == fornecedor_id).order_by(MTR.created_at.desc()).all()
+
+    if not mtrs:
+        st.info("Nenhuma MTR cadastrada para este fornecedor.")
+    else:
+        for m in mtrs:
+            with st.container(border=True):
+                st.write(f"**MTR:** {m.numero_mtr or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
+                c1, c2, c3, c4 = st.columns([0.25, 0.25, 0.25, 0.25])
+                with c1:
+                    tipo_sel = st.selectbox("Tipo de resíduo", TIPOS_RESIDUO, index=(TIPOS_RESIDUO.index(m.tipo_residuo) if m.tipo_residuo in TIPOS_RESIDUO else TIPOS_RESIDUO.index("Misto/Outros")), key=f"tipo_mtrs_{m.id}")
+                with c2:
+                    destinos_opts = destinos_para_tipo(tipo_sel)
+                    dest_sel = st.selectbox("Destinação", destinos_opts, index=(destinos_opts.index(m.destinacao) if m.destinacao in destinos_opts else 0), key=f"dest_mtrs_{m.id}")
+                with c3:
+                    default_fator = fator_default(tipo_sel, dest_sel)
+                    fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton or default_fator), step=0.01, format="%.4f", key=f"fator_mtrs_{m.id}")
+                with c4:
+                    em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
+                    st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
+
+                if st.button("Salvar (Escopo 3)", key=f"save_mtrs_{m.id}"):
+                    with SessionLocal() as db:
+                        mm = db.query(MTR).get(m.id)
+                        mm.tipo_residuo = tipo_sel
+                        mm.destinacao = dest_sel
+                        mm.fator_tco2e_por_ton = float(fator or 0.0)
+                        mm.emissoes_tco2e = kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
+                        mm.updated_by = st.session_state.usuario
+                        db.commit()
+                        st.success("MTR atualizada (escopo 3).")
+                        _safe_rerun()
+
+                # CDF upload rápido
+                up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf", "jpg", "jpeg", "png"], key=f"cdf_up_list_{m.id}")
+                cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_list_{m.id}")
+                cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_list_{m.id}")
+                if st.button("Adicionar CDF", key=f"cdf_add_list_{m.id}"):
+                    if not up_cdf:
+                        st.error("Envie um arquivo de CDF.")
+                    else:
+                        caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{m.id}_cdf")
+                        with SessionLocal() as db:
+                            novo = CDF(mtr_id=m.id, arquivo=caminho, data_emissao=cdf_data, observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
+                            db.add(novo)
+                            mm = db.query(MTR).get(m.id)
+                            mm.cdf_count = (mm.cdf_count or 0) + 1
+                            db.commit()
+                            st.success("CDF anexado.")
+                            _safe_rerun()
 
     st.markdown("### MTRs cadastradas")
     with SessionLocal() as db:
-        mtrs = db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.created_at.desc()).all()
-
-    if not mtrs:
+        mtrs_all = db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.created_at.desc()).all()
+    if not mtrs_all:
         st.info("Nenhuma MTR cadastrada ainda.")
     else:
         rows = []
-        for m, nome_f in mtrs:
+        for m, nome_f in mtrs_all:
             rows.append({
                 "Fornecedor": nome_f,
                 "MTR nº": m.numero_mtr or "-",
                 "Recebimento": m.destinador_data_recebimento or "",
                 "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
-                "Unidade original": m.und_original or "",
+                "Tipo": m.tipo_residuo or "",
+                "Destinação": m.destinacao or "",
+                "Fator (tCO₂e/t)": m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else "",
+                "tCO₂e": m.emissoes_tco2e if m.emissoes_tco2e is not None else "",
+                "CDF(s)": m.cdf_count or 0,
                 "Arquivo": os.path.basename(m.arquivo),
             })
         if HAVE_PANDAS:
@@ -1154,16 +1295,12 @@ elif menu == "Admin (Usuários)":
         st.stop()
 
     st.header("Administração")
-
-    # --- Lista de usuários
     with SessionLocal() as db:
         usuarios = db.query(User).all()
-
     st.subheader("Usuários")
     for u in usuarios:
         st.write(f"- **{u.username}** — {u.role.value}")
 
-    # --- Criar usuário
     st.subheader("Criar novo usuário")
     with st.form("form_user"):
         username = st.text_input("Usuário").strip()
@@ -1180,12 +1317,12 @@ elif menu == "Admin (Usuários)":
                 else:
                     create_user(db, username, password, RoleEnum(role))
                     st.success("Usuário criado com sucesso!")
-                    st.rerun()
+                    _safe_rerun()
 
-    # --- Exportação de dados (Excel)
+    # Export Excel
     st.subheader("Exportar dados (Excel)")
     if not HAVE_PANDAS:
-        st.info("Para exportar, instale: pandas e openpyxl (adicione no requirements.txt).")
+        st.info("Para exportar, instale: pandas e openpyxl.")
     else:
         if st.button("Gerar arquivo .xlsx"):
             with SessionLocal() as db:
@@ -1194,9 +1331,8 @@ elif menu == "Admin (Usuários)":
                     joinedload(Fornecedor.auditoria),
                     joinedload(Fornecedor.planos_acao),
                     joinedload(Fornecedor.contratos),
-                    joinedload(Fornecedor.mtrs),
+                    joinedload(Fornecedor.mtrs).joinedload(MTR.cdfs),
                 ).all()
-
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 # Fornecedores
@@ -1220,7 +1356,7 @@ elif menu == "Admin (Usuários)":
                         })
                 pd.DataFrame(rows_d).to_excel(writer, sheet_name="Documentos", index=False)
 
-                # Auditorias (v2-friendly)
+                # Auditorias
                 rows_a = []
                 for f in fornecedores:
                     a = f.auditoria
@@ -1237,7 +1373,7 @@ elif menu == "Admin (Usuários)":
                         })
                 pd.DataFrame(rows_a).to_excel(writer, sheet_name="Auditorias", index=False)
 
-                # Planos de Ação
+                # Planos
                 rows_p = []
                 for f in fornecedores:
                     for p in f.planos_acao:
@@ -1268,9 +1404,25 @@ elif menu == "Admin (Usuários)":
                             "fornecedor_id": f.id, "fornecedor": f.nome,
                             "mtr_numero": m.numero_mtr, "recebimento": m.destinador_data_recebimento,
                             "qtd_kg": m.qtd_kg, "und_origem": m.und_original, "qtd_original": m.qtd_original,
+                            "tipo_residuo": m.tipo_residuo, "destinacao": m.destinacao,
+                            "fator_tco2e_t": m.fator_tco2e_por_ton, "tco2e": m.emissoes_tco2e,
+                            "cdf_count": m.cdf_count,
                             "arquivo": m.arquivo
                         })
                 pd.DataFrame(rows_m).to_excel(writer, sheet_name="MTRs", index=False)
+
+                # CDFs
+                rows_cdf = []
+                for f in fornecedores:
+                    for m in f.mtrs:
+                        for cdf in m.cdfs:
+                            rows_cdf.append({
+                                "fornecedor_id": f.id, "fornecedor": f.nome,
+                                "mtr_numero": m.numero_mtr,
+                                "cdf_data": cdf.data_emissao, "observacao": cdf.observacao,
+                                "arquivo": cdf.arquivo
+                            })
+                pd.DataFrame(rows_cdf).to_excel(writer, sheet_name="CDFs", index=False)
 
             output.seek(0)
             st.download_button(
@@ -1286,5 +1438,4 @@ elif menu == "Sair":
     st.session_state.usuario = None
     st.session_state.role = None
     st.session_state.sel_forn_id = None
-    st.rerun()
-
+    _safe_rerun()
