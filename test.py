@@ -1,8 +1,10 @@
-# app.py - Streamlit (único arquivo) para Gerenciamento Ambiental de Fornecedores
-# Requisitos mínimos:
+# app.py - Streamlit (único arquivo) com Controle de MTR por Fornecedor
+# Requisitos principais:
 #   streamlit, sqlalchemy>=2.0, bcrypt, plotly, python-dateutil
-# Para exportar Excel:
+# Exportação Excel:
 #   pandas, openpyxl
+# Parsing MTR em PDF:
+#   pdfplumber, unidecode
 #
 # Execução: streamlit run app.py
 
@@ -10,15 +12,16 @@ import os
 import re
 import uuid
 import json
+from io import BytesIO
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
 import bcrypt
 import streamlit as st
 import plotly.express as px
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Date, ForeignKey, Enum,
+    create_engine, Column, Integer, String, Float, Date, ForeignKey, Enum,
     UniqueConstraint, JSON, func
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload, Session
@@ -30,6 +33,19 @@ try:
     HAVE_PANDAS = True
 except Exception:
     HAVE_PANDAS = False
+
+# ======= Parsing PDF MTR =======
+try:
+    import pdfplumber
+    HAVE_PDFPLUMBER = True
+except Exception:
+    HAVE_PDFPLUMBER = False
+
+try:
+    import unidecode
+    HAVE_UNIDECODE = True
+except Exception:
+    HAVE_UNIDECODE = False
 
 
 # =========================
@@ -51,7 +67,8 @@ Base = declarative_base()
 # =========================
 
 def so_digitos(valor: str) -> str:
-    return re.sub(r"\D", "", valor or "")
+    import re as _re
+    return _re.sub(r"\D", "", valor or "")
 
 def normalizar_telefone(valor: str) -> str:
     return so_digitos(valor)
@@ -131,6 +148,33 @@ def exibir_preview_arquivo(caminho: str, mime_type: str | None):
 def validade_ok(inicio: date, validade: date) -> bool:
     return validade >= inicio
 
+def parse_data_br(valor: str) -> date | None:
+    try:
+        return datetime.strptime(valor, "%d/%m/%Y").date()
+    except Exception:
+        return None
+
+def to_float(num_str: str) -> float | None:
+    """Converte string numérica brasileira (com vírgula) em float."""
+    if not num_str:
+        return None
+    s = num_str.strip().replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def unidade_to_kg(qtd: float | None, unidade: str | None) -> float | None:
+    if qtd is None:
+        return None
+    u = (unidade or "").strip().upper()
+    if u in ("KG", "KGS", "KILOS", "QUILOS"):
+        return qtd
+    if u in ("T", "TON", "TONS", "TONELADA", "TONELADAS"):
+        return qtd * 1000.0
+    # fallback: assume kg
+    return qtd
+
 
 # =========================
 #          MODELOS
@@ -164,6 +208,7 @@ class Fornecedor(Base):
     auditoria = relationship("Auditoria", uselist=False, back_populates="fornecedor", cascade="all, delete-orphan")
     planos_acao = relationship("PlanoAcao", back_populates="fornecedor", cascade="all, delete-orphan")
     contratos = relationship("Contrato", back_populates="fornecedor", cascade="all, delete-orphan")
+    mtrs = relationship("MTR", back_populates="fornecedor", cascade="all, delete-orphan")
 
 class Documento(Base):
     __tablename__ = "documentos"
@@ -222,6 +267,42 @@ class Contrato(Base):
     updated_by = Column(String(150))
     fornecedor = relationship("Fornecedor", back_populates="contratos")
 
+# ---------- NOVO: Tabela de MTR ----------
+class MTR(Base):
+    __tablename__ = "mtrs"
+    id = Column(Integer, primary_key=True)
+    fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
+    arquivo = Column(String, nullable=False)
+    numero_mtr = Column(String)                   # ex: "123456"
+    gerador_razao = Column(String)
+    gerador_cnpj = Column(String)
+    gerador_municipio = Column(String)
+    gerador_uf = Column(String)
+    gerador_data_emissao = Column(Date, nullable=True)
+
+    transportador_razao = Column(String)
+    transportador_cnpj = Column(String)
+    transportador_data_transporte = Column(Date, nullable=True)
+
+    destinador_razao = Column(String)
+    destinador_cnpj = Column(String)
+    destinador_data_recebimento = Column(Date, nullable=True)
+
+    codigo_ibama_denom = Column(String)
+    estado_fisico = Column(String)
+    classe = Column(String)
+    acondicionamento = Column(String)
+    qtd_original = Column(String)                 # ex: "1.234,50"
+    und_original = Column(String)                 # ex: "KG" | "T"
+    qtd_kg = Column(Float)                        # convertido p/ kg
+
+    dados_raw = Column(JSON)                      # JSON completo extraído
+    created_at = Column(Date, server_default=func.current_date())
+    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
+    updated_by = Column(String(150))
+
+    fornecedor = relationship("Fornecedor", back_populates="mtrs")
+
 
 # =========================
 #     SEGURANÇA / USUÁRIO
@@ -261,6 +342,12 @@ def kpis_gerais(db: Session) -> dict:
     fornecedores_sem_contrato = total_fornecedores - fornecedores_com_contrato
     docs = db.query(Documento).all()
     vencidos, a_vencer = documentos_status(docs)
+    # NOVO: total kg MTR e por fornecedor
+    mtr_total_kg = (db.query(func.coalesce(func.sum(MTR.qtd_kg), 0.0)).scalar() or 0.0)
+    # ranking por fornecedor
+    mtr_por_forn = db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.qtd_kg), 0.0))\
+                     .join(MTR, MTR.fornecedor_id == Fornecedor.id, isouter=True)\
+                     .group_by(Fornecedor.id).all()
     return {
         "total_fornecedores": total_fornecedores,
         "conformes": conformes,
@@ -269,6 +356,8 @@ def kpis_gerais(db: Session) -> dict:
         "forn_sem_contrato": fornecedores_sem_contrato,
         "docs_vencidos": vencidos,
         "docs_a_vencer": a_vencer,
+        "mtr_total_kg": float(mtr_total_kg),
+        "mtr_por_forn": [(n, float(v or 0.0)) for n, v in mtr_por_forn],
     }
 
 
@@ -287,32 +376,148 @@ def init_db_and_seed():
 
 
 # =========================
-#         CONSTANTES
+#   PARSER DA MTR (PDF)
 # =========================
 
-PERGUNTAS_AUDITORIA = [
-    "A empresa possui o sistema de gestão ISO 14001?",
-    "A empresa possui licença do órgão ambiental responsável? (Licença Instalação/Operação/polícia federal/CADRI/ Outorga)",
-    "Há evidências de que as restrições da licença estão sendo cumpridas?",
-    "A empresa sofreu alguma autuação ambiental nos últimos anos?",
-    "Há evidências de visitas fiscalizadoras do órgão ambiental? (3 últimos laudos de inspeção)",
-    "Existe alguma estrutura de documentação do sistema de gestão e de controle de registros?",
-    "A empresa possui uma Política (Qualidade, Meio Ambiente, Segurança) com objetivos e metas estabelecidos?",
-    "A empresa realizou levantamento de seus aspectos e impactos ambientais estabelecendo controle sobre os significativos?",
-    "O espaço físico é suficiente para receber a quantidade de material gerado?",
-    "A empresa possui ETE para tratar seus resíduos líquidos?",
-    "Caso exista ETE, são realizadas análises do efluente tratado?",
-    "A empresa possui área coberta para armazenagem dos resíduos?",
-    "A empresa possui área impermeabilizada?",
-    "Os equipamentos de transporte estão em bom estado? Controle de fumaça preta?",
-    "A empresa possui licença do IBAMA?",
-    "A empresa destina seus resíduos sólidos adequadamente?",
-    "A empresa possui Alvará do Corpo de Bombeiros e alvará municipal?",
-    "Todos os funcionários da empresa são registrados?",
-    "Os funcionários trabalham uniformizados e com EPIs pertinentes?",
-    "A empresa atende as chamadas para retiradas com pontualidade?",
-    "Os funcionários recebem treinamentos sobre saúde, segurança e meio ambiente?",
-]
+def extract_pdf_data(pdf_path: str) -> dict:
+    """Extrai campos principais da MTR (1ª página), inspirado no seu script."""
+    if not HAVE_PDFPLUMBER:
+        raise RuntimeError("pdfplumber não está instalado. Adicione ao requirements.")
+
+    dados = {}
+    with pdfplumber.open(pdf_path) as pdf:
+        page = pdf.pages[0]
+        text = page.extract_text() or ""
+
+        # MTR número
+        mtr_match = re.search(r"MTR nº (\d+)", text)
+        dados["MTR - Número"] = mtr_match.group(1).strip() if mtr_match else "N/A"
+
+        # Bloco Gerador
+        g0 = text.find("Identificação do Gerador")
+        g1 = text.find("Observações do Gerador")
+        generator = text[g0:g1] if g0 != -1 and g1 != -1 else ""
+
+        dados["Gerador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", generator).group(1).strip()
+                                           if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", generator) else "N/A")
+        dados["Gerador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", generator).group(1).strip()
+                                       if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", generator) else "N/A")
+        dados["Gerador - Endereço"] = (re.search(r"Endereço: (.*?)(?:\nTelefone:|Data da emissão:)", generator, re.DOTALL).group(1).replace("\n", " ").strip()
+                                       if re.search(r"Endereço: (.*?)(?:\nTelefone:|Data da emissão:)", generator, re.DOTALL) else "N/A")
+        dados["Gerador - Data da emissão"] = (re.search(r"Data da emissão: (\d{2}/\d{2}/\d{4})", generator).group(1).strip()
+                                              if re.search(r"Data da emissão: (\d{2}/\d{2}/\d{4})", generator) else "N/A")
+        dados["Gerador - Telefone"] = (re.search(r"Telefone: (\d+)", generator).group(1).strip()
+                                       if re.search(r"Telefone: (\d+)", generator) else "N/A")
+        dados["Gerador - Município"] = (re.search(r"Município: (.*?) UF:", generator).group(1).strip()
+                                        if re.search(r"Município: (.*?) UF:", generator) else "N/A")
+        dados["Gerador - UF"] = (re.search(r"UF: (\w{2})", generator).group(1).strip()
+                                 if re.search(r"UF: (\w{2})", generator) else "N/A")
+
+        # Transportador
+        t0 = text.find("Identificação do Transportador")
+        t1 = text.find("Nome do Motorista")
+        transport = text[t0:t1] if t0 != -1 and t1 != -1 else ""
+
+        dados["Transportador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", transport).group(1).strip()
+                                                 if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", transport) else "N/A")
+        dados["Transportador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", transport).group(1).strip()
+                                             if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", transport) else "N/A")
+        dados["Transportador - Endereço"] = (re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do transporte:)", transport, re.DOTALL).group(1).replace("\n", " ").strip()
+                                             if re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do transporte:)", transport, re.DOTALL) else "N/A")
+        # data transporte pode vir vazia
+        _dttr = re.search(r"Data do transporte:\s*(\d{2}/\d{2}/\d{4})?", transport)
+        dados["Transportador - Data do transporte"] = _dttr.group(1).strip() if _dttr and _dttr.group(1) else "N/A"
+        dados["Transportador - Telefone"] = (re.search(r"Telefone: (\d+)", transport).group(1).strip()
+                                             if re.search(r"Telefone: (\d+)", transport) else "N/A")
+        dados["Transportador - Município"] = (re.search(r"Município: (.*?) UF:", transport).group(1).strip()
+                                              if re.search(r"Município: (.*?) UF:", transport) else "N/A")
+        dados["Transportador - UF"] = (re.search(r"UF: (\w{2})", transport).group(1).strip()
+                                       if re.search(r"UF: (\w{2})", transport) else "N/A")
+
+        # Destinador
+        d0 = text.find("Identificação do Destinador")
+        d1 = text.find("Identificação dos Resíduos")
+        destin = text[d0:d1] if d0 != -1 and d1 != -1 else ""
+
+        dados["Destinador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", destin).group(1).strip()
+                                              if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", destin) else "N/A")
+        dados["Destinador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", destin).group(1).strip()
+                                          if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", destin) else "N/A")
+        dados["Destinador - Endereço"] = (re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do recebimento:)", destin, re.DOTALL).group(1).replace("\n", " ").strip()
+                                          if re.search(r"Endereço: (.*?)(?:\nTelefone:|Data do recebimento:)", destin, re.DOTALL) else "N/A")
+        _dtrc = re.search(r"Data do recebimento:\s*(\d{2}/\d{2}/\d{4})?", destin)
+        dados["Destinador - Data do recebimento"] = _dtrc.group(1).strip() if _dtrc and _dtrc.group(1) else "N/A"
+        dados["Destinador - Telefone"] = (re.search(r"Telefone: (\d+)", destin).group(1).strip()
+                                          if re.search(r"Telefone: (\d+)", destin) else "N/A")
+        dados["Destinador - Município"] = (re.search(r"Município: (.*?) UF:", destin).group(1).strip()
+                                           if re.search(r"Município: (.*?) UF:", destin) else "N/A")
+        dados["Destinador - UF"] = (re.search(r"UF: (\w{2})", destin).group(1).strip()
+                                    if re.search(r"UF: (\w{2})", destin) else "N/A")
+
+        # Linha dos resíduos (primeiro item)
+        waste_start = text.find("Identificação dos Resíduos")
+        waste_info_raw = text[waste_start:] if waste_start != -1 else text
+
+        waste_line_match = re.search(
+            r"^1\s+([\d-]+)-(.+?)\s+([A-Z]+)\s+CLASSE\s+(.+?)\s+([0-9,.]+)\s+([A-Z]+)\s+(.+)$",
+            waste_info_raw, re.MULTILINE
+        )
+        if waste_line_match:
+            codigo_completo = f"{waste_line_match.group(1)}-{waste_line_match.group(2).strip()}"
+            dados["Resíduos - Item"] = "1"
+            dados["Resíduos - Código IBAMA e Denominação"] = codigo_completo[:6]
+            dados["Resíduos - Estado Físico"] = waste_line_match.group(3).strip()
+            dados["Resíduos - Classe"] = f"CLASSE {waste_line_match.group(4).strip()}"
+            dados["Resíduos - Acondicionamento"] = waste_line_match.group(4).strip()
+            dados["Resíduos - Qtde"] = waste_line_match.group(5).strip()
+            dados["Resíduos - Unidade"] = waste_line_match.group(6).strip()
+            dados["Resíduos - Tratamento"] = waste_line_match.group(7).strip()
+        else:
+            dados["Resíduos - Item"] = ""
+            dados["Resíduos - Código IBAMA e Denominação"] = ""
+            dados["Resíduos - Estado Físico"] = ""
+            dados["Resíduos - Classe"] = ""
+            dados["Resíduos - Acondicionamento"] = ""
+            dados["Resíduos - Qtde"] = ""
+            dados["Resíduos - Unidade"] = ""
+            dados["Resíduos - Tratamento"] = ""
+
+    return dados
+
+def extract_and_normalize_mtr(pdf_path: str) -> dict:
+    """Extrai MTR e normaliza campos-chave, converte quantidade para kg."""
+    dados = extract_pdf_data(pdf_path)
+    qtd_str = dados.get("Resíduos - Qtde") or ""
+    und = dados.get("Resíduos - Unidade") or ""
+    qtd = to_float(qtd_str)
+    qtd_kg = unidade_to_kg(qtd, und)
+
+    return {
+        "numero_mtr": dados.get("MTR - Número") or None,
+        "gerador_razao": dados.get("Gerador - Razão Social") or None,
+        "gerador_cnpj": so_digitos(dados.get("Gerador - CPF/CNPJ") or ""),
+        "gerador_municipio": dados.get("Gerador - Município") or None,
+        "gerador_uf": dados.get("Gerador - UF") or None,
+        "gerador_data_emissao": parse_data_br(dados.get("Gerador - Data da emissão") or ""),
+
+        "transportador_razao": dados.get("Transportador - Razão Social") or None,
+        "transportador_cnpj": so_digitos(dados.get("Transportador - CPF/CNPJ") or ""),
+        "transportador_data_transporte": parse_data_br(dados.get("Transportador - Data do transporte") or ""),
+
+        "destinador_razao": dados.get("Destinador - Razão Social") or None,
+        "destinador_cnpj": so_digitos(dados.get("Destinador - CPF/CNPJ") or ""),
+        "destinador_data_recebimento": parse_data_br(dados.get("Destinador - Data do recebimento") or ""),
+
+        "codigo_ibama_denom": dados.get("Resíduos - Código IBAMA e Denominação") or None,
+        "estado_fisico": dados.get("Resíduos - Estado Físico") or None,
+        "classe": dados.get("Resíduos - Classe") or None,
+        "acondicionamento": dados.get("Resíduos - Acondicionamento") or None,
+        "qtd_original": qtd_str or None,
+        "und_original": und or None,
+        "qtd_kg": qtd_kg,
+
+        "dados_raw": dados
+    }
 
 
 # =========================
@@ -357,7 +562,7 @@ if st.session_state.role == RoleEnum.leitor.value:
 else:
     menu = st.sidebar.selectbox(
         "Menu",
-        ["Overview", "Cadastrar Fornecedor", "Visualizar Fornecedores", "Admin (Usuários)", "Sair"]
+        ["Overview", "Cadastrar Fornecedor", "Visualizar Fornecedores", "MTRs", "Admin (Usuários)", "Sair"]
     )
 
 st.sidebar.title(f"Usuário: {st.session_state.usuario} ({st.session_state.role})")
@@ -401,15 +606,25 @@ if menu == "Overview":
         </div>
         """
 
-    colA, colB = st.columns(2)
+    colA, colB, colC = st.columns(3)
     with colA:
         st.markdown(badge("Total de Fornecedores", k["total_fornecedores"], good=True), unsafe_allow_html=True)
         st.markdown(badge("Conformes", k["conformes"], good=True), unsafe_allow_html=True)
-        st.markdown(badge("Não Conformes", k["nao_conformes"], good=False), unsafe_allow_html=True)
     with colB:
-        st.markdown(badge("Documentos vencidos", k["docs_vencidos"], good=False), unsafe_allow_html=True)
+        st.markdown(badge("Não Conformes", k["nao_conformes"], good=False), unsafe_allow_html=True)
         st.markdown(badge("Doc. a vencer (30d)", k["docs_a_vencer"], good=False), unsafe_allow_html=True)
-        st.markdown(badge("Sem Contrato", k["forn_sem_contrato"], good=False), unsafe_allow_html=True)
+    with colC:
+        st.markdown(badge("Documentos vencidos", k["docs_vencidos"], good=False), unsafe_allow_html=True)
+        st.markdown(badge("Total kg (MTR)", f"{k['mtr_total_kg']:.1f} kg", good=True), unsafe_allow_html=True)
+
+    st.markdown("### Kg destinados por fornecedor (MTR)")
+    # Ordena por kg desc, exibe gráfico de barras verde
+    nomes = [n for n, v in k["mtr_por_forn"]]
+    valores = [v for n, v in k["mtr_por_forn"]]
+    fig_bar = px.bar(x=nomes, y=valores, labels={"x": "Fornecedor", "y": "Kg destinados"},
+                     title="Total de kg destinados por fornecedor (MTR)")
+    fig_bar.update_traces(marker_color="green")
+    st.plotly_chart(fig_bar, use_container_width=True)
 
     st.markdown("### Insights")
     if k["nao_conformes"] > 0:
@@ -473,7 +688,8 @@ elif menu == "Visualizar Fornecedores":
             joinedload(Fornecedor.documentos),
             joinedload(Fornecedor.auditoria),
             joinedload(Fornecedor.planos_acao),
-            joinedload(Fornecedor.contratos)
+            joinedload(Fornecedor.contratos),
+            joinedload(Fornecedor.mtrs),
         )
         if termo:
             fornecedores = fornecedores.filter(Fornecedor.nome.ilike(f"%{termo.strip()}%"))
@@ -502,7 +718,7 @@ elif menu == "Visualizar Fornecedores":
             st.info("Selecione um fornecedor na lista ao lado para visualizar/editar.")
         else:
             st.subheader(f"Detalhes — {sel.nome}")
-            tabs = st.tabs(["Informações", "Documentos", "Auditoria", "Planos de Ação", "Contratos"])
+            tabs = st.tabs(["Informações", "Documentos", "Auditoria", "Planos de Ação", "Contratos", "MTRs"])
 
             # --- Informações
             with tabs[0]:
@@ -707,6 +923,112 @@ elif menu == "Visualizar Fornecedores":
                         if Path(c.arquivo).exists():
                             exibir_preview_arquivo(c.arquivo, None)
 
+            # --- MTRs do fornecedor (lista)
+            with tabs[5]:
+                st.subheader("MTRs do fornecedor")
+                total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
+                st.write(f"**Total destinado (kg):** {total_kg:.1f}")
+                if not sel.mtrs:
+                    st.info("Nenhuma MTR para este fornecedor.")
+                else:
+                    for m in sel.mtrs:
+                        with st.container(border=True):
+                            st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Recebimento**: {m.destinador_data_recebimento or '-'} | **Qtd (kg)**: {m.qtd_kg if m.qtd_kg is not None else '-'}")
+                            if Path(m.arquivo).exists():
+                                exibir_preview_arquivo(m.arquivo, "application/pdf")
+
+# ---- Página MTRs (controle centralizado) ----
+elif menu == "MTRs":
+    if st.session_state.role not in (RoleEnum.admin.value, RoleEnum.auditor.value):
+        st.error("Acesso restrito. Seu perfil é Leitor e possui acesso apenas ao Overview.")
+        st.stop()
+
+    st.header("Controle de MTRs por Fornecedor")
+    if not HAVE_PDFPLUMBER:
+        st.error("pdfplumber não está instalado. Adicione no requirements: pdfplumber>=0.11,<1")
+        st.stop()
+
+    with SessionLocal() as db:
+        fornecedores = db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
+    if not fornecedores:
+        st.info("Cadastre fornecedores antes de importar MTRs.")
+        st.stop()
+
+    forn_map = {f"{f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}": f.id for f in fornecedores}
+    forn_label = st.selectbox("Selecione o fornecedor para associar as MTRs", list(forn_map.keys()))
+    fornecedor_id = forn_map[forn_label]
+
+    uploads = st.file_uploader("Enviar PDFs de MTR", type=["pdf"], accept_multiple_files=True)
+    if uploads and st.button("Processar MTRs"):
+        ok = 0
+        fail = 0
+        for up in uploads:
+            try:
+                # Salva PDF
+                caminho = salvar_arquivo(up, "uploads/mtrs", f"{fornecedor_id}_mtr")
+                # Extrai e normaliza
+                dados = extract_and_normalize_mtr(caminho)
+                with SessionLocal() as db:
+                    m = MTR(
+                        fornecedor_id=fornecedor_id,
+                        arquivo=caminho,
+                        numero_mtr=dados["numero_mtr"],
+                        gerador_razao=dados["gerador_razao"],
+                        gerador_cnpj=dados["gerador_cnpj"],
+                        gerador_municipio=dados["gerador_municipio"],
+                        gerador_uf=dados["gerador_uf"],
+                        gerador_data_emissao=dados["gerador_data_emissao"],
+                        transportador_razao=dados["transportador_razao"],
+                        transportador_cnpj=dados["transportador_cnpj"],
+                        transportador_data_transporte=dados["transportador_data_transporte"],
+                        destinador_razao=dados["destinador_razao"],
+                        destinador_cnpj=dados["destinador_cnpj"],
+                        destinador_data_recebimento=dados["destinador_data_recebimento"],
+                        codigo_ibama_denom=dados["codigo_ibama_denom"],
+                        estado_fisico=dados["estado_fisico"],
+                        classe=dados["classe"],
+                        acondicionamento=dados["acondicionamento"],
+                        qtd_original=dados["qtd_original"],
+                        und_original=dados["und_original"],
+                        qtd_kg=dados["qtd_kg"],
+                        dados_raw=dados["dados_raw"],
+                        updated_by=st.session_state.usuario,
+                    )
+                    db.add(m)
+                    db.commit()
+                    ok += 1
+            except Exception as e:
+                fail += 1
+                st.error(f"Erro ao processar um PDF: {e}")
+        st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
+        st.rerun()
+
+    # Tabela geral de MTRs
+    st.markdown("### MTRs cadastradas")
+    with SessionLocal() as db:
+        mtrs = db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.created_at.desc()).all()
+
+    if not mtrs:
+        st.info("Nenhuma MTR cadastrada ainda.")
+    else:
+        # Mostrar resumo em tabela simples
+        rows = []
+        for m, nome_f in mtrs:
+            rows.append({
+                "Fornecedor": nome_f,
+                "MTR nº": m.numero_mtr or "-",
+                "Recebimento": m.destinador_data_recebimento or "",
+                "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
+                "Unidade original": m.und_original or "",
+                "Arquivo": os.path.basename(m.arquivo),
+            })
+        if HAVE_PANDAS:
+            df = pd.DataFrame(rows)
+            st.dataframe(df, use_container_width=True)
+        else:
+            for r in rows[:200]:
+                st.write(r)
+
 # ---- Admin (Usuários) ----
 elif menu == "Admin (Usuários)":
     if st.session_state.role != RoleEnum.admin.value:
@@ -743,7 +1065,7 @@ elif menu == "Admin (Usuários)":
                     st.rerun()
 
     # --- Exportação de dados (Excel)
-    st.subheader("Exportar dados dos fornecedores (Excel)")
+    st.subheader("Exportar dados (Excel)")
     if not HAVE_PANDAS:
         st.info("Para exportar, instale: pandas e openpyxl (adicione no requirements.txt).")
     else:
@@ -753,11 +1075,10 @@ elif menu == "Admin (Usuários)":
                     joinedload(Fornecedor.documentos),
                     joinedload(Fornecedor.auditoria),
                     joinedload(Fornecedor.planos_acao),
-                    joinedload(Fornecedor.contratos)
+                    joinedload(Fornecedor.contratos),
+                    joinedload(Fornecedor.mtrs),
                 ).all()
 
-            # Abas em um único Excel: Fornecedores, Documentos, Auditorias, Planos, Contratos
-            from io import BytesIO
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 # Fornecedores
@@ -816,6 +1137,18 @@ elif menu == "Admin (Usuários)":
                             "arquivo": c.arquivo, "updated_by": c.updated_by
                         })
                 pd.DataFrame(rows_c).to_excel(writer, sheet_name="Contratos", index=False)
+
+                # MTRs
+                rows_m = []
+                for f in fornecedores:
+                    for m in f.mtrs:
+                        rows_m.append({
+                            "fornecedor_id": f.id, "fornecedor": f.nome,
+                            "mtr_numero": m.numero_mtr, "recebimento": m.destinador_data_recebimento,
+                            "qtd_kg": m.qtd_kg, "und_origem": m.und_original, "qtd_original": m.qtd_original,
+                            "arquivo": m.arquivo
+                        })
+                pd.DataFrame(rows_m).to_excel(writer, sheet_name="MTRs", index=False)
 
             output.seek(0)
             st.download_button(
