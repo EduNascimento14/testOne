@@ -1,10 +1,8 @@
 # app.py - Streamlit (único arquivo) com Auditoria 0–2 ponderada + Controle de MTR
 # Requisitos principais:
 #   streamlit, sqlalchemy>=2.0, bcrypt, plotly, python-dateutil
-# Exportação Excel:
-#   pandas, openpyxl
-# Parsing MTR em PDF:
-#   pdfplumber, unidecode
+# Exportação Excel: pandas, openpyxl
+# Parsing MTR em PDF: pdfplumber, unidecode
 #
 # Execução: streamlit run app.py
 
@@ -43,7 +41,7 @@ except Exception:
     HAVE_PDFPLUMBER = False
 
 try:
-    import unidecode
+    import unidecode  # não usamos diretamente, mas útil para limpeza se quiser evoluir
     HAVE_UNIDECODE = True
 except Exception:
     HAVE_UNIDECODE = False
@@ -445,7 +443,7 @@ def extract_pdf_data(pdf_path: str) -> dict:
         dados["Destinador - UF"] = (re.search(r"UF: (\w{2})", destin).group(1).strip()
                                     if re.search(r"UF: (\w{2})", destin) else "N/A")
 
-        # Resíduos
+        # Resíduos (pega a primeira linha de item)
         waste_start = text.find("Identificação dos Resíduos")
         waste_info_raw = text[waste_start:] if waste_start != -1 else text
         waste_line_match = re.search(
@@ -696,10 +694,29 @@ if menu == "Overview":
     st.markdown(badge("Total kg (MTR)", f"{k['mtr_total_kg']:.1f} kg", good=True), unsafe_allow_html=True)
 
     st.markdown("### Kg destinados por fornecedor (MTR)")
-    nomes = [n for n, v in k["mtr_por_forn"]]
-    valores = [v for n, v in k["mtr_por_forn"]]
-    fig_bar = px.bar(x=nomes, y=valores, labels={"x": "Fornecedor", "y": "Kg destinados"},
-                     title="Total de kg destinados por fornecedor (MTR)")
+    # --- Correção: construir DataFrame para evitar erro de listas em x/y
+    mtr_rows = []
+    for nome, kg in k["mtr_por_forn"]:
+        mtr_rows.append({"Fornecedor": str(nome), "Kg destinados": float(kg or 0.0)})
+
+    if HAVE_PANDAS and mtr_rows:
+        df_mtr = pd.DataFrame(mtr_rows).sort_values("Kg destinados", ascending=False)
+        fig_bar = px.bar(
+            data_frame=df_mtr,
+            x="Fornecedor",
+            y="Kg destinados",
+            title="Total de kg destinados por fornecedor (MTR)",
+        )
+    else:
+        xs = [r["Fornecedor"] for r in mtr_rows]
+        ys = [r["Kg destinados"] for r in mtr_rows]
+        fig_bar = px.bar(
+            x=xs,
+            y=ys,
+            labels={"x": "Fornecedor", "y": "Kg destinados"},
+            title="Total de kg destinados por fornecedor (MTR)",
+        )
+
     fig_bar.update_traces(marker_color="green")
     st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -912,19 +929,38 @@ elif menu == "Visualizar Fornecedores":
                             aud.updated_by = st.session_state.usuario
                         db.commit()
                         st.success(f"Auditoria salva. Score: {score}%. Classificação: {classific}")
+                        st.experimental_rerun()
 
                 # Resumo por área se houver
-                if aud_exist and isinstance(aud_exist.respostas, dict) and aud_exist.respostas.get("modelo") == "v2":
-                    area_pct = aud_exist.respostas.get("area_pct", {})
+                aud_show = None
+                with SessionLocal() as db:
+                    aud_show = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
+
+                if aud_show and isinstance(aud_show.respostas, dict) and aud_show.respostas.get("modelo") == "v2":
+                    area_pct = aud_show.respostas.get("area_pct", {})
                     if area_pct:
-                        nomes = [AREAS[k]["titulo"] for k in AREAS.keys()]
-                        valores = [area_pct.get(k, 0.0) for k in AREAS.keys()]
-                        fig_area = px.bar(x=nomes, y=valores, labels={"x": "Área", "y": "% atendimento"},
-                                          title="Atendimento por área (%)")
+                        if HAVE_PANDAS:
+                            df_area = pd.DataFrame({
+                                "Área": [AREAS[k]["titulo"] for k in AREAS.keys()],
+                                "% atendimento": [area_pct.get(k, 0.0) for k in AREAS.keys()],
+                            })
+                            fig_area = px.bar(
+                                data_frame=df_area,
+                                x="Área", y="% atendimento",
+                                title="Atendimento por área (%)",
+                            )
+                        else:
+                            nomes = [AREAS[k]["titulo"] for k in AREAS.keys()]
+                            valores = [area_pct.get(k, 0.0) for k in AREAS.keys()]
+                            fig_area = px.bar(
+                                x=nomes, y=valores, labels={"x": "Área", "y": "% atendimento"},
+                                title="Atendimento por área (%)",
+                            )
                         fig_area.update_traces(marker_color="green")
                         st.plotly_chart(fig_area, use_container_width=True)
-                    st.markdown(f"**Última auditoria (v2):** Score {aud_exist.score}%, Classificação: {aud_exist.classificado}")
-                elif aud_exist:
+
+                    st.markdown(f"**Última auditoria (v2):** Score {aud_show.score}%, Classificação: {aud_show.classificado}")
+                elif aud_show:
                     st.warning("Há uma auditoria em modelo anterior (Sim/Não). Salve novamente para migrar ao modelo v2.")
 
             # --- Planos de Ação
@@ -960,6 +996,7 @@ elif menu == "Visualizar Fornecedores":
                             db.add(plano)
                             db.commit()
                             st.success("Plano de ação adicionado.")
+                            st.experimental_rerun()
 
                 for p in sel.planos_acao:
                     with st.container(border=True):
@@ -997,6 +1034,7 @@ elif menu == "Visualizar Fornecedores":
                                 db.commit()
                                 st.success("Contrato salvo com sucesso!")
                                 exibir_preview_arquivo(caminho, arquivo_contrato.type)
+                                st.experimental_rerun()
                             except Exception as e:
                                 db.rollback()
                                 st.error(f"Erro ao salvar contrato: {e}")
@@ -1083,7 +1121,7 @@ elif menu == "MTRs":
                 fail += 1
                 st.error(f"Erro ao processar um PDF: {e}")
         st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
-        st.rerun()
+        st.experimental_rerun()
 
     st.markdown("### MTRs cadastradas")
     with SessionLocal() as db:
@@ -1142,7 +1180,7 @@ elif menu == "Admin (Usuários)":
                 else:
                     create_user(db, username, password, RoleEnum(role))
                     st.success("Usuário criado com sucesso!")
-                    st.rerun()
+                    st.experimental_rerun()
 
     # --- Exportação de dados (Excel)
     st.subheader("Exportar dados (Excel)")
@@ -1248,4 +1286,4 @@ elif menu == "Sair":
     st.session_state.usuario = None
     st.session_state.role = None
     st.session_state.sel_forn_id = None
-    st.rerun()
+    st.experimental_rerun()
