@@ -14,6 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import bcrypt
 from statistics import mean
+from decimal import Decimal
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Date, ForeignKey, Enum,
@@ -133,6 +134,23 @@ def unidade_to_kg(qtd:float|None, und:str|None)->float|None:
 def kg_to_ton(kg:float|None)->float:
     return (kg or 0.0)/1000.0
 
+def _make_json_safe(obj):
+    """Normaliza estruturas para serem serializáveis em JSON."""
+    if isinstance(obj, (str, int, float)) or obj is None:
+        return obj
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {str(_make_json_safe(k)): _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_make_json_safe(v) for v in obj]
+    try:
+        return json.loads(json.dumps(obj, ensure_ascii=False))
+    except Exception:
+        return str(obj)
+
 # =========================
 #          MODELOS
 # =========================
@@ -181,7 +199,7 @@ class Auditoria(Base):
     __tablename__="auditorias"
     id = Column(Integer, primary_key=True)
     fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
-    respostas = Column(JSON, nullable=False, default={})
+    respostas = Column(JSON, nullable=False, default=dict)  # <- evitar default mutável
     score = Column(Integer, nullable=False, default=0)
     classificado = Column(String, nullable=False, default="Não Conforme")
     created_at = Column(Date, server_default=func.current_date())
@@ -391,85 +409,100 @@ def _load_pdf_text_all_pages(pdf_path:str) -> str:
     full = "\n".join(texts).strip()
     return full
 
+def _find(pattern, src, flags=0):
+    m = re.search(pattern, src, flags)
+    return m.group(1).strip() if m else None
+
 def extract_pdf_data(pdf_path:str)->dict:
     """
-    Parser mais tolerante: usa o texto completo do PDF; tenta regex principal
-    e, em falha, tenta alternativas para quantidade/unidade.
+    Parser tolerante ao layout do MTR (inclui formato do exemplo enviado).
+    - Procura MTR nº
+    - Extrai blocos de Gerador/Transportador/Destinador quando possível
+    - Na seção de resíduos, procura linha de código 'NNNNNN-...' e pares 'Qtde Unid'
     """
     dados={}
     try:
         text = _load_pdf_text_all_pages(pdf_path)
-        # --- MTR nº
-        mtr_match = re.search(r"(?:MTR\s*n[ºo]|MTR\s*-\s*n[ºo]|MTR\s*número)\s*[:\-]?\s*(\d+)", text, flags=re.IGNORECASE)
+
+        # --- MTR nº (aceita variações: nº, n°, número)
+        mtr_match = re.search(r"MTR\s*(?:n[\W_]*[ºo°]?|n[uú]mero)?\s*[:\-]?\s*([0-9]{6,})", text, flags=re.IGNORECASE)
         dados["MTR - Número"] = (mtr_match.group(1).strip() if mtr_match else "N/A")
 
         # --- Gerador
         g0=text.find("Identificação do Gerador"); g1=text.find("Observações do Gerador")
-        generator = text[g0:g1] if (g0!=-1 and g1!=-1 and g1>g0) else ""
-        def _find(pattern, src, flags=0):
-            m = re.search(pattern, src, flags)
-            return m.group(1).strip() if m else None
-
-        dados["Gerador - Razão Social"] = _find(r"Razão Social:\s*(.*?)\s*-\s*\d+\s*CPF/CNPJ:", generator) or _find(r"Razão Social:\s*(.*)", generator)
+        generator = text[g0:g1] if (g0!=-1 and g1!=-1 and g1>g0) else text
+        dados["Gerador - Razão Social"] = _find(r"Identificação do Gerador.*?Razão Social:\s*(.*)", generator, re.IGNORECASE|re.DOTALL) or \
+                                          _find(r"Razão Social:\s*(.*)", generator)
         dados["Gerador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", generator)
-        dados["Gerador - Data da emissão"] = _find(r"Data da emissão:\s*(\d{2}/\d{2}/\d{4})", generator)
-        dados["Gerador - Município"] = _find(r"Município:\s*(.*?)\s*UF:", generator)
+        dados["Gerador - Data da emissão"] = _find(r"Data da emissão:\s*(\d{2}/\d{2}/\d{4})", text)
+        dados["Gerador - Município"] = _find(r"Município:\s*([A-ZÇÃÕÂÊÉÍÓÚ\s]+)\s*UF:", generator)
         dados["Gerador - UF"] = _find(r"UF:\s*([A-Z]{2})", generator)
 
         # --- Transportador
-        t0=text.find("Identificação do Transportador"); t1=text.find("Nome do Motorista")
-        transport = text[t0:t1] if (t0!=-1 and t1!=-1 and t1>t0) else ""
-        dados["Transportador - Razão Social"] = _find(r"Razão Social:\s*(.*?)\s*-\s*\d+\s*CPF/CNPJ:", transport) or _find(r"Razão Social:\s*(.*)", transport)
+        t0=text.find("Identificação do Transportador"); t1=text.find("Identificação do Destinador")
+        transport = text[t0:t1] if (t0!=-1 and t1!=-1 and t1>t0) else text
+        dados["Transportador - Razão Social"] = _find(r"Identificação do Transportador.*?Razão Social:\s*(.*)", transport, re.IGNORECASE|re.DOTALL) or \
+                                                _find(r"Razão Social:\s*(.*)", transport)
         dados["Transportador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", transport)
-        dados["Transportador - Data do transporte"] = _find(r"Data do transporte:\s*(\d{2}/\d{2}/\d{4})", transport)
+        dados["Transportador - Data do transporte"] = _find(r"Data do transporte:\s*(\d{2}/\d{2}/\d{4})", text)
 
         # --- Destinador
         d0=text.find("Identificação do Destinador"); d1=text.find("Identificação dos Resíduos")
-        destin = text[d0:d1] if (d0!=-1 and d1!=-1 and d1>d0) else ""
-        dados["Destinador - Razão Social"] = _find(r"Razão Social:\s*(.*?)\s*-\s*\d+\s*CPF/CNPJ:", destin) or _find(r"Razão Social:\s*(.*)", destin)
+        destin = text[d0:d1] if (d0!=-1 and d1!=-1 and d1>d0) else text
+        dados["Destinador - Razão Social"] = _find(r"Identificação do Destinador.*?Razão Social:\s*(.*)", destin, re.IGNORECASE|re.DOTALL) or \
+                                             _find(r"Razão Social:\s*(.*)", destin)
         dados["Destinador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", destin)
-        dados["Destinador - Data do recebimento"] = _find(r"Data do recebimento:\s*(\d{2}/\d{2}/\d{4})", destin)
+        dados["Destinador - Data do recebimento"] = _find(r"Data do recebimento:\s*(\d{2}/\d{2}/\d{4})", text)
 
-        # --- Resíduos (linha 1 padrão + fallbacks)
+        # --- Resíduos
         waste_start = text.find("Identificação dos Resíduos")
         waste_info_raw = text[waste_start:] if waste_start!=-1 else text
 
-        # padrão principal (seu regex original)
-        m = re.search(
-            r"^1\s+([\d-]+)-(.+?)\s+([A-Z]+)\s+CLASSE\s+(.+?)\s+([0-9\.,]+)\s+([A-Z]+)\s+(.+)$",
-            waste_info_raw, re.MULTILINE
-        )
-        if not m:
-            # fallback simples: “Qtde: 1.234,56 KG” em algum lugar
-            m_qty = re.search(r"Qtde[:\s]+([0-9\.\,]+)\s*([A-Za-z]+)", waste_info_raw)
+        # Código IBAMA + denominação (ex.: 200301-Outros resíduos ...)
+        m_code = re.search(r"\b(\d{6})\s*[-–]\s*([^\n]+)", waste_info_raw)
+        if m_code:
+            dados["Resíduos - Código IBAMA e Denominação"] = f"{m_code.group(1)}-{m_code.group(2).strip()}"
+        else:
+            dados["Resíduos - Código IBAMA e Denominação"] = ""
+
+        # Classe (ex.: CLASSE II A) e estado físico (ex.: SOLIDO)
+        m_estado = re.search(r"\b(S[ÓO]LID[OA]|L[ÍI]QUID[OA]|GASOS[OA])\b", waste_info_raw, re.IGNORECASE)
+        dados["Resíduos - Estado Físico"] = (m_estado.group(1).upper() if m_estado else "")
+        m_class = re.search(r"\bCLASSE\s+([IVX]+(?:\s*[AB])?)\b", waste_info_raw, re.IGNORECASE)
+        dados["Resíduos - Classe"] = (m_class.group(1).upper() if m_class else "")
+
+        # Acondicionamento (ex.: CAÇAMBA FECHADA)
+        m_acond = re.search(r"\b(CA[ÇC]AMBA\s+[A-Z ]+|BOMBONA|TAMBOR|BIG\s*BAG|SACO\s*PL[ÁA]STICO)\b", waste_info_raw, re.IGNORECASE)
+        dados["Resíduos - Acondicionamento"] = (m_acond.group(1).strip().upper() if m_acond else "")
+
+        # Quantidade e Unidade — tenta padrão "0,4800 TON" primeiro (compatível com o exemplo)
+        m_qty_inline = re.search(r"(\d{1,3}(?:\.\d{3})*,\d+|\d+,\d+)\s*([A-Za-z]{2,})", waste_info_raw)
+        if m_qty_inline:
+            dados["Resíduos - Qtde"] = m_qty_inline.group(1).strip()
+            dados["Resíduos - Unidade"] = m_qty_inline.group(2).strip().upper()
+        else:
+            # fallbacks: "Qtde: NNN KG" ou "Peso: NNN KG"
+            m_qty = re.search(r"Qtde[:\s]+([0-9\.\,]+)\s*([A-Za-z]+)", waste_info_raw, re.IGNORECASE)
+            m_qty2 = re.search(r"Peso[:\s]+([0-9\.\,]+)\s*([A-Za-z]+)", waste_info_raw, re.IGNORECASE)
             if m_qty:
                 dados["Resíduos - Qtde"] = m_qty.group(1).strip()
-                dados["Resíduos - Unidade"] = m_qty.group(2).strip()
+                dados["Resíduos - Unidade"] = m_qty.group(2).strip().upper()
+            elif m_qty2:
+                dados["Resíduos - Qtde"] = m_qty2.group(1).strip()
+                dados["Resíduos - Unidade"] = m_qty2.group(2).strip().upper()
             else:
-                # outro fallback: “Peso ... 1.234,56 KG”
-                m_qty2 = re.search(r"Peso[:\s]+([0-9\.\,]+)\s*([A-Za-z]+)", waste_info_raw, re.IGNORECASE)
-                if m_qty2:
-                    dados["Resíduos - Qtde"] = m_qty2.group(1).strip()
-                    dados["Resíduos - Unidade"] = m_qty2.group(2).strip()
-        else:
-            codigo_completo = f"{m.group(1)}-{m.group(2).strip()}"
-            dados["Resíduos - Código IBAMA e Denominação"] = codigo_completo[:6]
-            dados["Resíduos - Qtde"] = m.group(5).strip()
-            dados["Resíduos - Unidade"] = m.group(6).strip()
-
-        # normaliza nulos
-        for k in ("Resíduos - Qtde", "Resíduos - Unidade", "Resíduos - Código IBAMA e Denominação"):
-            if k not in dados: dados[k] = ""
+                dados["Resíduos - Qtde"] = ""
+                dados["Resíduos - Unidade"] = ""
 
     except Exception as e:
-        # Nunca quebra — retorna mínimo viável + erro no log do app
         st.error(f"Falha ao ler PDF (parser): {Path(pdf_path).name} — {e}")
         st.caption("Dica: verifique se o PDF possui texto (OCR) e formatação esperada.")
         dados.setdefault("MTR - Número", "N/A")
         for k in ("Gerador - Razão Social","Gerador - CPF/CNPJ","Gerador - Data da emissão","Gerador - Município","Gerador - UF",
                   "Transportador - Razão Social","Transportador - CPF/CNPJ","Transportador - Data do transporte",
                   "Destinador - Razão Social","Destinador - CPF/CNPJ","Destinador - Data do recebimento",
-                  "Resíduos - Código IBAMA e Denominação","Resíduos - Qtde","Resíduos - Unidade"):
+                  "Resíduos - Código IBAMA e Denominação","Resíduos - Qtde","Resíduos - Unidade",
+                  "Resíduos - Estado Físico","Resíduos - Classe","Resíduos - Acondicionamento"):
             dados.setdefault(k, "")
     return dados
 
@@ -492,10 +525,13 @@ def extract_and_normalize_mtr(pdf_path:str)->dict:
         "destinador_cnpj": so_digitos(d.get("Destinador - CPF/CNPJ") or ""),
         "destinador_data_recebimento": parse_data_br(d.get("Destinador - Data do recebimento") or ""),
         "codigo_ibama_denom": d.get("Resíduos - Código IBAMA e Denominação") or None,
+        "estado_fisico": d.get("Resíduos - Estado Físico") or None,
+        "classe": d.get("Resíduos - Classe") or None,
+        "acondicionamento": d.get("Resíduos - Acondicionamento") or None,
         "qtd_original": d.get("Resíduos - Qtde") or None,
         "und_original": und or None,
         "qtd_kg": qtd_kg,
-        "dados_raw": d
+        "dados_raw": _make_json_safe(d)  # <- garante JSON serializable
     }
 
 # =========================
@@ -856,10 +892,9 @@ elif menu=="Visualizar Fornecedores":
                         fig_area.update_traces(marker_color="green"); st.plotly_chart(fig_area, use_container_width=True)
                     st.markdown(f"**Última auditoria:** Score {aud_show.score}%, Classificação: {aud_show.classificado}")
 
-            # Planos — agora com painel de status
+            # Planos — painel de status
             with tabs[3]:
                 st.subheader("Planos de Ação")
-                # Form para criar novo
                 with st.form(f"form_plano_{sel.id}"):
                     descricao=st.text_area("Descrição da Ação")
                     data_inicio=st.date_input("Início", value=date.today())
@@ -880,7 +915,6 @@ elif menu=="Visualizar Fornecedores":
                                             evidencias=evidencias or [], updated_by=st.session_state.usuario)
                             db.add(plano); db.commit(); st.success("Plano de ação adicionado."); _safe_rerun()
 
-                # Painel de ações existentes (com status editável)
                 st.markdown("#### Ações cadastradas")
                 if not sel.planos_acao:
                     st.info("Nenhuma ação cadastrada.")
@@ -1019,18 +1053,23 @@ elif menu=="MTRs":
                 caminho=salvar_arquivo(up, "uploads/mtrs", f"{fornecedor_id}_mtr")
                 dados=extract_and_normalize_mtr(caminho)
                 with SessionLocal() as db:
-                    m=MTR(fornecedor_id=fornecedor_id, arquivo=caminho,
-                          numero_mtr=dados["numero_mtr"],
-                          gerador_razao=dados["gerador_razao"], gerador_cnpj=dados["gerador_cnpj"],
-                          gerador_municipio=dados["gerador_municipio"], gerador_uf=dados["gerador_uf"],
-                          gerador_data_emissao=dados["gerador_data_emissao"],
-                          transportador_razao=dados["transportador_razao"], transportador_cnpj=dados["transportador_cnpj"],
-                          transportador_data_transporte=dados["transportador_data_transporte"],
-                          destinador_razao=dados["destinador_razao"], destinador_cnpj=dados["destinador_cnpj"],
-                          destinador_data_recebimento=dados["destinador_data_recebimento"],
-                          codigo_ibama_denom=dados["codigo_ibama_denom"],
-                          qtd_original=dados["qtd_original"], und_original=dados["und_original"],
-                          qtd_kg=dados["qtd_kg"], dados_raw=dados, updated_by=st.session_state.usuario)
+                    m=MTR(
+                        fornecedor_id=fornecedor_id, arquivo=caminho,
+                        numero_mtr=dados["numero_mtr"],
+                        gerador_razao=dados["gerador_razao"], gerador_cnpj=dados["gerador_cnpj"],
+                        gerador_municipio=dados["gerador_municipio"], gerador_uf=dados["gerador_uf"],
+                        gerador_data_emissao=dados["gerador_data_emissao"],
+                        transportador_razao=dados["transportador_razao"], transportador_cnpj=dados["transportador_cnpj"],
+                        transportador_data_transporte=dados["transportador_data_transporte"],
+                        destinador_razao=dados["destinador_razao"], destinador_cnpj=dados["destinador_cnpj"],
+                        destinador_data_recebimento=dados["destinador_data_recebimento"],
+                        codigo_ibama_denom=dados["codigo_ibama_denom"],
+                        estado_fisico=dados.get("estado_fisico"), classe=dados.get("classe"), acondicionamento=dados.get("acondicionamento"),
+                        qtd_original=dados["qtd_original"], und_original=dados["und_original"],
+                        qtd_kg=dados["qtd_kg"],
+                        dados_raw=_make_json_safe(dados),  # <- garante serialização segura
+                        updated_by=st.session_state.usuario
+                    )
                     db.add(m); db.commit(); ok+=1
             except Exception as e:
                 fail+=1
@@ -1119,7 +1158,6 @@ elif menu=="Fatores de Emissão":
 
     st.markdown("#### Editar existentes (tabela editável)")
     if fatores:
-        # DataFrame com coluna id oculta, mas preservada
         rows = [{
             "id": f.id,
             "Tipo de resíduo": f.tipo_residuo,
@@ -1151,7 +1189,6 @@ elif menu=="Fatores de Emissão":
                             for _, r in edited.iterrows():
                                 fe = db.query(FatorEmissao).get(int(r["id"]))
                                 if not fe: continue
-                                # Evita colisão (tipo,dest)
                                 novo_tipo = str(r["Tipo de resíduo"]).strip()
                                 novo_dest = str(r["Destinação"]).strip()
                                 if (fe.tipo_residuo!=novo_tipo or fe.destinacao!=novo_dest):
@@ -1209,11 +1246,11 @@ elif menu=="Fatores de Emissão":
         else:
             with SessionLocal() as db:
                 try:
-                    já = db.query(FatorEmissao).filter(
+                    ja = db.query(FatorEmissao).filter(
                         FatorEmissao.tipo_residuo==tipo_new.strip(),
                         FatorEmissao.destinacao==dest_new.strip()
                     ).first()
-                    if já:
+                    if ja:
                         st.error("Já existe um fator para esse (tipo, destinação).")
                     else:
                         db.add(FatorEmissao(
@@ -1291,8 +1328,8 @@ elif menu=="Admin (Usuários)":
                         area_pct=a.respostas.get("area_pct") if isinstance(a.respostas,dict) else None
                         rows_a.append({
                             "fornecedor_id":f.id,"fornecedor":f.nome,"score":a.score,"classificado":a.classificado,
-                            "modelo":modelo,"area_pct_json":json.dumps(area_pct,ensure_ascii=False) if area_pct else "",
-                            "respostas_json":json.dumps(a.respostas,ensure_ascii=False),"updated_by":a.updated_by
+                            "modelo":modelo,"area_pct_json":json.dumps(_make_json_safe(area_pct),ensure_ascii=False) if area_pct else "",
+                            "respostas_json":json.dumps(_make_json_safe(a.respostas),ensure_ascii=False),"updated_by":a.updated_by
                         })
                 pd.DataFrame(rows_a).to_excel(writer, sheet_name="Auditorias", index=False)
 
@@ -1302,7 +1339,7 @@ elif menu=="Admin (Usuários)":
                         rows_p.append({
                             "fornecedor_id":f.id,"fornecedor":f.nome,"descricao":p.descricao,
                             "inicio":p.data_inicio,"fim":p.data_fim,"status":p.status,
-                            "evidencias":json.dumps(p.evidencias,ensure_ascii=False),"updated_by":p.updated_by
+                            "evidencias":json.dumps(_make_json_safe(p.evidencias),ensure_ascii=False),"updated_by":p.updated_by
                         })
                 pd.DataFrame(rows_p).to_excel(writer, sheet_name="Planos", index=False)
 
