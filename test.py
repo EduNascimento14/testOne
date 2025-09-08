@@ -1,19 +1,10 @@
-# app.py — Streamlit único com fatores de emissão em tabela editável
-# Funcionalidades principais:
-# - Login (seed: Eduardo/Capitu - Admin) | Perfis: Admin, Auditor, Leitor
-# - Cadastro/visualização de fornecedores
-# - Documentos (upload por linha + botão de download do arquivo atual)
-# - Auditoria (modelo 0–2 ponderado)
-# - Planos de ação
-# - Contratos
-# - MTRs (upload PDF com parser; kg normalizado)
-# - Escopo 3 (tipo/destinação/fator e tCO2e por MTR) -> agora via TABELA SQL
-# - CDFs associados a MTR (indicador de MTRs com CDF)
-# - Fatores de Emissão (CRUD via interface)
-# - Overview com KPIs e gráficos (kg e tCO2e por fornecedor)
-# - Admin (usuários + exportação Excel)
+# app.py — Streamlit único com:
+# - Importação/parse de MTR robusto (todas as páginas + fallbacks)
+# - Tabela "Fatores de Emissão" editável (st.data_editor + salvar alterações + excluir)
+# - Planos de Ação com painel de status (editar status no cartão)
+# - Restante das features existentes (login, docs com download, auditoria, CDF, KPIs, export Excel)
 
-import os, re, uuid, json
+import os, re, uuid, json, traceback
 from io import BytesIO
 from pathlib import Path
 from datetime import date, timedelta, datetime
@@ -26,7 +17,7 @@ from statistics import mean
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Date, ForeignKey, Enum,
-    UniqueConstraint, JSON, func, text, select
+    UniqueConstraint, JSON, func, text
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload, Session
 import enum
@@ -269,14 +260,14 @@ class CDF(Base):
     updated_by = Column(String(150))
     mtr = relationship("MTR", back_populates="cdfs")
 
-# ===== NOVO: Fatores de Emissão (tabela SQL) =====
+# ===== Fatores de Emissão (tabela SQL editável) =====
 class FatorEmissao(Base):
     __tablename__="fatores_emissao"
     id = Column(Integer, primary_key=True)
     tipo_residuo = Column(String, nullable=False)
     destinacao = Column(String, nullable=False)
     fator_tco2e_por_ton = Column(Float, nullable=False)
-    fonte = Column(String)     # ex.: "IPCC 2019"
+    fonte = Column(String)
     ano_ref = Column(Integer)
     __table_args__=(UniqueConstraint('tipo_residuo','destinacao',name='uq_tipo_destinacao'),)
 
@@ -296,18 +287,15 @@ def create_user(db:Session, username:str, password:str, role:RoleEnum)->User:
     db.add(u); db.commit(); db.refresh(u); return u
 
 # =========================
-#      MIGRAÇÃO SIMPLES
+#      MIGRAÇÃO/SEED
 # =========================
 def run_light_migrations():
     Base.metadata.create_all(bind=engine)
 
 def seed_users_and_factors():
-    # seed do admin
     with SessionLocal() as db:
         if not get_user_by_username(db, "Eduardo"):
             create_user(db, "Eduardo", "Capitu", RoleEnum.admin)
-
-    # seed de fatores (somente se tabela vazia)
     SEED = {
         "Plástico": {
             "Incineração c/ recuperação energética": 2.9,
@@ -360,63 +348,129 @@ def seed_users_and_factors():
             db.commit()
 
 # =========================
+#   FATORES (helpers DB)
+# =========================
+def listar_tipos_residuo(db:Session)->list[str]:
+    q = db.query(FatorEmissao.tipo_residuo).distinct().order_by(FatorEmissao.tipo_residuo.asc()).all()
+    tipos=[r[0] for r in q]
+    if "Misto/Outros" not in tipos: tipos.append("Misto/Outros")
+    return tipos
+
+def listar_destinos_para_tipo(db:Session, tipo:str)->list[str]:
+    q = db.query(FatorEmissao.destinacao).filter(FatorEmissao.tipo_residuo==tipo).distinct().order_by(FatorEmissao.destinacao.asc()).all()
+    dests=[r[0] for r in q]
+    if not dests:
+        q2 = db.query(FatorEmissao.destinacao).filter(FatorEmissao.tipo_residuo=="Misto/Outros").distinct().all()
+        dests=[r[0] for r in q2]
+    return dests
+
+def obter_fator(db:Session, tipo:str, destino:str)->float|None:
+    fe = db.query(FatorEmissao).filter(
+        FatorEmissao.tipo_residuo==tipo,
+        FatorEmissao.destinacao==destino
+    ).first()
+    return fe.fator_tco2e_por_ton if fe else None
+
+# =========================
 #   PARSER DA MTR (PDF)
 # =========================
-def extract_pdf_data(pdf_path:str)->dict:
+def _load_pdf_text_all_pages(pdf_path:str) -> str:
+    """
+    Concatena o texto de todas as páginas, lidando com páginas sem OCR.
+    """
     if not HAVE_PDFPLUMBER:
         raise RuntimeError("pdfplumber não está instalado.")
-    dados={}
+    texts=[]
     with pdfplumber.open(pdf_path) as pdf:
-        page=pdf.pages[0]; text = page.extract_text() or ""
-        mtr_match = re.search(r"MTR nº (\d+)", text)
-        dados["MTR - Número"] = mtr_match.group(1).strip() if mtr_match else "N/A"
+        for p in pdf.pages:
+            try:
+                t = p.extract_text() or ""
+            except Exception:
+                t = ""
+            texts.append(t)
+    full = "\n".join(texts).strip()
+    return full
+
+def extract_pdf_data(pdf_path:str)->dict:
+    """
+    Parser mais tolerante: usa o texto completo do PDF; tenta regex principal
+    e, em falha, tenta alternativas para quantidade/unidade.
+    """
+    dados={}
+    try:
+        text = _load_pdf_text_all_pages(pdf_path)
+        # --- MTR nº
+        mtr_match = re.search(r"(?:MTR\s*n[ºo]|MTR\s*-\s*n[ºo]|MTR\s*número)\s*[:\-]?\s*(\d+)", text, flags=re.IGNORECASE)
+        dados["MTR - Número"] = (mtr_match.group(1).strip() if mtr_match else "N/A")
+
+        # --- Gerador
         g0=text.find("Identificação do Gerador"); g1=text.find("Observações do Gerador")
-        generator = text[g0:g1] if g0!=-1 and g1!=-1 else ""
-        dados["Gerador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", generator).group(1).strip()
-                                           if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", generator) else "N/A")
-        dados["Gerador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", generator).group(1).strip()
-                                       if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", generator) else "N/A")
-        dados["Gerador - Data da emissão"] = (re.search(r"Data da emissão: (\d{2}/\d{2}/\d{4})", generator).group(1).strip()
-                                              if re.search(r"Data da emissão: (\d{2}/\d{2}/\d{4})", generator) else "N/A")
-        dados["Gerador - Município"] = (re.search(r"Município: (.*?) UF:", generator).group(1).strip()
-                                        if re.search(r"Município: (.*?) UF:", generator) else "N/A")
-        dados["Gerador - UF"] = (re.search(r"UF: (\w{2})", generator).group(1).strip()
-                                 if re.search(r"UF: (\w{2})", generator) else "N/A")
+        generator = text[g0:g1] if (g0!=-1 and g1!=-1 and g1>g0) else ""
+        def _find(pattern, src, flags=0):
+            m = re.search(pattern, src, flags)
+            return m.group(1).strip() if m else None
 
+        dados["Gerador - Razão Social"] = _find(r"Razão Social:\s*(.*?)\s*-\s*\d+\s*CPF/CNPJ:", generator) or _find(r"Razão Social:\s*(.*)", generator)
+        dados["Gerador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", generator)
+        dados["Gerador - Data da emissão"] = _find(r"Data da emissão:\s*(\d{2}/\d{2}/\d{4})", generator)
+        dados["Gerador - Município"] = _find(r"Município:\s*(.*?)\s*UF:", generator)
+        dados["Gerador - UF"] = _find(r"UF:\s*([A-Z]{2})", generator)
+
+        # --- Transportador
         t0=text.find("Identificação do Transportador"); t1=text.find("Nome do Motorista")
-        transport = text[t0:t1] if t0!=-1 and t1!=-1 else ""
-        dados["Transportador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", transport).group(1).strip()
-                                                 if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", transport) else "N/A")
-        dados["Transportador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", transport).group(1).strip()
-                                             if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", transport) else "N/A")
-        _dttr = re.search(r"Data do transporte:\s*(\d{2}/\d{2}/\d{4})?", transport)
-        dados["Transportador - Data do transporte"] = _dttr.group(1).strip() if _dttr and _dttr.group(1) else "N/A"
+        transport = text[t0:t1] if (t0!=-1 and t1!=-1 and t1>t0) else ""
+        dados["Transportador - Razão Social"] = _find(r"Razão Social:\s*(.*?)\s*-\s*\d+\s*CPF/CNPJ:", transport) or _find(r"Razão Social:\s*(.*)", transport)
+        dados["Transportador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", transport)
+        dados["Transportador - Data do transporte"] = _find(r"Data do transporte:\s*(\d{2}/\d{2}/\d{4})", transport)
 
+        # --- Destinador
         d0=text.find("Identificação do Destinador"); d1=text.find("Identificação dos Resíduos")
-        destin = text[d0:d1] if d0!=-1 and d1!=-1 else ""
-        dados["Destinador - Razão Social"] = (re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", destin).group(1).strip()
-                                              if re.search(r"Razão Social: (.*?) - \d+ CPF/CNPJ:", destin) else "N/A")
-        dados["Destinador - CPF/CNPJ"] = (re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", destin).group(1).strip()
-                                          if re.search(r"CPF/CNPJ: (\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", destin) else "N/A")
-        _dtrc = re.search(r"Data do recebimento:\s*(\d{2}/\d{2}/\d{4})?", destin)
-        dados["Destinador - Data do recebimento"] = _dtrc.group(1).strip() if _dtrc and _dtrc.group(1) else "N/A"
+        destin = text[d0:d1] if (d0!=-1 and d1!=-1 and d1>d0) else ""
+        dados["Destinador - Razão Social"] = _find(r"Razão Social:\s*(.*?)\s*-\s*\d+\s*CPF/CNPJ:", destin) or _find(r"Razão Social:\s*(.*)", destin)
+        dados["Destinador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", destin)
+        dados["Destinador - Data do recebimento"] = _find(r"Data do recebimento:\s*(\d{2}/\d{2}/\d{4})", destin)
 
-        # Resíduos (primeiro item)
-        waste_start=text.find("Identificação dos Resíduos")
+        # --- Resíduos (linha 1 padrão + fallbacks)
+        waste_start = text.find("Identificação dos Resíduos")
         waste_info_raw = text[waste_start:] if waste_start!=-1 else text
-        waste_line_match = re.search(
-            r"^1\s+([\d-]+)-(.+?)\s+([A-Z]+)\s+CLASSE\s+(.+?)\s+([0-9,.]+)\s+([A-Z]+)\s+(.+)$",
+
+        # padrão principal (seu regex original)
+        m = re.search(
+            r"^1\s+([\d-]+)-(.+?)\s+([A-Z]+)\s+CLASSE\s+(.+?)\s+([0-9\.,]+)\s+([A-Z]+)\s+(.+)$",
             waste_info_raw, re.MULTILINE
         )
-        if waste_line_match:
-            codigo_completo = f"{waste_line_match.group(1)}-{waste_line_match.group(2).strip()}"
-            dados["Resíduos - Código IBAMA e Denominação"] = codigo_completo[:6]
-            dados["Resíduos - Qtde"] = waste_line_match.group(5).strip()
-            dados["Resíduos - Unidade"] = waste_line_match.group(6).strip()
+        if not m:
+            # fallback simples: “Qtde: 1.234,56 KG” em algum lugar
+            m_qty = re.search(r"Qtde[:\s]+([0-9\.\,]+)\s*([A-Za-z]+)", waste_info_raw)
+            if m_qty:
+                dados["Resíduos - Qtde"] = m_qty.group(1).strip()
+                dados["Resíduos - Unidade"] = m_qty.group(2).strip()
+            else:
+                # outro fallback: “Peso ... 1.234,56 KG”
+                m_qty2 = re.search(r"Peso[:\s]+([0-9\.\,]+)\s*([A-Za-z]+)", waste_info_raw, re.IGNORECASE)
+                if m_qty2:
+                    dados["Resíduos - Qtde"] = m_qty2.group(1).strip()
+                    dados["Resíduos - Unidade"] = m_qty2.group(2).strip()
         else:
-            dados["Resíduos - Código IBAMA e Denominação"] = ""
-            dados["Resíduos - Qtde"] = ""
-            dados["Resíduos - Unidade"] = ""
+            codigo_completo = f"{m.group(1)}-{m.group(2).strip()}"
+            dados["Resíduos - Código IBAMA e Denominação"] = codigo_completo[:6]
+            dados["Resíduos - Qtde"] = m.group(5).strip()
+            dados["Resíduos - Unidade"] = m.group(6).strip()
+
+        # normaliza nulos
+        for k in ("Resíduos - Qtde", "Resíduos - Unidade", "Resíduos - Código IBAMA e Denominação"):
+            if k not in dados: dados[k] = ""
+
+    except Exception as e:
+        # Nunca quebra — retorna mínimo viável + erro no log do app
+        st.error(f"Falha ao ler PDF (parser): {Path(pdf_path).name} — {e}")
+        st.caption("Dica: verifique se o PDF possui texto (OCR) e formatação esperada.")
+        dados.setdefault("MTR - Número", "N/A")
+        for k in ("Gerador - Razão Social","Gerador - CPF/CNPJ","Gerador - Data da emissão","Gerador - Município","Gerador - UF",
+                  "Transportador - Razão Social","Transportador - CPF/CNPJ","Transportador - Data do transporte",
+                  "Destinador - Razão Social","Destinador - CPF/CNPJ","Destinador - Data do recebimento",
+                  "Resíduos - Código IBAMA e Denominação","Resíduos - Qtde","Resíduos - Unidade"):
+            dados.setdefault(k, "")
     return dados
 
 def extract_and_normalize_mtr(pdf_path:str)->dict:
@@ -476,31 +530,6 @@ def classificar(score:int)->str:
     if score>=80: return "Conforme/Adequado"
     if score>=60: return "Parcialmente Conforme"
     return "Não Conforme/Inadequado"
-
-# =========================
-#   FATORES (helpers DB)
-# =========================
-def listar_tipos_residuo(db:Session)->list[str]:
-    q = db.query(FatorEmissao.tipo_residuo).distinct().order_by(FatorEmissao.tipo_residuo.asc()).all()
-    tipos=[r[0] for r in q]
-    if "Misto/Outros" not in tipos: tipos.append("Misto/Outros")
-    return tipos
-
-def listar_destinos_para_tipo(db:Session, tipo:str)->list[str]:
-    q = db.query(FatorEmissao.destinacao).filter(FatorEmissao.tipo_residuo==tipo).distinct().order_by(FatorEmissao.destinacao.asc()).all()
-    dests=[r[0] for r in q]
-    # fallback: se não houver nenhum para o tipo, usar os destinos do tipo "Misto/Outros" ou lista vazia
-    if not dests:
-        q2 = db.query(FatorEmissao.destinacao).filter(FatorEmissao.tipo_residuo=="Misto/Outros").distinct().all()
-        dests=[r[0] for r in q2]
-    return dests
-
-def obter_fator(db:Session, tipo:str, destino:str)->float|None:
-    fe = db.query(FatorEmissao).filter(
-        FatorEmissao.tipo_residuo==tipo,
-        FatorEmissao.destinacao==destino
-    ).first()
-    return fe.fator_tco2e_por_ton if fe else None
 
 # =========================
 #      INICIALIZAÇÃO
@@ -728,7 +757,7 @@ elif menu=="Visualizar Fornecedores":
                 for d in sel.documentos:
                     with st.container(border=True):
                         st.write(f"**Tipo:** {d.tipo}")
-                        # botão para baixar o arquivo atual (se existir)
+                        # botão para baixar o arquivo atual
                         try:
                             if d.arquivo and Path(d.arquivo).exists():
                                 with open(d.arquivo,"rb") as f: data_atual=f.read()
@@ -736,7 +765,7 @@ elif menu=="Visualizar Fornecedores":
                                                    file_name=os.path.basename(d.arquivo), key=f"doc_dl_{d.id}")
                             else:
                                 st.caption("Nenhum arquivo atual encontrado para este documento.")
-                        except Exception as _e:
+                        except Exception:
                             st.warning("Não foi possível preparar o download do arquivo atual.")
 
                         c1,c2,c3=st.columns([0.4,0.3,0.3])
@@ -827,33 +856,68 @@ elif menu=="Visualizar Fornecedores":
                         fig_area.update_traces(marker_color="green"); st.plotly_chart(fig_area, use_container_width=True)
                     st.markdown(f"**Última auditoria:** Score {aud_show.score}%, Classificação: {aud_show.classificado}")
 
-            # Planos
+            # Planos — agora com painel de status
             with tabs[3]:
                 st.subheader("Planos de Ação")
-                descricao=st.text_area("Descrição da Ação")
-                data_inicio=st.date_input("Início", value=date.today())
-                data_fim=st.date_input("Fim", value=date.today())
-                status=st.selectbox("Status", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value])
-                ev_upload=st.file_uploader("Anexar evidência (opcional)", type=["pdf","jpg","png","jpeg"], key=f"evid_up_{sel.id}")
+                # Form para criar novo
+                with st.form(f"form_plano_{sel.id}"):
+                    descricao=st.text_area("Descrição da Ação")
+                    data_inicio=st.date_input("Início", value=date.today())
+                    data_fim=st.date_input("Fim", value=date.today())
+                    status=st.selectbox("Status", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value])
+                    ev_upload=st.file_uploader("Anexar evidência (opcional)", type=["pdf","jpg","png","jpeg"])
+                    enviar=st.form_submit_button("Adicionar Plano de Ação")
                 evidencias=[]
-                if ev_upload is not None:
-                    ev_path=salvar_arquivo(ev_upload, "uploads/evidencias", f"{sel.id}_plano"); evidencias.append(ev_path)
-                if st.button("Adicionar Plano de Ação", key=f"add_plano_{sel.id}"):
+                if enviar:
                     if not descricao: st.error("Descreva a ação.")
                     elif data_fim<data_inicio: st.error("Data final deve ser maior ou igual à data inicial.")
                     else:
+                        if ev_upload is not None:
+                            ev_path=salvar_arquivo(ev_upload, "uploads/evidencias", f"{sel.id}_plano"); evidencias.append(ev_path)
                         with SessionLocal() as db:
                             plano=PlanoAcao(fornecedor_id=sel.id, descricao=descricao.strip(),
                                             data_inicio=data_inicio, data_fim=data_fim, status=PlanoStatusEnum(status),
                                             evidencias=evidencias or [], updated_by=st.session_state.usuario)
                             db.add(plano); db.commit(); st.success("Plano de ação adicionado."); _safe_rerun()
-                for p in sel.planos_acao:
-                    with st.container(border=True):
-                        st.markdown(f"**{p.descricao}** — {p.status} — {p.data_inicio} → {p.data_fim}")
-                        if p.evidencias:
-                            st.write("Evidências:")
-                            for ev in p.evidencias:
-                                if Path(ev).exists(): exibir_preview_arquivo(ev, None)
+
+                # Painel de ações existentes (com status editável)
+                st.markdown("#### Ações cadastradas")
+                if not sel.planos_acao:
+                    st.info("Nenhuma ação cadastrada.")
+                else:
+                    hoje = date.today()
+                    for p in sorted(sel.planos_acao, key=lambda x: x.data_fim):
+                        atrasado = (p.status != PlanoStatusEnum.concluido and p.data_fim < hoje)
+                        bg = "#ffebee" if atrasado else "#e8f5e9" if p.status==PlanoStatusEnum.concluido else "#fffde7"
+                        with st.container():
+                            st.markdown(f"<div style='padding:10px;border-radius:8px;background:{bg};'>"
+                                        f"<b>{p.descricao}</b><br>"
+                                        f"Início: {p.data_inicio} | Fim: {p.data_fim} | Status atual: <b>{p.status}</b>"
+                                        f"</div>", unsafe_allow_html=True)
+                            c1,c2,c3 = st.columns([0.35,0.35,0.3])
+                            with c1:
+                                novo_status = st.selectbox("Atualizar status:", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value],
+                                                           index=[PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value].index(p.status.value),
+                                                           key=f"pl_st_{p.id}")
+                            with c2:
+                                ev2 = st.file_uploader("Anexar nova evidência (opcional)", type=["pdf","jpg","png","jpeg"], key=f"pl_ev_{p.id}")
+                            with c3:
+                                if st.button("Salvar", key=f"pl_save_{p.id}"):
+                                    with SessionLocal() as db:
+                                        pp = db.query(PlanoAcao).get(p.id)
+                                        pp.status = PlanoStatusEnum(novo_status)
+                                        if ev2 is not None:
+                                            ev_path = salvar_arquivo(ev2, "uploads/evidencias", f"{sel.id}_plano")
+                                            lst = list(pp.evidencias or [])
+                                            lst.append(ev_path)
+                                            pp.evidencias = lst
+                                        pp.updated_by = st.session_state.usuario
+                                        db.commit()
+                                    st.success("Plano atualizado."); _safe_rerun()
+                            if p.evidencias:
+                                st.caption("Evidências:")
+                                for ev in p.evidencias:
+                                    if Path(ev).exists(): exibir_preview_arquivo(ev, None)
 
             # Contratos
             with tabs[4]:
@@ -889,7 +953,6 @@ elif menu=="Visualizar Fornecedores":
                 for m in sel.mtrs:
                     with st.container(border=True):
                         st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Receb.:** {m.destinador_data_recebimento or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
-                        # Edição de Escopo 3 via tabela de fatores:
                         with SessionLocal() as db:
                             tipos = listar_tipos_residuo(db)
                             tipo_idx = tipos.index(m.tipo_residuo) if (m.tipo_residuo in tipos) else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
@@ -941,7 +1004,7 @@ elif menu=="MTRs":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito."); st.stop()
     st.header("Controle de MTRs por Fornecedor")
-    if not HAVE_PDFPLUMBER: st.error("pdfplumber não está instalado."); st.stop()
+    if not HAVE_PDFPLUMBER: st.error("pdfplumber não está instalado. Adicione ao requirements."); st.stop()
     with SessionLocal() as db:
         fornecedores=db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
     if not fornecedores: st.info("Cadastre fornecedores antes de importar MTRs."); st.stop()
@@ -970,8 +1033,10 @@ elif menu=="MTRs":
                           qtd_kg=dados["qtd_kg"], dados_raw=dados, updated_by=st.session_state.usuario)
                     db.add(m); db.commit(); ok+=1
             except Exception as e:
-                fail+=1; st.error(f"Erro ao processar um PDF: {e}")
-        st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}"); _safe_rerun()
+                fail+=1
+                st.error(f"Erro ao processar {up.name}: {e}")
+        st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
+        _safe_rerun()
 
     st.markdown("### Edição em lote (Escopo 3)")
     with SessionLocal() as db:
@@ -1043,24 +1108,89 @@ elif menu=="MTRs":
         else:
             for r in rows[:200]: st.write(r)
 
-# ---- NOVO: Fatores de Emissão ----
+# ---- Fatores de Emissão (EDITÁVEL) ----
 elif menu=="Fatores de Emissão":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito."); st.stop()
 
     st.header("Fatores de Emissão (tCO₂e por tonelada)")
-
-    # Lista existente
     with SessionLocal() as db:
         fatores = db.query(FatorEmissao).order_by(FatorEmissao.tipo_residuo.asc(), FatorEmissao.destinacao.asc()).all()
 
+    st.markdown("#### Editar existentes (tabela editável)")
     if fatores:
+        # DataFrame com coluna id oculta, mas preservada
         rows = [{
-            "id": f.id, "Tipo de resíduo": f.tipo_residuo, "Destinação": f.destinacao,
-            "Fator (tCO₂e/t)": f.fator_tco2e_por_ton, "Fonte": f.fonte or "", "Ano ref.": f.ano_ref or ""
+            "id": f.id,
+            "Tipo de resíduo": f.tipo_residuo,
+            "Destinação": f.destinacao,
+            "Fator (tCO₂e/t)": float(f.fator_tco2e_por_ton or 0.0),
+            "Fonte": f.fonte or "",
+            "Ano ref.": int(f.ano_ref or 0),
+            "Selecionar": False
         } for f in fatores]
-        if HAVE_PANDAS: st.dataframe(pd.DataFrame(rows), use_container_width=True)
-        else: [st.write(r) for r in rows]
+        if HAVE_PANDAS:
+            df = pd.DataFrame(rows)
+            edited = st.data_editor(
+                df,
+                use_container_width=True,
+                key="fe_editor",
+                column_config={
+                    "id": st.column_config.Column("id", disabled=True),
+                    "Fator (tCO₂e/t)": st.column_config.NumberColumn(format="%.4f"),
+                    "Ano ref.": st.column_config.NumberColumn(step=1, min_value=0),
+                    "Selecionar": st.column_config.CheckboxColumn(help="Marque para excluir"),
+                },
+                hide_index=True
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Salvar alterações"):
+                    try:
+                        with SessionLocal() as db:
+                            for _, r in edited.iterrows():
+                                fe = db.query(FatorEmissao).get(int(r["id"]))
+                                if not fe: continue
+                                # Evita colisão (tipo,dest)
+                                novo_tipo = str(r["Tipo de resíduo"]).strip()
+                                novo_dest = str(r["Destinação"]).strip()
+                                if (fe.tipo_residuo!=novo_tipo or fe.destinacao!=novo_dest):
+                                    exists = db.query(FatorEmissao).filter(
+                                        FatorEmissao.tipo_residuo==novo_tipo,
+                                        FatorEmissao.destinacao==novo_dest
+                                    ).first()
+                                    if exists and exists.id != fe.id:
+                                        st.error(f"Conflito: já existe fator para ({novo_tipo}, {novo_dest}).")
+                                        continue
+                                fe.tipo_residuo = novo_tipo
+                                fe.destinacao = novo_dest
+                                fe.fator_tco2e_por_ton = float(r["Fator (tCO₂e/t)"])
+                                fe.fonte = (str(r["Fonte"]).strip() or None)
+                                ano = int(r["Ano ref."] or 0)
+                                fe.ano_ref = ano if ano>0 else None
+                            db.commit()
+                        st.success("Alterações salvas.")
+                        _safe_rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
+            with col2:
+                if st.button("Excluir selecionados"):
+                    ids_sel = edited.loc[edited["Selecionar"]==True, "id"].tolist()
+                    if not ids_sel:
+                        st.info("Nenhuma linha marcada.")
+                    else:
+                        try:
+                            with SessionLocal() as db:
+                                for i in ids_sel:
+                                    fe = db.query(FatorEmissao).get(int(i))
+                                    if fe: db.delete(fe)
+                                db.commit()
+                            st.success(f"Excluídos: {len(ids_sel)} registro(s).")
+                            _safe_rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao excluir: {e}")
+        else:
+            st.info("Para edição em tabela, instale pandas.")
     else:
         st.info("Nenhum fator cadastrado. Use o formulário abaixo para adicionar.")
 
@@ -1097,72 +1227,7 @@ elif menu=="Fatores de Emissão":
                         st.success("Fator adicionado com sucesso!")
                         _safe_rerun()
                 except Exception as e:
-                    db.rollback(); st.error(f"Erro ao adicionar fator: {e}")
-
-    st.markdown("---")
-    st.subheader("Editar fator existente")
-    with SessionLocal() as db:
-        fatores_ids = [f.id for f in db.query(FatorEmissao.id).order_by(FatorEmissao.id.asc()).all()]
-    if not fatores_ids:
-        st.caption("Não há fatores para editar.")
-    else:
-        sel_id = st.selectbox("Selecione o ID do fator para editar", fatores_ids)
-        with SessionLocal() as db:
-            fator = db.query(FatorEmissao).get(sel_id)
-        if fator:
-            c1,c2 = st.columns(2)
-            with c1:
-                tipo_e = st.text_input("Tipo de resíduo", value=fator.tipo_residuo)
-                dest_e = st.text_input("Destinação", value=fator.destinacao)
-                fonte_e = st.text_input("Fonte", value=fator.fonte or "")
-            with c2:
-                fator_e = st.number_input("Fator (tCO₂e/t)", value=float(fator.fator_tco2e_por_ton or 0.0), step=0.01, format="%.4f")
-                ano_e = st.number_input("Ano de referência", value=int(fator.ano_ref or 0), step=1, min_value=0)
-            colb1, colb2, colb3 = st.columns(3)
-            with colb1:
-                if st.button("Salvar alterações", key=f"save_fe_{sel_id}"):
-                    with SessionLocal() as db:
-                        try:
-                            fe = db.query(FatorEmissao).get(sel_id)
-                            # proteger unicidade (tipo,dest)
-                            if (fe.tipo_residuo!=tipo_e.strip() or fe.destinacao!=dest_e.strip()):
-                                existe = db.query(FatorEmissao).filter(
-                                    FatorEmissao.tipo_residuo==tipo_e.strip(),
-                                    FatorEmissao.destinacao==dest_e.strip()
-                                ).first()
-                                if existe:
-                                    st.error("Já existe um fator com esse (tipo, destinação).")
-                                    st.stop()
-                            fe.tipo_residuo=tipo_e.strip(); fe.destinacao=dest_e.strip()
-                            fe.fator_tco2e_por_ton=float(fator_e)
-                            fe.fonte=fonte_e.strip() or None
-                            fe.ano_ref=int(ano_e) if ano_e>0 else None
-                            db.commit(); st.success("Fator atualizado."); _safe_rerun()
-                        except Exception as e:
-                            db.rollback(); st.error(f"Erro ao salvar: {e}")
-            with colb2:
-                if st.button("Duplicar como novo", key=f"dup_fe_{sel_id}"):
-                    with SessionLocal() as db:
-                        try:
-                            db.add(FatorEmissao(
-                                tipo_residuo=tipo_e.strip(),
-                                destinacao=dest_e.strip()+" (cópia)",
-                                fator_tco2e_por_ton=float(fator_e),
-                                fonte=fonte_e.strip() or None,
-                                ano_ref=int(ano_e) if ano_e>0 else None
-                            ))
-                            db.commit(); st.success("Cópia criada."); _safe_rerun()
-                        except Exception as e:
-                            db.rollback(); st.error(f"Erro ao duplicar: {e}")
-            with colb3:
-                if st.button("Excluir", key=f"del_fe_{sel_id}"):
-                    with SessionLocal() as db:
-                        try:
-                            fe = db.query(FatorEmissao).get(sel_id)
-                            db.delete(fe); db.commit()
-                            st.success("Fator excluído."); _safe_rerun()
-                        except Exception as e:
-                            db.rollback(); st.error(f"Erro ao excluir: {e}")
+                    st.error(f"Erro ao adicionar fator: {e}")
 
 # ---- Admin (Usuários) ----
 elif menu=="Admin (Usuários)":
