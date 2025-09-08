@@ -883,13 +883,36 @@ elif menu == "Visualizar Fornecedores":
                 for d in sel.documentos:
                     with st.container(border=True):
                         st.write(f"**Tipo:** {d.tipo}")
+                
+                        # NOVO: mostrar botão para baixar o arquivo atual (se existir)
+                        try:
+                            if d.arquivo and Path(d.arquivo).exists():
+                                with open(d.arquivo, "rb") as f:
+                                    data_atual = f.read()
+                                st.download_button(
+                                    "Baixar arquivo atual",
+                                    data=data_atual,
+                                    file_name=os.path.basename(d.arquivo),
+                                    key=f"doc_dl_{d.id}"
+                                )
+                            else:
+                                st.caption("Nenhum arquivo atual encontrado para este documento.")
+                        except Exception as _e:
+                            st.warning("Não foi possível preparar o download do arquivo atual.")
+                
+                        # Linha de edição (substituição + datas)
                         c1, c2, c3 = st.columns([0.4, 0.3, 0.3])
                         with c1:
-                            up = st.file_uploader("Substituir arquivo (opcional)", type=["pdf", "jpg", "png", "jpeg"], key=f"doc_up_{d.id}")
+                            up = st.file_uploader(
+                                "Substituir arquivo (opcional)",
+                                type=["pdf", "jpg", "png", "jpeg"],
+                                key=f"doc_up_{d.id}"
+                            )
                         with c2:
                             dt_ini = st.date_input("Início", value=d.data_inicio, key=f"doc_ini_{d.id}")
                         with c3:
                             dt_val = st.date_input("Validade", value=d.data_validade, key=f"doc_val_{d.id}")
+                
                         if st.button("Salvar alterações", key=f"doc_save_{d.id}"):
                             if dt_val < dt_ini:
                                 st.error("Validade não pode ser anterior ao início.")
@@ -1456,3 +1479,4 @@ elif menu == "Sair":
     st.session_state.role = None
     st.session_state.sel_forn_id = None
     _safe_rerun()
+
