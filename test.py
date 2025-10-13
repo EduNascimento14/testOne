@@ -21,6 +21,7 @@ from sqlalchemy import (
     UniqueConstraint, JSON, func, text
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload, Session
+from sqlalchemy.orm import selectinload
 import enum
 
 # ===== (Excel/Data) =====
@@ -1076,6 +1077,10 @@ if menu=="Visualizar Fornecedores":
                 st.write(f"**Total destinado (kg):** {total_kg:.1f} | **Total tCO₂e:** {total_t:.2f}")
                 for m in sel.mtrs:
                     with st.container(border=True):
+                        # Garante que a instância está anexada e com CDFs pré-carregados
+                        with SessionLocal() as db:
+                            m_db = db.query(MTR).options(selectinload(MTR.cdfs)).get(m.id)
+                        m = m_db or m
                         st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Receb.:** {m.destinador_data_recebimento or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
                         with SessionLocal() as db:
                             tipos = listar_tipos_residuo(db)
@@ -1179,6 +1184,9 @@ if menu=="MTRs":
         mid = int(escolha.split(" - ")[0])
 
         m = next(mm for mm in mtrs if mm.id == mid)
+    # Recarrega a MTR com CDFs em eager-load para evitar DetachedInstanceError
+    with SessionLocal() as db:
+        m = db.query(MTR).options(selectinload(MTR.cdfs)).get(mid)
         with SessionLocal() as db:
             tipos = listar_tipos_residuo(db)
             tipo_idx = tipos.index(m.tipo_residuo) if m.tipo_residuo in tipos else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
