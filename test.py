@@ -568,7 +568,77 @@ def classificar(score:int)->str:
     return "Não Conforme/Inadequado"
 
 # =========================
-#      INICIALIZAÇÃO
+#      # =============== CHECKLIST IQA (baseado na planilha) ===============
+CHECKLIST_ITEMS = [
+    {"chave":"q1_iso","titulo":"A empresa possui sistema de gestão ISO 14001?",
+     "opcoes":{"NÃO":0, "EM PROCESSO DE CERTIFICAÇÃO":1, "SIM":2}, "max":2},
+    {"chave":"q2_licenca_orgaos","titulo":"A empresa possui licença do órgão ambiental responsável? (Licença Instalação/Operação/polícia federal/CADRI/Outorga)",
+     "opcoes":{"NÃO":0, "SÓ PROTOCOLO":1, "SIM":3}, "max":3},
+    {"chave":"q3_condicionantes","titulo":"Há evidências de que as restrições/condicionantes da licença estão cumpridas?",
+     "opcoes":{"NÃO":0, "PARCIALMENTE":1, "SIM":2}, "max":2},
+    {"chave":"q4_autuacoes","titulo":"A empresa sofreu alguma autuação ambiental nos últimos anos?",
+     "opcoes":{"SIM":0, "NÃO":2}, "max":2},
+    {"chave":"q5_visitas_laudos","titulo":"Há evidências de visitas fiscalizatórias do órgão ambiental? (últimos 3 laudos de inspeção)",
+     "opcoes":{"NÃO":0, "SIM":1}, "max":1},
+    {"chave":"q6_documentacao_sga","titulo":"Existe estrutura de documentação do sistema (manual, procedimentos, instruções, controles de registros)?",
+     "opcoes":{"NÃO":0, "SIM, PORÉM SEM REGISTROS":1, "SIM":2}, "max":2},
+    {"chave":"q7_politica_objetivos","titulo":"Possui Política (Qualidade, Meio Ambiente, Segurança) com objetivos e metas?",
+     "opcoes":{"NÃO":0, "SIM":1}, "max":1},
+    {"chave":"q8_aspectos_controles","titulo":"Levantou aspectos/impactos e controla os significativos?",
+     "opcoes":{"NÃO":0, "SIM, PORÉM SEM OS CONTROLES":1, "SIM":2}, "max":2},
+    {"chave":"q9_espaco_fisico","titulo":"Espaço físico é suficiente para receber a quantidade de materiais gerados?",
+     "opcoes":{"NÃO":0, "SIM":1}, "max":1},
+    {"chave":"q10_ete","titulo":"Possui ETE para tratar efluentes líquidos?",
+     "opcoes":{"NÃO":0, "SIM":3}, "max":3},
+    {"chave":"q11_analises_ete","titulo":"Se ETE existir, realiza análises do efluente tratado?",
+     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
+    {"chave":"q12_area_coberta","titulo":"Área de armazenamento de resíduos é coberta?",
+     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
+    {"chave":"q13_area_impermeavel","titulo":"Área de armazenamento de resíduos é impermeabilizada?",
+     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
+    {"chave":"q14_frota_condicao","titulo":"Caminhões/caçambas em bom estado? Controle de fumaça preta/MOPP?",
+     "opcoes":{"NÃO":0, "ALGUNS":1, "TODOS":2}, "max":2},
+    {"chave":"q15_ibama","titulo":"Possui licença/registro no IBAMA (CTF/APP)?",
+     "opcoes":{"NÃO":0, "PROTOCOLO DE ENTRADA":1, "SIM":2}, "max":2},
+    {"chave":"q16_destinacao_correta","titulo":"Destina adequadamente os resíduos sólidos, quando gera?",
+     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
+    {"chave":"q17_avcb_alvara","titulo":"Possui AVCB e alvará municipal de funcionamento?",
+     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
+    {"chave":"q18_registros_func","titulo":"Todos os funcionários possuem registros?",
+     "opcoes":{"NÃO":0, "SIM":1}, "max":1},
+    {"chave":"q19_epi_uniforme","titulo":"Funcionários trabalham uniformizados e com EPIs pertinentes?",
+     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
+    {"chave":"q20_pontualidade","titulo":"Atende às chamadas para retiradas com pontualidade?",
+     "opcoes":{"NÃO":0, "PARCIALMENTE":1, "SIM":2}, "max":2},
+    {"chave":"q21_treinamentos_ssma","titulo":"Recebem treinamentos frequentes de saúde/segurança/meio ambiente?",
+     "opcoes":{"NÃO":0, "SIM, COM POUCA FREQUÊNCIA":1, "SIM, FREQUENTEMENTE":3}, "max":3},
+]
+
+def calcular_iqa(respostas_dict):
+    obt, maxp = 0, 0
+    for item in CHECKLIST_ITEMS:
+        maxp += item["max"]
+        val = respostas_dict.get(item["chave"])
+        if isinstance(val, int):
+            obt += max(0, min(item["max"], val))
+    iqa = (obt / maxp * 100.0) if maxp > 0 else 0.0
+    return obt, maxp, iqa
+
+def classificar_iqa(iqa_pct):
+    if iqa_pct >= 76:
+        return {"classe":"Excelente", "condicionamento":"Condicionado", "reavaliacao":"2 anos",
+                "acao":"Manter e melhorar o nível alcançado", "status_conformidade":"Conforme"}
+    elif iqa_pct >= 51:
+        return {"classe":"Bom", "condicionamento":"Condicionado", "reavaliacao":"1 ano",
+                "acao":"Eliminar alguns pontos fracos", "status_conformidade":"Conforme"}
+    elif iqa_pct >= 21:
+        return {"classe":"Regular", "condicionamento":"Desqualificado", "reavaliacao":"6 meses",
+                "acao":"Executar melhorias consideráveis", "status_conformidade":"Não conforme"}
+    else:
+        return {"classe":"Desqualificado", "condicionamento":"Desqualificado", "reavaliacao":"-",
+                "acao":"Bloqueio de cadastro", "status_conformidade":"Não conforme"}
+
+INICIALIZAÇÃO
 # =========================
 run_light_migrations()
 seed_users_and_factors()
@@ -824,13 +894,15 @@ elif menu=="Visualizar Fornecedores":
                                     db.commit(); st.success("Documento atualizado com sucesso!"); _safe_rerun()
 
                 st.markdown("#### Adicionar novo documento")
-                tipos_documentos=[
-                    "Licença Ambiental de Operação",
-                    "Alvará de Funcionamento",
-                    "Comprovante de regularidade (CETESB ou órgão estadual)",
-                    "Certificado de regularidade do IBAMA CTF/APP",
-                    "Consulta de Área Contaminada"
-                ]
+                [
+    "Licença Ambiental de Operação",
+    "Consulta de Área Contaminada",
+    "Alvará de Funcionamento",
+    "Comprovante de regularidade (CETESB ou órgão estadual)",
+    "Condicionantes ambientais vigentes",
+    "AVCB (Auto de Vistoria do Corpo de Bombeiros)",
+    "CTF - IBAMA"
+]
                 c1,c2,c3,c4=st.columns([0.35,0.25,0.2,0.2])
                 with c1: novo_tipo=st.selectbox("Tipo", tipos_documentos, key="novo_tipo")
                 with c2: novo_ini=st.date_input("Início", value=date.today(), key="novo_ini")
@@ -851,49 +923,80 @@ elif menu=="Visualizar Fornecedores":
                                 db.rollback(); st.error(f"Erro ao salvar documento: {e}")
 
             # Auditoria
-            with tabs[2]:
-                st.subheader("Auditoria (0–2 ponderada)")
-                aud_exist=sel.auditoria; prev={}
-                if aud_exist and isinstance(aud_exist.respostas, dict) and aud_exist.respostas.get("modelo")=="v2":
-                    prev=aud_exist.respostas.get("respostas",{}) or {}
-                respostas_form={}
-                for area_key, meta in AREAS.items():
-                    with st.expander(f"{meta['titulo']} — peso {int(meta['peso']*100)}%"):
-                        for i, pergunta in enumerate(meta["perguntas"], start=1):
-                            k=f"{area_key}.{i}"; default=int(prev.get(k,0)); idx=default if 0<=default<len(OPCOES) else 0
-                            escolha=st.radio(pergunta, OPCOES, index=idx, key=f"aud_{sel.id}_{k}", horizontal=True)
-                            respostas_form[k]=OPCOES.index(escolha)
-                if st.button("Salvar Auditoria", key=f"save_aud_{sel.id}"):
-                    score, area_pct = calcular_score_v2(respostas_form); classific = classificar(score)
-                    payload={"modelo":"v2","respostas":respostas_form,"area_pct":area_pct}
-                    with SessionLocal() as db:
-                        aud=db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
-                        if not aud:
-                            aud=Auditoria(fornecedor_id=sel.id, respostas=payload, score=score, classificado=classific,
-                                          updated_by=st.session_state.usuario); db.add(aud)
-                        else:
-                            aud.respostas=payload; aud.score=score; aud.classificado=classific; aud.updated_by=st.session_state.usuario
-                        db.commit(); st.success(f"Auditoria salva. Score: {score}%. Classificação: {classific}"); _safe_rerun()
+            # --- AUDITORIA (Checklist + IQA + anexo)
+with tabs[2]:
+    st.subheader("Auditoria — Checklist IQA")
+    respostas_form = {}
+    aud_exist = sel.auditoria
+    prev = {}
+    anexos_prev = []
+    if aud_exist and isinstance(aud_exist.respostas, dict):
+        prev = aud_exist.respostas.get("checklist_respostas", {}) or {}
+        anexos_prev = aud_exist.respostas.get("anexos", []) or []
 
-                with SessionLocal() as db:
-                    aud_show=db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
-                if aud_show and isinstance(aud_show.respostas, dict) and aud_show.respostas.get("modelo")=="v2":
-                    area_pct=aud_show.respostas.get("area_pct",{})
-                    if area_pct:
-                        if HAVE_PANDAS:
-                            df=pd.DataFrame({"Área":[AREAS[k]["titulo"] for k in AREAS.keys()],
-                                             "% atendimento":[area_pct.get(k,0.0) for k in AREAS.keys()]})
-                            fig_area=px.bar(df, x="Área", y="% atendimento", title="Atendimento por área (%)")
-                        else:
-                            nomes=[AREAS[k]["titulo"] for k in AREAS.keys()]
-                            valores=[area_pct.get(k,0.0) for k in AREAS.keys()]
-                            fig_area=px.bar(x=nomes, y=valores, labels={"x":"Área","y":"%"},
-                                            title="Atendimento por área (%)")
-                        fig_area.update_traces(marker_color="green"); st.plotly_chart(fig_area, use_container_width=True)
-                    st.markdown(f"**Última auditoria:** Score {aud_show.score}%, Classificação: {aud_show.classificado}")
+    for it in CHECKLIST_ITEMS:
+        opcoes = list(it["opcoes"].keys())
+        valores = list(it["opcoes"].values())
+        default_val = prev.get(it["chave"], None)
+        try:
+            idx = valores.index(default_val)
+        except ValueError:
+            idx = 0
+        escolha = st.radio(
+            it["titulo"],
+            options=opcoes,
+            index=idx,
+            key=f"aud_{sel.id}_{it['chave']}",
+            horizontal=True
+        )
+        respostas_form[it["chave"]] = it["opcoes"][escolha]
 
-            # Planos — painel de status
-            with tabs[3]:
+    st.markdown("#### Anexar documento da auditoria (opcional)")
+    up_aud = st.file_uploader("Relatório/Check-list (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"aud_up_{sel.id}")
+
+    if st.button("Salvar Auditoria (calcular IQA)", key=f"save_aud_{sel.id}"):
+        obt, maxp, iqa = calcular_iqa(respostas_form)
+        regra = classificar_iqa(iqa)
+        anexos = list(anexos_prev)
+        if up_aud is not None:
+            p = salvar_arquivo(up_aud, "uploads/auditorias", f"{sel.id}_auditoria")
+            anexos.append(p)
+
+        payload = {
+            "modelo": "checklist_iqa_v1",
+            "checklist_respostas": respostas_form,
+            "pontos_obtidos": obt,
+            "pontos_max": maxp,
+            "iqa_pct": iqa,
+            "regra_aplicada": regra,
+            "anexos": anexos,
+        }
+
+        with SessionLocal() as db:
+            a = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
+            if not a:
+                a = Auditoria(fornecedor_id=sel.id)
+                db.add(a)
+            a.respostas = payload
+            a.score = int(round(iqa))
+            a.classificado = "Conforme/Adequado" if regra["status_conformidade"] == "Conforme" else "Não Conforme/Inadequado"
+            a.updated_by = st.session_state.usuario
+            db.commit()
+        st.success(f"IQA: {iqa:.1f}% — {regra['classe']} | Reavaliação: {regra['reavaliacao']} | Ação: {regra['acao']}")
+        st.experimental_rerun()
+
+    with SessionLocal() as db:
+        show = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
+
+    if show and isinstance(show.respostas, dict) and show.respostas.get("modelo") == "checklist_iqa_v1":
+        r = show.respostas
+        st.markdown(f"**IQA:** {r.get('iqa_pct',0):.1f}% — **Classe:** {r.get('regra_aplicada',{}).get('classe','-')} | "
+                    f"**Condição:** {r.get('regra_aplicada',{}).get('condicionamento','-')} | "
+                    f"**Reavaliação:** {r.get('regra_aplicada',{}).get('reavaliacao','-')}")
+        if r.get("anexos"):
+            st.markdown("**Anexos da auditoria:**")
+            for path in r["anexos"]:
+                exibir_preview_arquivo(path, None)3]:
                 st.subheader("Planos de Ação")
                 with st.form(f"form_plano_{sel.id}"):
                     descricao=st.text_area("Descrição da Ação")
@@ -978,7 +1081,89 @@ elif menu=="Visualizar Fornecedores":
                         st.write(f"- Assinado em: {c.data_assinatura}, Validade: {c.data_validade}")
                         if Path(c.arquivo).exists(): exibir_preview_arquivo(c.arquivo, None)
 
-            # MTRs (do fornecedor)
+            # MTRs
+
+st.markdown("### Inserção e edição direta (tabela)")
+with SessionLocal() as db:
+    mtrs_forn = db.query(MTR).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.created_at.desc()).all()
+
+rows_edit = []
+for m in mtrs_forn:
+    rows_edit.append({
+        "id": m.id,
+        "MTR nº": m.numero_mtr or "",
+        "Recebimento (AAAA-MM-DD)": (m.destinador_data_recebimento.isoformat() if m.destinador_data_recebimento else ""),
+        "Qtde (kg)": float(m.qtd_kg or 0.0),
+        "Tipo": m.tipo_residuo or "",
+        "Destinação": m.destinacao or "",
+        "Fator (tCO₂e/t)": float(m.fator_tco2e_por_ton or 0.0),
+        "tCO₂e (auto)": float(m.emissoes_tco2e or 0.0),
+    })
+
+if HAVE_PANDAS:
+    import pandas as pd
+    df_edit = pd.DataFrame(rows_edit)
+    edited_df = st.data_editor(
+        df_edit,
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic",
+        column_config={
+            "id": st.column_config.Column("id", disabled=True),
+            "Qtde (kg)": st.column_config.NumberColumn(format="%.3f", step=1.0, min_value=0.0),
+            "Fator (tCO₂e/t)": st.column_config.NumberColumn(format="%.4f", step=0.01, min_value=-999.0),
+            "tCO₂e (auto)": st.column_config.Column(disabled=True),
+        },
+        key=f"editor_mtr_{fornecedor_id}"
+    )
+
+    if st.button("Salvar tabela de MTRs (upsert)", key=f"save_grid_{fornecedor_id}"):
+        with SessionLocal() as db:
+            for _, r in edited_df.iterrows():
+                mid = int(r["id"]) if str(r.get("id","")).strip() != "" else None
+                kg = float(r.get("Qtde (kg)") or 0.0)
+                fator = float(r.get("Fator (tCO₂e/t)") or 0.0)
+                tco2e = kg_to_ton(kg) * fator
+                dt_rec = str(r.get("Recebimento (AAAA-MM-DD)") or "").strip()
+                dt_rec_date = None
+                if dt_rec:
+                    try:
+                        dt_rec_date = datetime.fromisoformat(dt_rec).date()
+                    except Exception:
+                        dt_rec_date = None
+
+                if mid:
+                    m = db.query(MTR).get(mid)
+                    if not m: 
+                        continue
+                    m.numero_mtr = (r.get("MTR nº") or "").strip() or None
+                    m.destinador_data_recebimento = dt_rec_date
+                    m.qtd_kg = kg
+                    m.tipo_residuo = (r.get("Tipo") or "").strip() or None
+                    m.destinacao = (r.get("Destinação") or "").strip() or None
+                    m.fator_tco2e_por_ton = fator
+                    m.emissoes_tco2e = tco2e
+                    m.updated_by = st.session_state.usuario
+                else:
+                    db.add(MTR(
+                        fornecedor_id=fornecedor_id,
+                        arquivo="",
+                        numero_mtr=(r.get("MTR nº") or "").strip() or None,
+                        destinador_data_recebimento=dt_rec_date,
+                        qtd_kg=kg,
+                        tipo_residuo=(r.get("Tipo") or "").strip() or None,
+                        destinacao=(r.get("Destinação") or "").strip() or None,
+                        fator_tco2e_por_ton=fator,
+                        emissoes_tco2e=tco2e,
+                        updated_by=st.session_state.usuario
+                    ))
+            db.commit()
+        st.success("Tabela salva (MTRs inseridas/atualizadas).")
+        st.experimental_rerun()
+else:
+    st.info("Para edição direta, instale `pandas`.")
+
+ (do fornecedor)
             with tabs[5]:
                 st.subheader("MTRs do fornecedor")
                 total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
@@ -1077,55 +1262,73 @@ elif menu=="MTRs":
         st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
         _safe_rerun()
 
-    st.markdown("### Edição em lote (Escopo 3)")
+    st.markdown("### Edição em lote (selecionar MTR → editar)")
+with SessionLocal() as db:
+    mtrs = db.query(MTR).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.created_at.desc()).all()
+
+if not mtrs:
+    st.info("Nenhuma MTR cadastrada para este fornecedor.")
+else:
+    lista = [f"{m.id} - MTR {m.numero_mtr or '-'} | kg={m.qtd_kg or 0:.1f} | receb={m.destinador_data_recebimento or '-'}" for m in mtrs]
+    escolha = st.selectbox("Escolha a MTR para editar", lista, key=f"sel_mtr_{fornecedor_id}")
+    mid = int(escolha.split(" - ")[0])
+
+    m = next(mm for mm in mtrs if mm.id == mid)
     with SessionLocal() as db:
-        mtrs=db.query(MTR).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.created_at.desc()).all()
-    if not mtrs:
-        st.info("Nenhuma MTR cadastrada para este fornecedor.")
-    else:
-        for m in mtrs:
-            with st.container(border=True):
-                st.write(f"**MTR:** {m.numero_mtr or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
-                with SessionLocal() as db:
-                    tipos=listar_tipos_residuo(db)
-                    tipo_idx = tipos.index(m.tipo_residuo) if (m.tipo_residuo in tipos) else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
-                    c1,c2,c3,c4=st.columns(4)
-                    with c1: tipo_sel=st.selectbox("Tipo de resíduo", tipos, index=tipo_idx, key=f"tipo_mtrs_{m.id}")
-                    destinos=listar_destinos_para_tipo(db, tipo_sel)
-                    dest_idx = destinos.index(m.destinacao) if (m.destinacao in destinos) else (0 if destinos else 0)
-                    with c2: dest_sel=st.selectbox("Destinação", destinos or ["(cadastre na página 'Fatores de Emissão')"], index=dest_idx, key=f"dest_mtrs_{m.id}")
-                    default_fator = obter_fator(db, tipo_sel, dest_sel) if destinos else None
-                with c3:
-                    fator=st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else (default_fator or 0.0)),
-                                          step=0.01, format="%.4f", key=f"fator_mtrs_{m.id}")
-                with c4:
-                    em_calc=kg_to_ton(m.qtd_kg) * (fator or 0.0)
-                    st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
-                if st.button("Salvar (Escopo 3)", key=f"save_mtrs_{m.id}"):
-                    with SessionLocal() as db:
-                        mm=db.query(MTR).get(m.id)
-                        mm.tipo_residuo=tipo_sel; mm.destinacao=dest_sel
-                        mm.fator_tco2e_por_ton=float(fator or 0.0)
-                        mm.emissoes_tco2e=kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
-                        mm.updated_by=st.session_state.usuario
-                        db.commit(); st.success("MTR atualizada (escopo 3)."); _safe_rerun()
+        tipos = listar_tipos_residuo(db)
+        tipo_idx = tipos.index(m.tipo_residuo) if m.tipo_residuo in tipos else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
+        c1,c2,c3,c4 = st.columns(4)
+        with c1: tipo_sel = st.selectbox("Tipo de resíduo", tipos, index=tipo_idx, key=f"tipo_batch_{mid}")
+        destinos = listar_destinos_para_tipo(db, tipo_sel)
+        dest_idx = destinos.index(m.destinacao) if m.destinacao in destinos else (0 if destinos else 0)
+        with c2: dest_sel = st.selectbox("Destinação", destinos or ["(cadastre na página 'Fatores de Emissão')"], index=dest_idx, key=f"dest_batch_{mid}")
+        default_fator = obter_fator(db, tipo_sel, dest_sel) if destinos else None
+    with c3:
+        fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else (default_fator or 0.0)),
+                                step=0.01, format="%.4f", key=f"fator_batch_{mid}")
+    with c4:
+        em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
+        st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
 
-                # upload rápido de CDF
-                up_cdf=st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_list_{m.id}")
-                cdf_data=st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_list_{m.id}")
-                cdf_obs=st.text_input("Observação (opcional)", key=f"cdf_obs_list_{m.id}")
-                if st.button("Adicionar CDF", key=f"cdf_add_list_{m.id}"):
-                    if not up_cdf: st.error("Envie um arquivo de CDF.")
-                    else:
-                        caminho=salvar_arquivo(up_cdf, "uploads/cdfs", f"{m.id}_cdf")
-                        with SessionLocal() as db:
-                            novo=CDF(mtr_id=m.id, arquivo=caminho, data_emissao=cdf_data,
-                                     observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
-                            db.add(novo)
-                            mm=db.query(MTR).get(m.id); mm.cdf_count=(mm.cdf_count or 0)+1
-                            db.commit(); st.success("CDF anexado."); _safe_rerun()
+    if st.button("Salvar (Escopo 3)", key=f"save_batch_{mid}"):
+        with SessionLocal() as db:
+            mm = db.query(MTR).get(mid)
+            mm.tipo_residuo = tipo_sel
+            mm.destinacao = dest_sel
+            mm.fator_tco2e_por_ton = float(fator or 0.0)
+            mm.emissoes_tco2e = kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
+            mm.updated_by = st.session_state.usuario
+            db.commit()
+        st.success("MTR atualizada (escopo 3).")
+        st.experimental_rerun()
 
-    st.markdown("### MTRs cadastradas")
+    st.markdown("#### CDF(s) da MTR selecionada")
+    if m.cdfs:
+        for cdf in m.cdfs:
+            with st.container():
+                st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
+                try:
+                    exibir_preview_arquivo(cdf.arquivo, None)
+                except Exception:
+                    pass
+
+    up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_batch_{mid}")
+    cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_batch_{mid}")
+    cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_batch_{mid}")
+    if st.button("Adicionar CDF", key=f"cdf_add_batch_{mid}"):
+        if not up_cdf:
+            st.error("Envie um arquivo de CDF.")
+        else:
+            caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{mid}_cdf")
+            with SessionLocal() as db:
+                novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
+                           observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
+                db.add(novo)
+                mm = db.query(MTR).get(mid); mm.cdf_count = (mm.cdf_count or 0) + 1
+                db.commit()
+            st.success("CDF anexado com sucesso!")
+            st.experimental_rerun()
+st.markdown("### MTRs cadastradas")
     with SessionLocal() as db:
         mtrs_all=db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.created_at.desc()).all()
     if not mtrs_all:
