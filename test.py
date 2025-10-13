@@ -637,8 +637,7 @@ def classificar_iqa(iqa_pct):
     else:
         return {"classe":"Desqualificado", "condicionamento":"Desqualificado", "reavaliacao":"-",
                 "acao":"Bloqueio de cadastro", "status_conformidade":"Não conforme"}
-
-# INICIALIZAÇÃO
+# ========================= INICIALIZAÇÃO =========================
 # =========================
 run_light_migrations()
 seed_users_and_factors()
@@ -924,141 +923,122 @@ if menu=="Visualizar Fornecedores":
 
             # Auditoria
             # --- AUDITORIA (Checklist + IQA + anexo)
-with tabs[2]:
-    st.subheader("Auditoria — Checklist IQA")
-    respostas_form = {}
-    aud_exist = sel.auditoria
-    prev = {}
-    anexos_prev = []
-    if aud_exist and isinstance(aud_exist.respostas, dict):
-        prev = aud_exist.respostas.get("checklist_respostas", {}) or {}
-        anexos_prev = aud_exist.respostas.get("anexos", []) or []
+            with tabs[2]:
+                st.subheader("Auditoria — Checklist IQA")
+                respostas_form = {}
+                aud_exist = sel.auditoria
+                prev = {}
+                anexos_prev = []
+                if aud_exist and isinstance(aud_exist.respostas, dict):
+                    prev = aud_exist.respostas.get("checklist_respostas", {}) or {}
+                    anexos_prev = aud_exist.respostas.get("anexos", []) or []
 
-    for it in CHECKLIST_ITEMS:
-        opcoes = list(it["opcoes"].keys())
-        valores = list(it["opcoes"].values())
-        default_val = prev.get(it["chave"], None)
-        try:
-            idx = valores.index(default_val)
-        except ValueError:
-            idx = 0
-        escolha = st.radio(
-            it["titulo"],
-            options=opcoes,
-            index=idx,
-            key=f"aud_{sel.id}_{it['chave']}",
-            horizontal=True
-        )
-        respostas_form[it["chave"]] = it["opcoes"][escolha]
+                for it in CHECKLIST_ITEMS:
+                    opcoes = list(it["opcoes"].keys())
+                    valores = list(it["opcoes"].values())
+                    default_val = prev.get(it["chave"], None)
+                    try:
+                        idx = valores.index(default_val)
+                    except ValueError:
+                        idx = 0
+                    escolha = st.radio(
+                        it["titulo"],
+                        options=opcoes,
+                        index=idx,
+                        key=f"aud_{sel.id}_{it['chave']}",
+                        horizontal=True
+                    )
+                    respostas_form[it["chave"]] = it["opcoes"][escolha]
 
-    st.markdown("#### Anexar documento da auditoria (opcional)")
-    up_aud = st.file_uploader("Relatório/Check-list (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"aud_up_{sel.id}")
+                st.markdown("#### Anexar documento da auditoria (opcional)")
+                up_aud = st.file_uploader("Relatório/Check-list (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"aud_up_{sel.id}")
 
-    if st.button("Salvar Auditoria (calcular IQA)", key=f"save_aud_{sel.id}"):
-        obt, maxp, iqa = calcular_iqa(respostas_form)
-        regra = classificar_iqa(iqa)
-        anexos = list(anexos_prev)
-        if up_aud is not None:
-            p = salvar_arquivo(up_aud, "uploads/auditorias", f"{sel.id}_auditoria")
-            anexos.append(p)
+                if st.button("Salvar Auditoria (calcular IQA)", key=f"save_aud_{sel.id}"):
+                    obt, maxp, iqa = calcular_iqa(respostas_form)
+                    regra = classificar_iqa(iqa)
+                    anexos = list(anexos_prev)
+                    if up_aud is not None:
+                        p_arquivo = salvar_arquivo(up_aud, "uploads/auditorias", f"{sel.id}_auditoria")
+                        anexos.append(p_arquivo)
 
-        payload = {
-            "modelo": "checklist_iqa_v1",
-            "checklist_respostas": respostas_form,
-            "pontos_obtidos": obt,
-            "pontos_max": maxp,
-            "iqa_pct": iqa,
-            "regra_aplicada": regra,
-            "anexos": anexos,
-        }
+                    payload = {
+                        "modelo": "checklist_iqa_v1",
+                        "checklist_respostas": respostas_form,
+                        "pontos_obtidos": obt,
+                        "pontos_max": maxp,
+                        "iqa_pct": iqa,
+                        "regra_aplicada": regra,
+                        "anexos": anexos,
+                    }
 
-        with SessionLocal() as db:
-            a = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
-            if not a:
-                a = Auditoria(fornecedor_id=sel.id)
-                db.add(a)
-            a.respostas = payload
-            a.score = int(round(iqa))
-            a.classificado = "Conforme/Adequado" if regra["status_conformidade"] == "Conforme" else "Não Conforme/Inadequado"
-            a.updated_by = st.session_state.usuario
-            db.commit()
-        st.success(f"IQA: {iqa:.1f}% — {regra['classe']} | Reavaliação: {regra['reavaliacao']} | Ação: {regra['acao']}")
-        st.experimental_rerun()
-
-    with SessionLocal() as db:
-        show = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
-
-    if show and isinstance(show.respostas, dict) and show.respostas.get("modelo") == "checklist_iqa_v1":
-        r = show.respostas
-        st.markdown(f"**IQA:** {r.get('iqa_pct',0):.1f}% — **Classe:** {r.get('regra_aplicada',{}).get('classe','-')} | "
-                    f"**Condição:** {r.get('regra_aplicada',{}).get('condicionamento','-')} | "
-                    f"**Reavaliação:** {r.get('regra_aplicada',{}).get('reavaliacao','-')}")
-        if r.get("anexos"):
-            st.markdown("**Anexos da auditoria:**")
-            for path in r["anexos"]:
-                exibir_preview_arquivo(path, None)
-st.subheader("Planos de Ação")
-with st.form(f"form_plano_{sel.id}"):
-    descricao=st.text_area("Descrição da Ação")
-    data_inicio=st.date_input("Início", value=date.today())
-    data_fim=st.date_input("Fim", value=date.today())
-    status=st.selectbox("Status", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value])
-    ev_upload=st.file_uploader("Anexar evidência (opcional)", type=["pdf","jpg","png","jpeg"])
-    enviar=st.form_submit_button("Adicionar Plano de Ação")
-evidencias=[]
-if enviar:
-    if not descricao: st.error("Descreva a ação.")
-    elif data_fim<data_inicio: st.error("Data final deve ser maior ou igual à data inicial.")
-    else:
-        if ev_upload is not None:
-            ev_path=salvar_arquivo(ev_upload, "uploads/evidencias", f"{sel.id}_plano"); evidencias.append(ev_path)
-        with SessionLocal() as db:
-            plano=PlanoAcao(fornecedor_id=sel.id, descricao=descricao.strip(),
-                            data_inicio=data_inicio, data_fim=data_fim, status=PlanoStatusEnum(status),
-                            evidencias=evidencias or [], updated_by=st.session_state.usuario)
-            db.add(plano); db.commit(); st.success("Plano de ação adicionado."); _safe_rerun()
-
-st.markdown("#### Ações cadastradas")
-if not sel.planos_acao:
-    st.info("Nenhuma ação cadastrada.")
-else:
-    hoje = date.today()
-    for p in sorted(sel.planos_acao, key=lambda x: x.data_fim):
-        atrasado = (p.status != PlanoStatusEnum.concluido and p.data_fim < hoje)
-        bg = "#ffebee" if atrasado else "#e8f5e9" if p.status==PlanoStatusEnum.concluido else "#fffde7"
-        with st.container():
-            st.markdown(f"<div style='padding:10px;border-radius:8px;background:{bg};'>"
-                        f"<b>{p.descricao}</b><br>"
-                        f"Início: {p.data_inicio} | Fim: {p.data_fim} | Status atual: <b>{p.status}</b>"
-                        f"</div>", unsafe_allow_html=True)
-            c1,c2,c3 = st.columns([0.35,0.35,0.3])
-            with c1:
-                novo_status = st.selectbox("Atualizar status:", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value],
-                                           index=[PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value].index(p.status.value),
-                                           key=f"pl_st_{p.id}")
-            with c2:
-                ev2 = st.file_uploader("Anexar nova evidência (opcional)", type=["pdf","jpg","png","jpeg"], key=f"pl_ev_{p.id}")
-            with c3:
-                if st.button("Salvar", key=f"pl_save_{p.id}"):
                     with SessionLocal() as db:
-                        pp = db.query(PlanoAcao).get(p.id)
-                        pp.status = PlanoStatusEnum(novo_status)
-                        if ev2 is not None:
-                            ev_path = salvar_arquivo(ev2, "uploads/evidencias", f"{sel.id}_plano")
-                            lst = list(pp.evidencias or [])
-                            lst.append(ev_path)
-                            pp.evidencias = lst
-                        pp.updated_by = st.session_state.usuario
+                        a = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
+                        if not a:
+                            a = Auditoria(fornecedor_id=sel.id)
+                            db.add(a)
+                        a.respostas = payload
+                        a.score = int(round(iqa))
+                        a.classificado = "Conforme/Adequado" if regra["status_conformidade"] == "Conforme" else "Não Conforme/Inadequado"
+                        a.updated_by = st.session_state.usuario
                         db.commit()
-                    st.success("Plano atualizado."); _safe_rerun()
-            if p.evidencias:
-                st.caption("Evidências:")
-                for ev in p.evidencias:
-                    if Path(ev).exists(): exibir_preview_arquivo(ev, None)
+                    st.success(f"IQA: {iqa:.1f}% — {regra['classe']} | Reavaliação: {regra['reavaliacao']} | Ação: {regra['acao']}")
+                    _safe_rerun()
 
-            # Contratos
+                with SessionLocal() as db:
+                    show = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
 
-            with tabs[4]:
+                if show and isinstance(show.respostas, dict) and show.respostas.get("modelo") == "checklist_iqa_v1":
+                    r = show.respostas
+                    st.markdown(
+                        f"**IQA:** {r.get('iqa_pct',0):.1f}% — **Classe:** {r.get('regra_aplicada',{}).get('classe','-')} | "
+                        f"**Condição:** {r.get('regra_aplicada',{}).get('condicionamento','-')} | "
+                        f"**Reavaliação:** {r.get('regra_aplicada',{}).get('reavaliacao','-')}"
+                    )
+                    if r.get("anexos"):
+                        st.markdown("**Anexos da auditoria:**")
+                        for path in r["anexos"]:
+                            exibir_preview_arquivo(path, None)
+            
+            with tabs[3]:
+                st.subheader("Planos de Ação")
+                with st.form(f"form_plano_{sel.id}"):
+                    descricao = st.text_area("Descrição da Ação")
+                    data_inicio = st.date_input("Início", value=date.today())
+                    data_fim = st.date_input("Fim", value=date.today())
+                    status = st.selectbox("Status", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value])
+                    ev_upload = st.file_uploader("Anexar evidência (opcional)", type=["pdf","jpg","png","jpeg"])
+                    enviar = st.form_submit_button("Adicionar Plano de Ação")
+
+                evidencias = []
+                if enviar:
+                    if not descricao:
+                        st.error("Descreva a ação.")
+                    elif data_fim < data_inicio:
+                        st.error("Data final deve ser maior ou igual à data inicial.")
+                    else:
+                        if ev_upload is not None:
+                            ev_path = salvar_arquivo(ev_upload, "uploads/evidencias", f"{sel.id}_plano")
+                            evidencias.append(ev_path)
+                        with SessionLocal() as db:
+                            plano = PlanoAcao(fornecedor_id=sel.id, descricao=descricao.strip(),
+                                              data_inicio=data_inicio, data_fim=data_fim, status=PlanoStatusEnum(status),
+                                              evidencias=evidencias or [], updated_by=st.session_state.usuario)
+                            db.add(plano); db.commit(); st.success("Plano de ação adicionado."); _safe_rerun()
+
+                st.markdown("#### Ações cadastradas")
+                if not sel.planos_acao:
+                    st.info("Nenhuma ação cadastrada.")
+                else:
+                    hoje = date.today()
+                    for p in sorted(sel.planos_acao, key=lambda x: x.data_fim):
+                        atrasado = (p.data_fim and p.data_fim < hoje and (getattr(p.status, "value", p.status) != PlanoStatusEnum.concluido.value))
+                        with st.container(border=True):
+                            st.write(f"- {p.descricao} | {getattr(p.status, 'value', p.status)} | {p.data_inicio or '-'} → {p.data_fim or '-' }")
+                            if p.evidencias:
+                                for ev in p.evidencias:
+                                    if Path(ev).exists():
+                                        exibir_preview_arquivo(ev, None)
+with tabs[4]:
                 st.subheader("Contratos")
                 arquivo_contrato = st.file_uploader("Anexar Contrato", type=["pdf","docx","doc","pdf"], key=f"contr_{sel.id}")
                 data_assinatura = st.date_input("Assinatura", value=date.today(), key=f"contr_ass_{sel.id}")
@@ -1089,7 +1069,7 @@ else:
                                 pass
                 else:
                     st.info("Nenhum contrato anexado.")
-            with tabs[5]:
+with tabs[5]:
                 st.subheader("MTRs do fornecedor")
                 total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
                 total_t = sum(m.emissoes_tco2e or 0.0 for m in sel.mtrs)
@@ -1521,4 +1501,3 @@ if menu=="Admin (Usuários)":
 if menu=="Sair":
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
     st.session_state.sel_forn_id=None; _safe_rerun()
-
