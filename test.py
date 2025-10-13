@@ -96,7 +96,7 @@ def salvar_arquivo(uploaded_file, pasta:str, prefixo:str)->str:
     caminho.write_bytes(uploaded_file.getbuffer())
     return str(caminho)
 
-def exibir_preview_arquivo(caminho:str, mime_type:str|None):
+def exibir_preview_arquivo(caminho: str, mime_type: str | None):
     try:
         p=Path(caminho)
         if not p.exists(): st.caption("Arquivo não encontrado."); return
@@ -791,7 +791,7 @@ if menu=="Overview":
     st.plotly_chart(fig_em, use_container_width=True)
 
 # ---- Cadastrar Fornecedor ----
-elif menu=="Cadastrar Fornecedor":
+if menu=="Cadastrar Fornecedor":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Você não tem permissão para cadastrar fornecedores."); st.stop()
     st.header("Cadastrar novo fornecedor")
@@ -815,7 +815,7 @@ elif menu=="Cadastrar Fornecedor":
                 st.success(f"Fornecedor '{f.nome}' cadastrado com sucesso!")
 
 # ---- Visualizar Fornecedores ----
-elif menu=="Visualizar Fornecedores":
+if menu=="Visualizar Fornecedores":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito. Seu perfil é Leitor e possui acesso apenas ao Overview."); st.stop()
     st.header("Fornecedores")
@@ -996,174 +996,99 @@ with tabs[2]:
         if r.get("anexos"):
             st.markdown("**Anexos da auditoria:**")
             for path in r["anexos"]:
-                exibir_preview_arquivo(path, None):
-                st.subheader("Planos de Ação")
-                with st.form(f"form_plano_{sel.id}"):
-                    descricao=st.text_area("Descrição da Ação")
-                    data_inicio=st.date_input("Início", value=date.today())
-                    data_fim=st.date_input("Fim", value=date.today())
-                    status=st.selectbox("Status", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value])
-                    ev_upload=st.file_uploader("Anexar evidência (opcional)", type=["pdf","jpg","png","jpeg"])
-                    enviar=st.form_submit_button("Adicionar Plano de Ação")
-                evidencias=[]
-                if enviar:
-                    if not descricao: st.error("Descreva a ação.")
-                    elif data_fim<data_inicio: st.error("Data final deve ser maior ou igual à data inicial.")
-                    else:
-                        if ev_upload is not None:
-                            ev_path=salvar_arquivo(ev_upload, "uploads/evidencias", f"{sel.id}_plano"); evidencias.append(ev_path)
-                        with SessionLocal() as db:
-                            plano=PlanoAcao(fornecedor_id=sel.id, descricao=descricao.strip(),
-                                            data_inicio=data_inicio, data_fim=data_fim, status=PlanoStatusEnum(status),
-                                            evidencias=evidencias or [], updated_by=st.session_state.usuario)
-                            db.add(plano); db.commit(); st.success("Plano de ação adicionado."); _safe_rerun()
+                exibir_preview_arquivo(path, None)
+st.subheader("Planos de Ação")
+with st.form(f"form_plano_{sel.id}"):
+    descricao=st.text_area("Descrição da Ação")
+    data_inicio=st.date_input("Início", value=date.today())
+    data_fim=st.date_input("Fim", value=date.today())
+    status=st.selectbox("Status", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value])
+    ev_upload=st.file_uploader("Anexar evidência (opcional)", type=["pdf","jpg","png","jpeg"])
+    enviar=st.form_submit_button("Adicionar Plano de Ação")
+evidencias=[]
+if enviar:
+    if not descricao: st.error("Descreva a ação.")
+    elif data_fim<data_inicio: st.error("Data final deve ser maior ou igual à data inicial.")
+    else:
+        if ev_upload is not None:
+            ev_path=salvar_arquivo(ev_upload, "uploads/evidencias", f"{sel.id}_plano"); evidencias.append(ev_path)
+        with SessionLocal() as db:
+            plano=PlanoAcao(fornecedor_id=sel.id, descricao=descricao.strip(),
+                            data_inicio=data_inicio, data_fim=data_fim, status=PlanoStatusEnum(status),
+                            evidencias=evidencias or [], updated_by=st.session_state.usuario)
+            db.add(plano); db.commit(); st.success("Plano de ação adicionado."); _safe_rerun()
 
-                st.markdown("#### Ações cadastradas")
-                if not sel.planos_acao:
-                    st.info("Nenhuma ação cadastrada.")
-                else:
-                    hoje = date.today()
-                    for p in sorted(sel.planos_acao, key=lambda x: x.data_fim):
-                        atrasado = (p.status != PlanoStatusEnum.concluido and p.data_fim < hoje)
-                        bg = "#ffebee" if atrasado else "#e8f5e9" if p.status==PlanoStatusEnum.concluido else "#fffde7"
-                        with st.container():
-                            st.markdown(f"<div style='padding:10px;border-radius:8px;background:{bg};'>"
-                                        f"<b>{p.descricao}</b><br>"
-                                        f"Início: {p.data_inicio} | Fim: {p.data_fim} | Status atual: <b>{p.status}</b>"
-                                        f"</div>", unsafe_allow_html=True)
-                            c1,c2,c3 = st.columns([0.35,0.35,0.3])
-                            with c1:
-                                novo_status = st.selectbox("Atualizar status:", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value],
-                                                           index=[PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value].index(p.status.value),
-                                                           key=f"pl_st_{p.id}")
-                            with c2:
-                                ev2 = st.file_uploader("Anexar nova evidência (opcional)", type=["pdf","jpg","png","jpeg"], key=f"pl_ev_{p.id}")
-                            with c3:
-                                if st.button("Salvar", key=f"pl_save_{p.id}"):
-                                    with SessionLocal() as db:
-                                        pp = db.query(PlanoAcao).get(p.id)
-                                        pp.status = PlanoStatusEnum(novo_status)
-                                        if ev2 is not None:
-                                            ev_path = salvar_arquivo(ev2, "uploads/evidencias", f"{sel.id}_plano")
-                                            lst = list(pp.evidencias or [])
-                                            lst.append(ev_path)
-                                            pp.evidencias = lst
-                                        pp.updated_by = st.session_state.usuario
-                                        db.commit()
-                                    st.success("Plano atualizado."); _safe_rerun()
-                            if p.evidencias:
-                                st.caption("Evidências:")
-                                for ev in p.evidencias:
-                                    if Path(ev).exists(): exibir_preview_arquivo(ev, None)
+st.markdown("#### Ações cadastradas")
+if not sel.planos_acao:
+    st.info("Nenhuma ação cadastrada.")
+else:
+    hoje = date.today()
+    for p in sorted(sel.planos_acao, key=lambda x: x.data_fim):
+        atrasado = (p.status != PlanoStatusEnum.concluido and p.data_fim < hoje)
+        bg = "#ffebee" if atrasado else "#e8f5e9" if p.status==PlanoStatusEnum.concluido else "#fffde7"
+        with st.container():
+            st.markdown(f"<div style='padding:10px;border-radius:8px;background:{bg};'>"
+                        f"<b>{p.descricao}</b><br>"
+                        f"Início: {p.data_inicio} | Fim: {p.data_fim} | Status atual: <b>{p.status}</b>"
+                        f"</div>", unsafe_allow_html=True)
+            c1,c2,c3 = st.columns([0.35,0.35,0.3])
+            with c1:
+                novo_status = st.selectbox("Atualizar status:", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value],
+                                           index=[PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value].index(p.status.value),
+                                           key=f"pl_st_{p.id}")
+            with c2:
+                ev2 = st.file_uploader("Anexar nova evidência (opcional)", type=["pdf","jpg","png","jpeg"], key=f"pl_ev_{p.id}")
+            with c3:
+                if st.button("Salvar", key=f"pl_save_{p.id}"):
+                    with SessionLocal() as db:
+                        pp = db.query(PlanoAcao).get(p.id)
+                        pp.status = PlanoStatusEnum(novo_status)
+                        if ev2 is not None:
+                            ev_path = salvar_arquivo(ev2, "uploads/evidencias", f"{sel.id}_plano")
+                            lst = list(pp.evidencias or [])
+                            lst.append(ev_path)
+                            pp.evidencias = lst
+                        pp.updated_by = st.session_state.usuario
+                        db.commit()
+                    st.success("Plano atualizado."); _safe_rerun()
+            if p.evidencias:
+                st.caption("Evidências:")
+                for ev in p.evidencias:
+                    if Path(ev).exists(): exibir_preview_arquivo(ev, None)
 
             # Contratos
+
             with tabs[4]:
                 st.subheader("Contratos")
-                arquivo_contrato=st.file_uploader("Anexar Contrato", type=["pdf","docx","doc"], key=f"contr_{sel.id}")
-                data_assinatura=st.date_input("Assinatura", value=date.today(), key=f"contr_ass_{sel.id}")
-                data_validade=st.date_input("Validade", value=date.today(), key=f"contr_val_{sel.id}")
+                arquivo_contrato = st.file_uploader("Anexar Contrato", type=["pdf","docx","doc","pdf"], key=f"contr_{sel.id}")
+                data_assinatura = st.date_input("Assinatura", value=date.today(), key=f"contr_ass_{sel.id}")
+                data_validade = st.date_input("Validade", value=date.today(), key=f"contr_val_{sel.id}")
                 if st.button("Salvar Contrato", key=f"contr_save_{sel.id}"):
-                    if not arquivo_contrato: st.error("Envie um arquivo.")
-                    elif data_validade<data_assinatura: st.error("Validade não pode ser anterior à assinatura.")
+                    if not arquivo_contrato:
+                        st.error("Envie um arquivo.")
+                    elif data_validade < data_assinatura:
+                        st.error("Validade não pode ser anterior à assinatura.")
                     else:
-                        caminho=salvar_arquivo(arquivo_contrato, "uploads/contratos", f"{sel.id}_contrato")
+                        caminho = salvar_arquivo(arquivo_contrato, "uploads/contratos", f"{sel.id}_contrato")
                         with SessionLocal() as db:
+                            novo = Contrato(fornecedor_id=sel.id, arquivo=caminho,
+                                            data_assinatura=data_assinatura, data_validade=data_validade,
+                                            updated_by=st.session_state.usuario)
+                            db.add(novo); db.commit()
+                        st.success("Contrato salvo!")
+                        _safe_rerun()
+
+                st.markdown("#### Contratos cadastrados")
+                if sel.contratos:
+                    for c in sel.contratos:
+                        st.write(f"- Ass.: {c.data_assinatura or '-'} | Val.: {c.data_validade or '-'}")
+                        if c.arquivo:
                             try:
-                                c=Contrato(fornecedor_id=sel.id, arquivo=caminho,
-                                           data_assinatura=data_assinatura, data_validade=data_validade,
-                                           updated_by=st.session_state.usuario)
-                                db.add(c); db.commit(); st.success("Contrato salvo com sucesso!")
-                                exibir_preview_arquivo(caminho, arquivo_contrato.type); _safe_rerun()
-                            except Exception as e:
-                                db.rollback(); st.error(f"Erro ao salvar contrato: {e}")
-                for c in sel.contratos:
-                    with st.container(border=True):
-                        st.write(f"- Assinado em: {c.data_assinatura}, Validade: {c.data_validade}")
-                        if Path(c.arquivo).exists(): exibir_preview_arquivo(c.arquivo, None)
-
-            # MTRs
-
-st.markdown("### Inserção e edição direta (tabela)")
-with SessionLocal() as db:
-    mtrs_forn = db.query(MTR).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.created_at.desc()).all()
-
-rows_edit = []
-for m in mtrs_forn:
-    rows_edit.append({
-        "id": m.id,
-        "MTR nº": m.numero_mtr or "",
-        "Recebimento (AAAA-MM-DD)": (m.destinador_data_recebimento.isoformat() if m.destinador_data_recebimento else ""),
-        "Qtde (kg)": float(m.qtd_kg or 0.0),
-        "Tipo": m.tipo_residuo or "",
-        "Destinação": m.destinacao or "",
-        "Fator (tCO₂e/t)": float(m.fator_tco2e_por_ton or 0.0),
-        "tCO₂e (auto)": float(m.emissoes_tco2e or 0.0),
-    })
-
-if HAVE_PANDAS:
-    import pandas as pd
-    df_edit = pd.DataFrame(rows_edit)
-    edited_df = st.data_editor(
-        df_edit,
-        hide_index=True,
-        use_container_width=True,
-        num_rows="dynamic",
-        column_config={
-            "id": st.column_config.Column("id", disabled=True),
-            "Qtde (kg)": st.column_config.NumberColumn(format="%.3f", step=1.0, min_value=0.0),
-            "Fator (tCO₂e/t)": st.column_config.NumberColumn(format="%.4f", step=0.01, min_value=-999.0),
-            "tCO₂e (auto)": st.column_config.Column(disabled=True),
-        },
-        key=f"editor_mtr_{fornecedor_id}"
-    )
-
-    if st.button("Salvar tabela de MTRs (upsert)", key=f"save_grid_{fornecedor_id}"):
-        with SessionLocal() as db:
-            for _, r in edited_df.iterrows():
-                mid = int(r["id"]) if str(r.get("id","")).strip() != "" else None
-                kg = float(r.get("Qtde (kg)") or 0.0)
-                fator = float(r.get("Fator (tCO₂e/t)") or 0.0)
-                tco2e = kg_to_ton(kg) * fator
-                dt_rec = str(r.get("Recebimento (AAAA-MM-DD)") or "").strip()
-                dt_rec_date = None
-                if dt_rec:
-                    try:
-                        dt_rec_date = datetime.fromisoformat(dt_rec).date()
-                    except Exception:
-                        dt_rec_date = None
-
-                if mid:
-                    m = db.query(MTR).get(mid)
-                    if not m: 
-                        continue
-                    m.numero_mtr = (r.get("MTR nº") or "").strip() or None
-                    m.destinador_data_recebimento = dt_rec_date
-                    m.qtd_kg = kg
-                    m.tipo_residuo = (r.get("Tipo") or "").strip() or None
-                    m.destinacao = (r.get("Destinação") or "").strip() or None
-                    m.fator_tco2e_por_ton = fator
-                    m.emissoes_tco2e = tco2e
-                    m.updated_by = st.session_state.usuario
+                                exibir_preview_arquivo(c.arquivo, None)
+                            except Exception:
+                                pass
                 else:
-                    db.add(MTR(
-                        fornecedor_id=fornecedor_id,
-                        arquivo="",
-                        numero_mtr=(r.get("MTR nº") or "").strip() or None,
-                        destinador_data_recebimento=dt_rec_date,
-                        qtd_kg=kg,
-                        tipo_residuo=(r.get("Tipo") or "").strip() or None,
-                        destinacao=(r.get("Destinação") or "").strip() or None,
-                        fator_tco2e_por_ton=fator,
-                        emissoes_tco2e=tco2e,
-                        updated_by=st.session_state.usuario
-                    ))
-            db.commit()
-        st.success("Tabela salva (MTRs inseridas/atualizadas).")
-        st.experimental_rerun()
-else:
-    st.info("Para edição direta, instale `pandas`.")
-
- (do fornecedor)
+                    st.info("Nenhum contrato anexado.")
             with tabs[5]:
                 st.subheader("MTRs do fornecedor")
                 total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
@@ -1219,7 +1144,7 @@ else:
                                     db.commit(); st.success("CDF anexado com sucesso!"); _safe_rerun()
 
 # ---- Página MTRs (importação e edição em lote) ----
-elif menu=="MTRs":
+if menu=="MTRs":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito."); st.stop()
     st.header("Controle de MTRs por Fornecedor")
@@ -1329,29 +1254,29 @@ else:
             st.success("CDF anexado com sucesso!")
             st.experimental_rerun()
 st.markdown("### MTRs cadastradas")
-    with SessionLocal() as db:
-        mtrs_all=db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.created_at.desc()).all()
-    if not mtrs_all:
-        st.info("Nenhuma MTR cadastrada ainda.")
+with SessionLocal() as db:
+    mtrs_all=db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.created_at.desc()).all()
+if not mtrs_all:
+    st.info("Nenhuma MTR cadastrada ainda.")
+else:
+    rows=[]
+    for m, nome_f in mtrs_all:
+        rows.append({
+            "Fornecedor": nome_f, "MTR nº": m.numero_mtr or "-",
+            "Recebimento": m.destinador_data_recebimento or "",
+            "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
+            "Tipo": m.tipo_residuo or "", "Destinação": m.destinacao or "",
+            "Fator (tCO₂e/t)": m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else "",
+            "tCO₂e": m.emissoes_tco2e if m.emissoes_tco2e is not None else "",
+            "CDF(s)": m.cdf_count or 0, "Arquivo": os.path.basename(m.arquivo),
+        })
+    if HAVE_PANDAS:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
     else:
-        rows=[]
-        for m, nome_f in mtrs_all:
-            rows.append({
-                "Fornecedor": nome_f, "MTR nº": m.numero_mtr or "-",
-                "Recebimento": m.destinador_data_recebimento or "",
-                "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
-                "Tipo": m.tipo_residuo or "", "Destinação": m.destinacao or "",
-                "Fator (tCO₂e/t)": m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else "",
-                "tCO₂e": m.emissoes_tco2e if m.emissoes_tco2e is not None else "",
-                "CDF(s)": m.cdf_count or 0, "Arquivo": os.path.basename(m.arquivo),
-            })
-        if HAVE_PANDAS:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
-        else:
             for r in rows[:200]: st.write(r)
 
 # ---- Fatores de Emissão (EDITÁVEL) ----
-elif menu=="Fatores de Emissão":
+if menu=="Fatores de Emissão":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito."); st.stop()
 
@@ -1470,7 +1395,7 @@ elif menu=="Fatores de Emissão":
                     st.error(f"Erro ao adicionar fator: {e}")
 
 # ---- Admin (Usuários) ----
-elif menu=="Admin (Usuários)":
+if menu=="Admin (Usuários)":
     if st.session_state.role!="Admin":
         st.error("Apenas Admin pode acessar esta página."); st.stop()
     st.header("Administração")
@@ -1593,8 +1518,6 @@ elif menu=="Admin (Usuários)":
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ---- Sair ----
-elif menu=="Sair":
+if menu=="Sair":
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
     st.session_state.sel_forn_id=None; _safe_rerun()
-
-
