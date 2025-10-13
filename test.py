@@ -1038,7 +1038,7 @@ if menu=="Visualizar Fornecedores":
                                 for ev in p.evidencias:
                                     if Path(ev).exists():
                                         exibir_preview_arquivo(ev, None)
-with tabs[4]:
+            with tabs[4]:
                 st.subheader("Contratos")
                 arquivo_contrato = st.file_uploader("Anexar Contrato", type=["pdf","docx","doc","pdf"], key=f"contr_{sel.id}")
                 data_assinatura = st.date_input("Assinatura", value=date.today(), key=f"contr_ass_{sel.id}")
