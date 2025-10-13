@@ -893,15 +893,15 @@ if menu=="Visualizar Fornecedores":
                                     db.commit(); st.success("Documento atualizado com sucesso!"); _safe_rerun()
 
                 st.markdown("#### Adicionar novo documento")
-                [
-    "Licença Ambiental de Operação",
-    "Consulta de Área Contaminada",
-    "Alvará de Funcionamento",
-    "Comprovante de regularidade (CETESB ou órgão estadual)",
-    "Condicionantes ambientais vigentes",
-    "AVCB (Auto de Vistoria do Corpo de Bombeiros)",
-    "CTF - IBAMA"
-]
+                tipos_documentos = [
+                    "Licença Ambiental de Operação",
+                    "Consulta de Área Contaminada",
+                    "Alvará de Funcionamento",
+                    "Comprovante de regularidade (CETESB ou órgão estadual)",
+                    "Condicionantes ambientais vigentes",
+                    "AVCB (Auto de Vistoria do Corpo de Bombeiros)",
+                    "CTF - IBAMA"
+                ]
                 c1,c2,c3,c4=st.columns([0.35,0.25,0.2,0.2])
                 with c1: novo_tipo=st.selectbox("Tipo", tipos_documentos, key="novo_tipo")
                 with c2: novo_ini=st.date_input("Início", value=date.today(), key="novo_ini")
@@ -1168,92 +1168,92 @@ if menu=="MTRs":
         _safe_rerun()
 
     st.markdown("### Edição em lote (selecionar MTR → editar)")
-with SessionLocal() as db:
-    mtrs = db.query(MTR).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.created_at.desc()).all()
-
-if not mtrs:
-    st.info("Nenhuma MTR cadastrada para este fornecedor.")
-else:
-    lista = [f"{m.id} - MTR {m.numero_mtr or '-'} | kg={m.qtd_kg or 0:.1f} | receb={m.destinador_data_recebimento or '-'}" for m in mtrs]
-    escolha = st.selectbox("Escolha a MTR para editar", lista, key=f"sel_mtr_{fornecedor_id}")
-    mid = int(escolha.split(" - ")[0])
-
-    m = next(mm for mm in mtrs if mm.id == mid)
     with SessionLocal() as db:
-        tipos = listar_tipos_residuo(db)
-        tipo_idx = tipos.index(m.tipo_residuo) if m.tipo_residuo in tipos else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
-        c1,c2,c3,c4 = st.columns(4)
-        with c1: tipo_sel = st.selectbox("Tipo de resíduo", tipos, index=tipo_idx, key=f"tipo_batch_{mid}")
-        destinos = listar_destinos_para_tipo(db, tipo_sel)
-        dest_idx = destinos.index(m.destinacao) if m.destinacao in destinos else (0 if destinos else 0)
-        with c2: dest_sel = st.selectbox("Destinação", destinos or ["(cadastre na página 'Fatores de Emissão')"], index=dest_idx, key=f"dest_batch_{mid}")
-        default_fator = obter_fator(db, tipo_sel, dest_sel) if destinos else None
-    with c3:
-        fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else (default_fator or 0.0)),
-                                step=0.01, format="%.4f", key=f"fator_batch_{mid}")
-    with c4:
-        em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
-        st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
+        mtrs = db.query(MTR).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
 
-    if st.button("Salvar (Escopo 3)", key=f"save_batch_{mid}"):
-        with SessionLocal() as db:
-            mm = db.query(MTR).get(mid)
-            mm.tipo_residuo = tipo_sel
-            mm.destinacao = dest_sel
-            mm.fator_tco2e_por_ton = float(fator or 0.0)
-            mm.emissoes_tco2e = kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
-            mm.updated_by = st.session_state.usuario
-            db.commit()
-        st.success("MTR atualizada (escopo 3).")
-        st.experimental_rerun()
-
-    st.markdown("#### CDF(s) da MTR selecionada")
-    if m.cdfs:
-        for cdf in m.cdfs:
-            with st.container():
-                st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
-                try:
-                    exibir_preview_arquivo(cdf.arquivo, None)
-                except Exception:
-                    pass
-
-    up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_batch_{mid}")
-    cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_batch_{mid}")
-    cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_batch_{mid}")
-    if st.button("Adicionar CDF", key=f"cdf_add_batch_{mid}"):
-        if not up_cdf:
-            st.error("Envie um arquivo de CDF.")
-        else:
-            caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{mid}_cdf")
-            with SessionLocal() as db:
-                novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
-                           observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
-                db.add(novo)
-                mm = db.query(MTR).get(mid); mm.cdf_count = (mm.cdf_count or 0) + 1
-                db.commit()
-            st.success("CDF anexado com sucesso!")
-            st.experimental_rerun()
-st.markdown("### MTRs cadastradas")
-with SessionLocal() as db:
-    mtrs_all=db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.created_at.desc()).all()
-if not mtrs_all:
-    st.info("Nenhuma MTR cadastrada ainda.")
-else:
-    rows=[]
-    for m, nome_f in mtrs_all:
-        rows.append({
-            "Fornecedor": nome_f, "MTR nº": m.numero_mtr or "-",
-            "Recebimento": m.destinador_data_recebimento or "",
-            "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
-            "Tipo": m.tipo_residuo or "", "Destinação": m.destinacao or "",
-            "Fator (tCO₂e/t)": m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else "",
-            "tCO₂e": m.emissoes_tco2e if m.emissoes_tco2e is not None else "",
-            "CDF(s)": m.cdf_count or 0, "Arquivo": os.path.basename(m.arquivo),
-        })
-    if HAVE_PANDAS:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    if not mtrs:
+        st.info("Nenhuma MTR cadastrada para este fornecedor.")
     else:
-            for r in rows[:200]: st.write(r)
+        lista = [f"{m.id} - MTR {m.numero_mtr or '-'} | kg={m.qtd_kg or 0:.1f} | receb={m.destinador_data_recebimento or '-'}" for m in mtrs]
+        escolha = st.selectbox("Escolha a MTR para editar", lista, key=f"sel_mtr_{fornecedor_id}")
+        mid = int(escolha.split(" - ")[0])
+
+        m = next(mm for mm in mtrs if mm.id == mid)
+        with SessionLocal() as db:
+            tipos = listar_tipos_residuo(db)
+            tipo_idx = tipos.index(m.tipo_residuo) if m.tipo_residuo in tipos else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
+            c1,c2,c3,c4 = st.columns(4)
+            with c1: tipo_sel = st.selectbox("Tipo de resíduo", tipos, index=tipo_idx, key=f"tipo_batch_{mid}")
+            destinos = listar_destinos_para_tipo(db, tipo_sel)
+            dest_idx = destinos.index(m.destinacao) if m.destinacao in destinos else (0 if destinos else 0)
+            with c2: dest_sel = st.selectbox("Destinação", destinos or ["(cadastre na página 'Fatores de Emissão')"], index=dest_idx, key=f"dest_batch_{mid}")
+            default_fator = obter_fator(db, tipo_sel, dest_sel) if destinos else None
+        with c3:
+            fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else (default_fator or 0.0)),
+                                    step=0.01, format="%.4f", key=f"fator_batch_{mid}")
+        with c4:
+            em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
+            st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
+
+        if st.button("Salvar (Escopo 3)", key=f"save_batch_{mid}"):
+            with SessionLocal() as db:
+                mm = db.query(MTR).get(mid)
+                mm.tipo_residuo = tipo_sel
+                mm.destinacao = dest_sel
+                mm.fator_tco2e_por_ton = float(fator or 0.0)
+                mm.emissoes_tco2e = kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
+                mm.updated_by = st.session_state.usuario
+                db.commit()
+            st.success("MTR atualizada (escopo 3).")
+            st.experimental_rerun()
+
+        st.markdown("#### CDF(s) da MTR selecionada")
+        if m.cdfs:
+            for cdf in m.cdfs:
+                with st.container():
+                    st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
+                    try:
+                        exibir_preview_arquivo(cdf.arquivo, None)
+                    except Exception:
+                        pass
+
+        up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_batch_{mid}")
+        cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_batch_{mid}")
+        cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_batch_{mid}")
+        if st.button("Adicionar CDF", key=f"cdf_add_batch_{mid}"):
+            if not up_cdf:
+                st.error("Envie um arquivo de CDF.")
+            else:
+                caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{mid}_cdf")
+                with SessionLocal() as db:
+                    novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
+                               observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
+                    db.add(novo)
+                    mm = db.query(MTR).get(mid); mm.cdf_count = (mm.cdf_count or 0) + 1
+                    db.commit()
+                st.success("CDF anexado com sucesso!")
+                st.experimental_rerun()
+    st.markdown("### MTRs cadastradas")
+    with SessionLocal() as db:
+        mtrs_all=db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.id.desc()).all()
+    if not mtrs_all:
+        st.info("Nenhuma MTR cadastrada ainda.")
+    else:
+        rows=[]
+        for m, nome_f in mtrs_all:
+            rows.append({
+                "Fornecedor": nome_f, "MTR nº": m.numero_mtr or "-",
+                "Recebimento": m.destinador_data_recebimento or "",
+                "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
+                "Tipo": m.tipo_residuo or "", "Destinação": m.destinacao or "",
+                "Fator (tCO₂e/t)": m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else "",
+                "tCO₂e": m.emissoes_tco2e if m.emissoes_tco2e is not None else "",
+                "CDF(s)": m.cdf_count or 0, "Arquivo": os.path.basename(m.arquivo),
+            })
+        if HAVE_PANDAS:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        else:
+                for r in rows[:200]: st.write(r)
 
 # ---- Fatores de Emissão (EDITÁVEL) ----
 if menu=="Fatores de Emissão":
