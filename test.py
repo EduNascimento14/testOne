@@ -888,7 +888,7 @@ if menu=="Visualizar Fornecedores":
                                 if up is not None:
                                     caminho=salvar_arquivo(up, "uploads/documentos", f"{sel.id}_{d.tipo}")
                                 with SessionLocal() as db:
-                                    doc_db=db.query(Documento).get(d.id)
+                                    doc_db=db.query(Documento).filter(Documento.id==d.id).first()
                                     doc_db.arquivo=caminho; doc_db.data_inicio=dt_ini; doc_db.data_validade=dt_val
                                     doc_db.updated_by=st.session_state.usuario
                                     db.commit(); st.success("Documento atualizado com sucesso!"); _safe_rerun()
@@ -1303,7 +1303,7 @@ if menu=="Fatores de Emissão":
                     try:
                         with SessionLocal() as db:
                             for _, r in edited.iterrows():
-                                fe = db.query(FatorEmissao).get(int(r["id"]))
+                                fe = db.query(FatorEmissao).filter(FatorEmissao.id==int(r["id"]).first())
                                 if not fe: continue
                                 novo_tipo = str(r["Tipo de resíduo"]).strip()
                                 novo_dest = str(r["Destinação"]).strip()
@@ -1335,7 +1335,7 @@ if menu=="Fatores de Emissão":
                         try:
                             with SessionLocal() as db:
                                 for i in ids_sel:
-                                    fe = db.query(FatorEmissao).get(int(i))
+                                    fe = db.query(FatorEmissao).filter(FatorEmissao.id==int(i).first())
                                     if fe: db.delete(fe)
                                 db.commit()
                             st.success(f"Excluídos: {len(ids_sel)} registro(s).")
