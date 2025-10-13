@@ -638,7 +638,7 @@ def classificar_iqa(iqa_pct):
         return {"classe":"Desqualificado", "condicionamento":"Desqualificado", "reavaliacao":"-",
                 "acao":"Bloqueio de cadastro", "status_conformidade":"Não conforme"}
 
-INICIALIZAÇÃO
+# INICIALIZAÇÃO
 # =========================
 run_light_migrations()
 seed_users_and_factors()
@@ -1521,3 +1521,4 @@ if menu=="Admin (Usuários)":
 if menu=="Sair":
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
     st.session_state.sel_forn_id=None; _safe_rerun()
+
