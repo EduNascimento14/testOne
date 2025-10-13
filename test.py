@@ -1069,7 +1069,7 @@ if menu=="Visualizar Fornecedores":
                                 pass
                 else:
                     st.info("Nenhum contrato anexado.")
-with tabs[5]:
+            with tabs[5]:
                 st.subheader("MTRs do fornecedor")
                 total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
                 total_t = sum(m.emissoes_tco2e or 0.0 for m in sel.mtrs)
