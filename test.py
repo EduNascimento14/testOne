@@ -996,7 +996,7 @@ with tabs[2]:
         if r.get("anexos"):
             st.markdown("**Anexos da auditoria:**")
             for path in r["anexos"]:
-                exibir_preview_arquivo(path, None)3]:
+                exibir_preview_arquivo(path, None)3:
                 st.subheader("Planos de Ação")
                 with st.form(f"form_plano_{sel.id}"):
                     descricao=st.text_area("Descrição da Ação")
@@ -1596,3 +1596,4 @@ elif menu=="Admin (Usuários)":
 elif menu=="Sair":
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
     st.session_state.sel_forn_id=None; _safe_rerun()
+
