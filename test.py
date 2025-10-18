@@ -801,7 +801,7 @@ if menu=="Cadastrar Fornecedor":
         telefone=st.text_input("Telefone")
         enviar=st.form_submit_button("Cadastrar")
     if enviar:
-        if not nome ou not cpf_cnpj: st.error("Nome e CPF/CNPJ são obrigatórios."); st.stop()
+        if not nome or not cpf_cnpj: st.error("Nome e CPF/CNPJ são obrigatórios."); st.stop()
         if not validar_cpf_cnpj(cpf_cnpj): st.error("CPF/CNPJ inválido."); st.stop()
         with SessionLocal() as db:
             dig=so_digitos(cpf_cnpj)
@@ -1513,3 +1513,4 @@ if menu=="Admin (Usuários)":
 if menu=="Sair":
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
     st.session_state.sel_forn_id=None; _safe_rerun()
+
