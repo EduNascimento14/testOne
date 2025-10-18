@@ -1513,3 +1513,4 @@ if menu=="Admin (Usuários)":
 if menu=="Sair":
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
     st.session_state.sel_forn_id=None; _safe_rerun()
+
