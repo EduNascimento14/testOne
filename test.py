@@ -1216,7 +1216,7 @@ if menu=="MTRs":
                     mm.updated_by = st.session_state.usuario
                     db.commit()
                 st.success("MTR atualizada (escopo 3).")
-                st.experimental_rerun()
+                _safe_rerun()
 
             st.markdown("#### CDF(s) da MTR selecionada")
             if m.cdfs:
@@ -1243,7 +1243,7 @@ if menu=="MTRs":
                         mm = db.query(MTR).filter(MTR.id==mid).first(); mm.cdf_count = (mm.cdf_count or 0) + 1
                         db.commit()
                     st.success("CDF anexado com sucesso!")
-                    st.experimental_rerun()
+                    _safe_rerun()
 
     st.markdown("### MTRs cadastradas")
     with SessionLocal() as db:
@@ -1513,4 +1513,5 @@ if menu=="Admin (Usuários)":
 if menu=="Sair":
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
     st.session_state.sel_forn_id=None; _safe_rerun()
+
 
