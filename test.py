@@ -837,8 +837,11 @@ if menu=="Overview":
         if not df_future.empty:
             df_future["Semana"] = df_future["Data"].apply(lambda x: x.isocalendar()[1])
             grp = df_future.groupby(["Semana","Tipo"]).size().reset_index(name="Qtde")
-            fig_line = px.bar(grp, x="Semana", y="Qtde", color="Tipo", title=f"Itens a vencer por semana (próx. {janela_dias} dias)")
-            st.plotly_chart(fig_line, use_container_width=True)
+            if not grp.empty:
+                fig_line = px.bar(grp, x="Semana", y="Qtde", color="Tipo", title=f"Itens a vencer por semana (próx. {janela_dias} dias)")
+                st.plotly_chart(fig_line, use_container_width=True)
+            else:
+                st.caption("Sem itens a vencer na janela para exibir por semana.")
     else:
         st.caption("Instale pandas para gráficos de tendência semanais.")
 
@@ -852,7 +855,9 @@ if menu=="Overview":
             pend.append({"Fornecedor": fn, "Item": "Contrato"})
         df_pend = pd.DataFrame(pend)
         if not df_pend.empty:
-            top = df_pend.groupby("Fornecedor").size().reset_index(name="Pendências").sort_values("Pendências", ascending=False).head(10)
+            top = df_pend.groupby("Fornecedor").size().reset_index(name="Pendências")
+            if not top.empty and "Pendências" in top.columns:
+                top = top.sort_values("Pendências", ascending=False).head(10)
             fig_top = px.bar(top, x="Fornecedor", y="Pendências", title="TOP fornecedores com pendências vencidas")
             st.plotly_chart(fig_top, use_container_width=True)
 
@@ -875,7 +880,11 @@ if menu=="Overview":
             })
         if HAVE_PANDAS:
             import pandas as pd
-            df = pd.DataFrame(data).sort_values(["Dias para vencer","Fornecedor"], na_position="last")
+            df = pd.DataFrame(data)
+            if not df.empty:
+                sort_cols = [c for c in ["Dias para vencer","Fornecedor"] if c in df.columns]
+                if sort_cols:
+                    df = df.sort_values(sort_cols, na_position="last")
             if crit_only:
                 df = df[df["Dias para vencer"].fillna(-999) <= 7] if not critico else df
             st.dataframe(df, use_container_width=True, hide_index=True)
@@ -902,7 +911,11 @@ if menu=="Overview":
             })
         if HAVE_PANDAS:
             import pandas as pd
-            df = pd.DataFrame(data).sort_values(["Dias para vencer","Fornecedor"], na_position="last")
+            df = pd.DataFrame(data)
+            if not df.empty:
+                sort_cols = [c for c in ["Dias para vencer","Fornecedor"] if c in df.columns]
+                if sort_cols:
+                    df = df.sort_values(sort_cols, na_position="last")
             if crit_only:
                 df = df[df["Dias para vencer"].fillna(-999) <= 7] if not critico else df
             st.dataframe(df, use_container_width=True, hide_index=True)
@@ -948,7 +961,12 @@ if menu=="Overview":
                 lista_crit.append({"Fornecedor": nome, "Status Auditoria": aud_status.get(fid, "N/A")})
             if HAVE_PANDAS:
                 import pandas as pd
-                dfc = pd.DataFrame(lista_crit).sort_values("Fornecedor")
+                dfc = pd.DataFrame(lista_crit)
+                if not dfc.empty and "Fornecedor" in dfc.columns:
+                    dfc = dfc.sort_values("Fornecedor")
+                else:
+                    st.info("Nenhum fornecedor para notificação imediata.")
+                    dfc = pd.DataFrame(columns=["Fornecedor","Status Auditoria"])
                 st.dataframe(dfc, use_container_width=True, hide_index=True)
                 csv = dfc.to_csv(index=False).encode("utf-8")
                 st.download_button("Baixar CSV — Notificação imediata", data=csv, file_name="fornecedores_notificar_imediato.csv", mime="text/csv", use_container_width=True)
@@ -966,7 +984,12 @@ if menu=="Overview":
                 lista_prev.append({"Fornecedor": nome, "Status Auditoria": aud_status.get(fid, "N/A")})
             if HAVE_PANDAS:
                 import pandas as pd
-                dfp = pd.DataFrame(lista_prev).sort_values("Fornecedor")
+                dfp = pd.DataFrame(lista_prev)
+                if not dfp.empty and "Fornecedor" in dfp.columns:
+                    dfp = dfp.sort_values("Fornecedor")
+                else:
+                    st.info("Nenhum fornecedor para notificação preventiva.")
+                    dfp = pd.DataFrame(columns=["Fornecedor","Status Auditoria"])
                 st.dataframe(dfp, use_container_width=True, hide_index=True)
                 csv = dfp.to_csv(index=False).encode("utf-8")
                 st.download_button("Baixar CSV — Notificação preventiva", data=csv, file_name="fornecedores_notificar_preventivo.csv", mime="text/csv", use_container_width=True)
@@ -978,29 +1001,39 @@ if menu=="Overview":
     # ====== Visões ambientais (mantidas/ajustadas) ======
     # kg por fornecedor (MTR)
     st.markdown("### ♻️ Kg destinados por fornecedor (MTR)")
-    rows = [{"Fornecedor": n, "Kg_destinados": v} for n, v in k["mtr_por_forn"]]
-    if HAVE_PANDAS and rows:
-        import pandas as pd
-        df = pd.DataFrame(rows).sort_values("Kg_destinados", ascending=False)
-        fig_bar = px.bar(df, x="Fornecedor", y="Kg_destinados", title="Total de kg por fornecedor (MTR)")
+    rows = [{"Fornecedor": n, "Kg_destinados": v} for n, v in k.get("mtr_por_forn", [])]
+    if rows:
+        if HAVE_PANDAS:
+            import pandas as pd
+            df = pd.DataFrame(rows)
+            if not df.empty and "Kg_destinados" in df.columns:
+                df = df.sort_values("Kg_destinados", ascending=False)
+            fig_bar = px.bar(df, x="Fornecedor", y="Kg_destinados", title="Total de kg por fornecedor (MTR)")
+        else:
+            xs = [r["Fornecedor"] for r in rows]; ys = [r["Kg_destinados"] for r in rows]
+            fig_bar = go.Figure(go.Bar(x=xs, y=ys)); fig_bar.update_layout(title="Total de kg por fornecedor (MTR)")
+        fig_bar.update_traces(marker_color="green")
+        st.plotly_chart(fig_bar, use_container_width=True)
     else:
-        xs = [r["Fornecedor"] for r in rows]; ys = [r["Kg_destinados"] for r in rows]
-        fig_bar = go.Figure(go.Bar(x=xs, y=ys)); fig_bar.update_layout(title="Total de kg por fornecedor (MTR)")
-    fig_bar.update_traces(marker_color="green")
-    st.plotly_chart(fig_bar, use_container_width=True)
+        st.info("Sem dados de MTR por fornecedor para exibir.")
 
     # tCO2e por fornecedor
     st.markdown("### 🌫️ Emissões de Escopo 3 (resíduos) por fornecedor")
-    rows = [{"Fornecedor": n, "tCO2e": v} for n, v in k["tco2e_por_forn"]]
-    if HAVE_PANDAS and rows:
-        import pandas as pd
-        df = pd.DataFrame(rows).sort_values("tCO2e", ascending=False)
-        fig_em = px.bar(df, x="Fornecedor", y="tCO2e", title="tCO₂e por fornecedor (resíduos)")
+    rows = [{"Fornecedor": n, "tCO2e": v} for n, v in k.get("tco2e_por_forn", [])]
+    if rows:
+        if HAVE_PANDAS:
+            import pandas as pd
+            df = pd.DataFrame(rows)
+            if not df.empty and "tCO2e" in df.columns:
+                df = df.sort_values("tCO2e", ascending=False)
+            fig_em = px.bar(df, x="Fornecedor", y="tCO2e", title="tCO₂e por fornecedor (resíduos)")
+        else:
+            xs = [r["Fornecedor"] for r in rows]; ys = [r["tCO2e"] for r in rows]
+            fig_em = go.Figure(go.Bar(x=xs, y=ys)); fig_em.update_layout(title="tCO₂e por fornecedor (resíduos)")
+        fig_em.update_traces(marker_color="red")
+        st.plotly_chart(fig_em, use_container_width=True)
     else:
-        xs = [r["Fornecedor"] for r in rows]; ys = [r["tCO2e"] for r in rows]
-        fig_em = go.Figure(go.Bar(x=xs, y=ys)); fig_em.update_layout(title="tCO₂e por fornecedor (resíduos)")
-    fig_em.update_traces(marker_color="red")
-    st.plotly_chart(fig_em, use_container_width=True)
+        st.info("Sem dados de emissões por fornecedor para exibir.")
 
 
 # ---- Cadastrar Fornecedor ----
