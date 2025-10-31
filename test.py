@@ -724,70 +724,284 @@ def kpis_gerais(db:Session)->dict:
 #           PÁGINAS
 # =========================
 
+
 # ---- Overview ----
 if menu=="Overview":
-    st.header("Resumo Geral dos Fornecedores")
+    st.header("📊 Overview — Conformidade & Riscos de Fornecedores")
+    # ====== Parâmetros de visão ======
+    colp1, colp2, colp3 = st.columns([0.35, 0.35, 0.3])
+    with colp1:
+        janela_dias = st.slider("Janela de alerta (dias)", 7, 120, 45, help="Período futuro usado para 'a vencer'.")
+    with colp2:
+        crit_only = st.toggle("Mostrar apenas itens críticos", value=False, help="Filtra as tabelas para focar nos casos urgentes/atrasados.")
+    with colp3:
+        st.caption(f"Usuário: **{st.session_state.usuario}**  •  Perfil: **{st.session_state.role}**")
+
+    hoje = date.today()
+    limite = hoje + timedelta(days=janela_dias)
+
+    # ====== KPIs tradicionais (mantidos) ======
     with SessionLocal() as db:
-        k=kpis_gerais(db)
+        k = kpis_gerais(db)
 
     fig_total = px.pie(
         names=["Conforme/Adequado","Parcialmente Conforme","Não Conforme/Inadequado"],
         values=[k["conformes"], k["parcial"], k["nao_conformes"]],
-        title="Classificação da Auditoria (v2)",
+        title="Classificação de Auditoria (IQA v2)",
         color=["Conforme/Adequado","Parcialmente Conforme","Não Conforme/Inadequado"],
         color_discrete_map={"Conforme/Adequado":"green","Parcialmente Conforme":"orange","Não Conforme/Inadequado":"red"},
     )
     fig_contrato = px.pie(
-        names=["Com Contrato","Sem Contrato"], values=[k["forn_com_contrato"],k["forn_sem_contrato"]],
+        names=["Com Contrato","Sem Contrato"],
+        values=[k["forn_com_contrato"], k["forn_sem_contrato"]],
         title="Situação Contratual",
         color=["Com Contrato","Sem Contrato"],
         color_discrete_map={"Com Contrato":"green","Sem Contrato":"red"},
     )
-    c1,c2=st.columns(2)
+    c1,c2 = st.columns(2)
     with c1: st.plotly_chart(fig_total, use_container_width=True)
     with c2: st.plotly_chart(fig_contrato, use_container_width=True)
 
-    def badge(label,val,good=True):
-        color="#2e7d32" if good else "#c62828"; bg="#e8f5e9" if good else "#ffebee"
-        return f"<div style='padding:10px;border-radius:8px;background:{bg};margin-bottom:8px;'><span style='color:{color};font-weight:600;'>{label}:</span><span style='margin-left:6px;color:#111;font-weight:700;'>{val}</span></div>"
+    # ====== Coleta de dados para alertas ======
+    with SessionLocal() as db:
+        # Documentos + Fornecedor
+        docs_rows = db.query(Documento, Fornecedor.nome, Fornecedor.id).join(Fornecedor, Documento.fornecedor_id==Fornecedor.id).all()
+        # Contratos + Fornecedor
+        ctr_rows = db.query(Contrato, Fornecedor.nome, Fornecedor.id).join(Fornecedor, Contrato.fornecedor_id==Fornecedor.id).all()
+        # Auditorias (para status geral)
+        aud_rows = db.query(Auditoria, Fornecedor.nome, Fornecedor.id).join(Fornecedor, Auditoria.fornecedor_id==Fornecedor.id).all()
 
-    colA,colB,colC=st.columns(3)
+    # Documentos
+    docs_vencidos = []
+    docs_a_vencer = []
+    for d, forn_nome, forn_id in docs_rows:
+        if d.data_validade:
+            if d.data_validade < hoje:
+                docs_vencidos.append((forn_id, forn_nome, d))
+            elif hoje <= d.data_validade <= limite:
+                docs_a_vencer.append((forn_id, forn_nome, d))
+
+    # Contratos
+    contratos_vencidos = []
+    contratos_a_vencer = []
+    for c, forn_nome, forn_id in ctr_rows:
+        if c.data_validade:
+            if c.data_validade < hoje:
+                contratos_vencidos.append((forn_id, forn_nome, c))
+            elif hoje <= c.data_validade <= limite:
+                contratos_a_vencer.append((forn_id, forn_nome, c))
+
+    # Fornecedores críticos (qualquer documento/contrato vencido)
+    forn_docs_venc = {fid for fid, _, _ in docs_vencidos}
+    forn_ctr_venc = {fid for fid, _, _ in contratos_vencidos}
+    fornecedores_criticos = forn_docs_venc.union(forn_ctr_venc)
+
+    # Fornecedores com atenção (a vencer na janela)
+    forn_docs_av = {fid for fid, _, _ in docs_a_vencer}
+    forn_ctr_av = {fid for fid, _, _ in contratos_a_vencer}
+    fornecedores_atencao = forn_docs_av.union(forn_ctr_av)
+
+    # Auditorias por status (mapa auxiliar)
+    aud_status = {}
+    for a, forn_nome, forn_id in aud_rows:
+        aud_status[forn_id] = a.classificado if a else "N/A"
+
+    # ====== Cartões de risco ======
+    def badge(label, val, ok=True):
+        color = "#2e7d32" if ok else "#c62828"
+        bg = "#e8f5e9" if ok else "#ffebee"
+        return f"<div style='padding:12px;border-radius:10px;background:{bg};margin-bottom:10px;'>"\
+               f"<span style='color:{color};font-weight:700;'>{label}:</span>"\
+               f"<span style='margin-left:8px;color:#111;font-weight:800;'>{val}</span></div>"
+
+    colA, colB, colC, colD = st.columns(4)
     with colA:
-        st.markdown(badge("Total de Fornecedores", k["total_fornecedores"], True), unsafe_allow_html=True)
-        st.markdown(badge("Conformes/Adequados", k["conformes"], True), unsafe_allow_html=True)
-        st.markdown(badge("MTRs com CDF", f"{k['mtrs_com_cdf']}/{k['total_mtrs']}", True), unsafe_allow_html=True)
+        st.markdown(badge("Documentos vencidos", len(docs_vencidos), ok=False), unsafe_allow_html=True)
     with colB:
-        st.markdown(badge("Parcialmente Conforme", k["parcial"], False), unsafe_allow_html=True)
-        st.markdown(badge("Não Conformes/Inadequados", k["nao_conformes"], False), unsafe_allow_html=True)
-        st.markdown(badge("Doc. a vencer (30d)", k["docs_a_vencer"], False), unsafe_allow_html=True)
+        st.markdown(badge(f"Docs a vencer (≤{janela_dias}d)", len(docs_a_vencer), ok=False), unsafe_allow_html=True)
     with colC:
-        st.markdown(badge("Documentos vencidos", k["docs_vencidos"], False), unsafe_allow_html=True)
-        st.markdown(badge("Total kg (MTR)", f"{k['mtr_total_kg']:.1f} kg", True), unsafe_allow_html=True)
-        st.markdown(badge("Total tCO₂e (MTR - Escopo 3)", f"{k['total_tco2e']:.2f} t", True), unsafe_allow_html=True)
+        st.markdown(badge("Contratos vencidos", len(contratos_vencidos), ok=False), unsafe_allow_html=True)
+    with colD:
+        st.markdown(badge(f"Contratos a vencer (≤{janela_dias}d)", len(contratos_a_vencer), ok=False), unsafe_allow_html=True)
 
-    # kg por fornecedor
-    st.markdown("### Kg destinados por fornecedor (MTR)")
-    rows = [{"Fornecedor":n,"Kg_destinados":v} for n,v in k["mtr_por_forn"]]
-    if HAVE_PANDAS and rows:
-        df=pd.DataFrame(rows).sort_values("Kg_destinados", ascending=False)
-        fig_bar=px.bar(df, x="Fornecedor", y="Kg_destinados", title="Total de kg por fornecedor (MTR)")
+    # ====== Gráficos de tendência ======
+    # 1) Itens a vencer por semana (docs + contratos)
+    if HAVE_PANDAS:
+        import pandas as pd
+        future_items = []
+        for fid, fn, d in docs_a_vencer:
+            future_items.append({"Fornecedor": fn, "Tipo": "Documento", "Data": d.data_validade, "Dias": (d.data_validade - hoje).days, "Detalhe": d.tipo})
+        for fid, fn, c in contratos_a_vencer:
+            future_items.append({"Fornecedor": fn, "Tipo": "Contrato", "Data": c.data_validade, "Dias": (c.data_validade - hoje).days, "Detalhe": "Contrato"})
+        df_future = pd.DataFrame(future_items)
+        if not df_future.empty:
+            df_future["Semana"] = df_future["Data"].apply(lambda x: x.isocalendar()[1])
+            grp = df_future.groupby(["Semana","Tipo"]).size().reset_index(name="Qtde")
+            fig_line = px.bar(grp, x="Semana", y="Qtde", color="Tipo", title=f"Itens a vencer por semana (próx. {janela_dias} dias)")
+            st.plotly_chart(fig_line, use_container_width=True)
     else:
-        xs=[r["Fornecedor"] for r in rows]; ys=[r["Kg_destinados"] for r in rows]
-        fig_bar=go.Figure(go.Bar(x=xs,y=ys)); fig_bar.update_layout(title="Total de kg por fornecedor (MTR)")
+        st.caption("Instale pandas para gráficos de tendência semanais.")
+
+    # 2) Fornecedores com maior número de pendências (vencidos)
+    if HAVE_PANDAS:
+        import pandas as pd
+        pend = []
+        for fid, fn, d in docs_vencidos:
+            pend.append({"Fornecedor": fn, "Item": "Documento"})
+        for fid, fn, c in contratos_vencidos:
+            pend.append({"Fornecedor": fn, "Item": "Contrato"})
+        df_pend = pd.DataFrame(pend)
+        if not df_pend.empty:
+            top = df_pend.groupby("Fornecedor").size().reset_index(name="Pendências").sort_values("Pendências", ascending=False).head(10)
+            fig_top = px.bar(top, x="Fornecedor", y="Pendências", title="TOP fornecedores com pendências vencidas")
+            st.plotly_chart(fig_top, use_container_width=True)
+
+    # ====== Tabelas operacionais ======
+    def _table_docs(rows, titulo, critico=False):
+        st.markdown(f"### {titulo}")
+        if not rows:
+            st.info("Nenhum registro.")
+            return
+        data = []
+        for fid, fn, d in rows:
+            dias = (d.data_validade - hoje).days if d.data_validade else None
+            data.append({
+                "Fornecedor": fn,
+                "Tipo Documento": d.tipo,
+                "Início": d.data_inicio,
+                "Validade": d.data_validade,
+                "Dias para vencer": dias,
+                "Arquivo": Path(d.arquivo).name if d.arquivo else "-"
+            })
+        if HAVE_PANDAS:
+            import pandas as pd
+            df = pd.DataFrame(data).sort_values(["Dias para vencer","Fornecedor"], na_position="last")
+            if crit_only:
+                df = df[df["Dias para vencer"].fillna(-999) <= 7] if not critico else df
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(f"Baixar CSV — {titulo}", data=csv, file_name=f"{titulo.replace(' ','_')}.csv", mime="text/csv", use_container_width=True)
+        else:
+            for r in data[:200]:
+                st.write(r)
+
+    def _table_contratos(rows, titulo, critico=False):
+        st.markdown(f"### {titulo}")
+        if not rows:
+            st.info("Nenhum registro.")
+            return
+        data = []
+        for fid, fn, c in rows:
+            dias = (c.data_validade - hoje).days if c.data_validade else None
+            data.append({
+                "Fornecedor": fn,
+                "Assinatura": c.data_assinatura,
+                "Validade": c.data_validade,
+                "Dias para vencer": dias,
+                "Arquivo": Path(c.arquivo).name if c.arquivo else "-"
+            })
+        if HAVE_PANDAS:
+            import pandas as pd
+            df = pd.DataFrame(data).sort_values(["Dias para vencer","Fornecedor"], na_position="last")
+            if crit_only:
+                df = df[df["Dias para vencer"].fillna(-999) <= 7] if not critico else df
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(f"Baixar CSV — {titulo}", data=csv, file_name=f"{titulo.replace(' ','_')}.csv", mime="text/csv", use_container_width=True)
+        else:
+            for r in data[:200]:
+                st.write(r)
+
+    # Abas com foco operacional
+    t1, t2, t3, t4, t5 = st.tabs([
+        "📄 Docs vencidos",
+        f"⏳ Docs a vencer (≤{janela_dias}d)",
+        "📃 Contratos vencidos",
+        f"🗓️ Contratos a vencer (≤{janela_dias}d)",
+        "🚨 Fornecedores que exigem notificação"
+    ])
+
+    with t1:
+        _table_docs(docs_vencidos, "Documentos vencidos", critico=True)
+
+    with t2:
+        _table_docs(docs_a_vencer, f"Documentos a vencer (≤{janela_dias} dias)")
+
+    with t3:
+        _table_contratos(contratos_vencidos, "Contratos vencidos", critico=True)
+
+    with t4:
+        _table_contratos(contratos_a_vencer, f"Contratos a vencer (≤{janela_dias} dias)")
+
+    with t5:
+        # Regra simples: doc vencido OU contrato vencido => notificar imediatamente
+        # A vencer (≤janela) => programar notificação preventiva
+        coln1, coln2 = st.columns(2)
+        with coln1:
+            st.subheader("Notificação imediata (vencidos)")
+            lista_crit = []
+            for fid in sorted(fornecedores_criticos):
+                # Buscar nome na primeira ocorrência
+                nome = next((fn for (idc, fn, _) in docs_vencidos if idc==fid), None) \
+                    or next((fn for (idc, fn, _) in contratos_vencidos if idc==fid), None) \
+                    or f"Fornecedor #{fid}"
+                lista_crit.append({"Fornecedor": nome, "Status Auditoria": aud_status.get(fid, "N/A")})
+            if HAVE_PANDAS:
+                import pandas as pd
+                dfc = pd.DataFrame(lista_crit).sort_values("Fornecedor")
+                st.dataframe(dfc, use_container_width=True, hide_index=True)
+                csv = dfc.to_csv(index=False).encode("utf-8")
+                st.download_button("Baixar CSV — Notificação imediata", data=csv, file_name="fornecedores_notificar_imediato.csv", mime="text/csv", use_container_width=True)
+            else:
+                for r in lista_crit[:200]:
+                    st.write(r)
+
+        with coln2:
+            st.subheader(f"Notificação preventiva (≤{janela_dias}d)")
+            lista_prev = []
+            for fid in sorted(fornecedores_atencao - fornecedores_criticos):
+                nome = next((fn for (idc, fn, _) in docs_a_vencer if idc==fid), None) \
+                    or next((fn for (idc, fn, _) in contratos_a_vencer if idc==fid), None) \
+                    or f"Fornecedor #{fid}"
+                lista_prev.append({"Fornecedor": nome, "Status Auditoria": aud_status.get(fid, "N/A")})
+            if HAVE_PANDAS:
+                import pandas as pd
+                dfp = pd.DataFrame(lista_prev).sort_values("Fornecedor")
+                st.dataframe(dfp, use_container_width=True, hide_index=True)
+                csv = dfp.to_csv(index=False).encode("utf-8")
+                st.download_button("Baixar CSV — Notificação preventiva", data=csv, file_name="fornecedores_notificar_preventivo.csv", mime="text/csv", use_container_width=True)
+            else:
+                for r in lista_prev[:200]:
+                    st.write(r)
+
+    st.markdown("---")
+    # ====== Visões ambientais (mantidas/ajustadas) ======
+    # kg por fornecedor (MTR)
+    st.markdown("### ♻️ Kg destinados por fornecedor (MTR)")
+    rows = [{"Fornecedor": n, "Kg_destinados": v} for n, v in k["mtr_por_forn"]]
+    if HAVE_PANDAS and rows:
+        import pandas as pd
+        df = pd.DataFrame(rows).sort_values("Kg_destinados", ascending=False)
+        fig_bar = px.bar(df, x="Fornecedor", y="Kg_destinados", title="Total de kg por fornecedor (MTR)")
+    else:
+        xs = [r["Fornecedor"] for r in rows]; ys = [r["Kg_destinados"] for r in rows]
+        fig_bar = go.Figure(go.Bar(x=xs, y=ys)); fig_bar.update_layout(title="Total de kg por fornecedor (MTR)")
     fig_bar.update_traces(marker_color="green")
     st.plotly_chart(fig_bar, use_container_width=True)
 
     # tCO2e por fornecedor
-    st.markdown("### Emissões de Escopo 3 (resíduos) por fornecedor")
-    rows = [{"Fornecedor":n,"tCO2e":v} for n,v in k["tco2e_por_forn"]]
+    st.markdown("### 🌫️ Emissões de Escopo 3 (resíduos) por fornecedor")
+    rows = [{"Fornecedor": n, "tCO2e": v} for n, v in k["tco2e_por_forn"]]
     if HAVE_PANDAS and rows:
-        df=pd.DataFrame(rows).sort_values("tCO2e", ascending=False)
-        fig_em=px.bar(df, x="Fornecedor", y="tCO2e", title="tCO₂e por fornecedor (resíduos)")
+        import pandas as pd
+        df = pd.DataFrame(rows).sort_values("tCO2e", ascending=False)
+        fig_em = px.bar(df, x="Fornecedor", y="tCO2e", title="tCO₂e por fornecedor (resíduos)")
     else:
-        xs=[r["Fornecedor"] for r in rows]; ys=[r["tCO2e"] for r in rows]
-        fig_em=go.Figure(go.Bar(x=xs,y=ys)); fig_em.update_layout(title="tCO₂e por fornecedor (resíduos)")
+        xs = [r["Fornecedor"] for r in rows]; ys = [r["tCO2e"] for r in rows]
+        fig_em = go.Figure(go.Bar(x=xs, y=ys)); fig_em.update_layout(title="tCO₂e por fornecedor (resíduos)")
     fig_em.update_traces(marker_color="red")
     st.plotly_chart(fig_em, use_container_width=True)
+
 
 # ---- Cadastrar Fornecedor ----
 if menu=="Cadastrar Fornecedor":
@@ -1513,5 +1727,4 @@ if menu=="Admin (Usuários)":
 if menu=="Sair":
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
     st.session_state.sel_forn_id=None; _safe_rerun()
-
 
