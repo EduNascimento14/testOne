@@ -1,1763 +1,1110 @@
-# app.py — Streamlit único com:
-# - Importação/parse de MTR robusto (todas as páginas + fallbacks)
-# - Tabela "Fatores de Emissão" editável (st.data_editor + salvar alterações + excluir)
-# - Planos de Ação com painel de status (editar status no cartão)
-# - Restante das features existentes (login, docs com download, auditoria, CDF, KPIs, export Excel)
+# app.py
+from __future__ import annotations
 
-import os, re, uuid, json, traceback
-from io import BytesIO
+import os
+import uuid
+import logging
 from pathlib import Path
-from datetime import date, timedelta, datetime
+from datetime import datetime, date
+from typing import Optional, Literal, Dict, List, Tuple
 
 import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
-import bcrypt
-from statistics import mean
-from decimal import Decimal
+from PIL import Image
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, Date, ForeignKey, Enum,
-    UniqueConstraint, JSON, func, text
+    create_engine,
+    event,
+    select,
+    func,
+    desc,
+    asc,
+    or_,
+    String,
+    Integer,
+    DateTime,
+    Date,
+    Text,
+    ForeignKey,
+    Boolean,
+    UniqueConstraint,
+    Index,
 )
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload, Session
-from sqlalchemy.orm import selectinload
-import enum
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Session,
+    sessionmaker,
+    Mapped,
+    mapped_column,
+    relationship,
+    joinedload,
+)
 
-# ===== (Excel/Data) =====
-try:
-    import pandas as pd
-    HAVE_PANDAS = True
-except Exception:
-    HAVE_PANDAS = False
+# -----------------------------
+# Config / Paths / Logging
+# -----------------------------
+st.set_page_config(page_title="Armário da Cher (offline)", page_icon="👗", layout="wide")
 
-# ===== (PDF/MTR) =====
-try:
-    import pdfplumber
-    HAVE_PDFPLUMBER = True
-except Exception:
-    HAVE_PDFPLUMBER = False
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger("armario")
 
-# =========================
-#       CONFIG GERAL
-# =========================
-st.set_page_config(page_title="Gerenciamento de Fornecedores Ambientais", layout="wide")
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///fornecedores.db")
-CONNECT_ARGS = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=CONNECT_ARGS, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
-Base = declarative_base()
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_DIR = PROJECT_ROOT / "data"
+IMAGES_DIR = DATA_DIR / "images"
+DB_PATH = DATA_DIR / "app.db"
+THUMB_SUFFIX = ".thumb.jpg"
 
-# =========================
-#       UTILITÁRIOS
-# =========================
-def _safe_rerun():
-    try: st.rerun()
-    except Exception:
-        try: st.experimental_rerun()
-        except Exception: pass
+def ensure_dirs() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-def so_digitos(s:str) -> str:
-    return re.sub(r"\D", "", s or "")
+ensure_dirs()
 
-def normalizar_telefone(s:str) -> str:
-    return so_digitos(s)
+# -----------------------------
+# Cache buster
+# -----------------------------
+CACHE_KEY = "cache_buster"
+def ensure_cache_buster() -> None:
+    if CACHE_KEY not in st.session_state:
+        st.session_state[CACHE_KEY] = 0
 
-def validar_cpf(cpf:str)->bool:
-    cpf = so_digitos(cpf)
-    if len(cpf)!=11 or cpf==cpf[0]*11: return False
-    soma=sum(int(cpf[i])*(10-i) for i in range(9)); d1=(soma*10)%11; d1=0 if d1==10 else d1
-    soma=sum(int(cpf[i])*(11-i) for i in range(10)); d2=(soma*10)%11; d2=0 if d2==10 else d2
-    return cpf[-2:]==f"{d1}{d2}"
+def bump_cache() -> None:
+    ensure_cache_buster()
+    st.session_state[CACHE_KEY] += 1
 
-def validar_cnpj(cnpj:str)->bool:
-    cnpj=so_digitos(cnpj)
-    if len(cnpj)!=14 or cnpj==cnpj[0]*14: return False
-    p1=[5,4,3,2,9,8,7,6,5,4,3,2]; p2=[6]+p1
-    s1=sum(int(cnpj[i])*p1[i] for i in range(12)); d1=11-(s1%11); d1=0 if d1>=10 else d1
-    s2=sum(int(cnpj[i])*p2[i] for i in range(13)); d2=11-(s2%11); d2=0 if d2>=10 else d2
-    return cnpj[-2:]==f"{d1}{d2}"
+def cache_token() -> int:
+    ensure_cache_buster()
+    return int(st.session_state[CACHE_KEY])
 
-def validar_cpf_cnpj(v:str)->bool:
-    d=so_digitos(v)
-    return (len(d)==11 and validar_cpf(d)) or (len(d)==14 and validar_cnpj(d))
+# -----------------------------
+# Image helpers
+# -----------------------------
+def unique_filename(original_name: str) -> str:
+    ext = Path(original_name).suffix.lower() or ".jpg"
+    return f"{uuid.uuid4().hex}{ext}"
 
-def formatar_cpf_cnpj(dig:str)->str:
-    dig=so_digitos(dig)
-    if len(dig)==11: return f"{dig[:3]}.{dig[3:6]}.{dig[6:9]}-{dig[9:]}"
-    if len(dig)==14: return f"{dig[:2]}.{dig[2:5]}.{dig[5:8]}/{dig[8:12]}-{dig[12:]}"
-    return dig
+def save_upload_to_disk(uploaded_file) -> Path:
+    fname = unique_filename(uploaded_file.name)
+    out_path = IMAGES_DIR / fname
+    out_path.write_bytes(uploaded_file.getbuffer())
+    return out_path
 
-def salvar_arquivo(uploaded_file, pasta:str, prefixo:str)->str:
-    Path(pasta).mkdir(parents=True, exist_ok=True)
-    ext = Path(uploaded_file.name).suffix.lower()
-    safe_stem = re.sub(r"[^a-zA-Z0-9_-]+","_", prefixo)[:50] or "file"
-    fn = f"{safe_stem}_{uuid.uuid4().hex}{ext}"
-    caminho = Path(pasta)/fn
-    caminho.write_bytes(uploaded_file.getbuffer())
-    return str(caminho)
+def thumbnail_path_for(image_path: Path) -> Path:
+    return image_path.with_suffix(image_path.suffix + THUMB_SUFFIX)
 
-def exibir_preview_arquivo(caminho: str, mime_type: str | None):
+def make_thumbnail(image_path: Path, max_size: int = 512) -> Optional[Path]:
     try:
-        p=Path(caminho)
-        if not p.exists(): st.caption("Arquivo não encontrado."); return
-        data = p.read_bytes()
-        ext = p.suffix.lower()
-        if not mime_type:
-            if ext in [".png",".jpg",".jpeg"]: mime_type="image/jpeg" if ext!=".png" else "image/png"
-            elif ext==".pdf": mime_type="application/pdf"
-            else: mime_type="application/octet-stream"
-        if mime_type.startswith("image/"): st.image(data)
-        elif mime_type=="application/pdf":
-            st.download_button("Baixar PDF", data=data, file_name=p.name, key=f"dl_{uuid.uuid4().hex}")
-        else:
-            st.download_button("Baixar arquivo", data=data, file_name=p.name, key=f"dl_{uuid.uuid4().hex}")
+        with Image.open(image_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((max_size, max_size))
+            thumb_path = thumbnail_path_for(image_path)
+            img.save(thumb_path, format="JPEG", quality=85, optimize=True)
+            return thumb_path
     except Exception as e:
-        st.warning(f"Não foi possível preparar o download: {e}")
+        logger.warning("Thumbnail failed for %s: %s", image_path, e)
+        return None
 
-def parse_data_br(s:str)->date|None:
-    try: return datetime.strptime(s, "%d/%m/%Y").date()
-    except Exception: return None
+def delete_files(paths: List[Path]) -> None:
+    for p in paths:
+        try:
+            if p.exists():
+                p.unlink()
+        except Exception as e:
+            logger.warning("Failed to delete file %s: %s", p, e)
 
-def to_float(s:str)->float|None:
-    if not s: return None
-    s = s.strip().replace(".","").replace(",",".")
-    try: return float(s)
-    except Exception: return None
+# -----------------------------
+# DB / ORM
+# -----------------------------
+class Base(DeclarativeBase):
+    pass
 
-def unidade_to_kg(qtd:float|None, und:str|None)->float|None:
-    if qtd is None: return None
-    u=(und or "").strip().upper()
-    if u in ("KG","KGS","KILOS","QUILOS"): return qtd
-    if u in ("T","TON","TONS","TONELADA","TONELADAS"): return qtd*1000.0
-    return qtd
+def get_engine():
+    url = f"sqlite:///{DB_PATH.as_posix()}"
+    engine = create_engine(url, echo=False, future=True)
 
-def kg_to_ton(kg:float|None)->float:
-    return (kg or 0.0)/1000.0
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON;")
+        cursor.close()
 
-def _make_json_safe(obj):
-    """Normaliza estruturas para serem serializáveis em JSON."""
-    if isinstance(obj, (str, int, float)) or obj is None:
-        return obj
-    if isinstance(obj, (date, datetime)):
-        return obj.isoformat()
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, dict):
-        return {str(_make_json_safe(k)): _make_json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set)):
-        return [_make_json_safe(v) for v in obj]
-    try:
-        return json.loads(json.dumps(obj, ensure_ascii=False))
-    except Exception:
-        return str(obj)
+    return engine
 
-# =========================
-#          MODELOS
-# =========================
-class RoleEnum(str, enum.Enum):
-    admin="Admin"; auditor="Auditor"; leitor="Leitor"
+ENGINE = get_engine()
+SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False, future=True)
 
-class User(Base):
-    __tablename__="users"
-    id = Column(Integer, primary_key=True)
-    username = Column(String(150), unique=True, nullable=False)
-    password_hash = Column(String(255), nullable=False)
-    role = Column(Enum(RoleEnum), nullable=False, default=RoleEnum.auditor)
-    created_at = Column(Date, server_default=func.current_date())
+def db_session() -> Session:
+    return SessionLocal()
 
-class Fornecedor(Base):
-    __tablename__="fornecedores"
-    id = Column(Integer, primary_key=True)
-    nome = Column(String, nullable=False)
-    cpf_cnpj = Column(String(14), unique=True, nullable=False)
-    endereco = Column(String)
-    telefone = Column(String(20))
-    created_at = Column(Date, server_default=func.current_date())
-    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
-    updated_by = Column(String(150))
-    documentos = relationship("Documento", back_populates="fornecedor", cascade="all, delete-orphan")
-    auditoria = relationship("Auditoria", uselist=False, back_populates="fornecedor", cascade="all, delete-orphan")
-    planos_acao = relationship("PlanoAcao", back_populates="fornecedor", cascade="all, delete-orphan")
-    contratos = relationship("Contrato", back_populates="fornecedor", cascade="all, delete-orphan")
-    mtrs = relationship("MTR", back_populates="fornecedor", cascade="all, delete-orphan")
+# -----------------------------
+# Models
+# -----------------------------
+Category = Literal["top", "bottom", "footwear", "outerwear", "accessory"]
+Season = Literal["summer", "winter", "mid", "all"]
+Occasion = Literal["casual", "work", "formal", "gym", "other"]
+Status = Literal["available", "laundry", "borrowed"]
+Slot = Literal["top", "bottom", "footwear", "outerwear", "accessory"]
 
-class Documento(Base):
-    __tablename__="documentos"
-    __table_args__=(UniqueConstraint('fornecedor_id','tipo',name='uq_doc_fornecedor_tipo'),)
-    id = Column(Integer, primary_key=True)
-    fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
-    tipo = Column(String, nullable=False)
-    arquivo = Column(String, nullable=False)
-    data_inicio = Column(Date, nullable=False)
-    data_validade = Column(Date, nullable=False)
-    created_at = Column(Date, server_default=func.current_date())
-    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
-    updated_by = Column(String(150))
-    fornecedor = relationship("Fornecedor", back_populates="documentos")
+CATEGORIES: List[str] = ["top", "bottom", "footwear", "outerwear", "accessory"]
+SEASONS: List[str] = ["summer", "winter", "mid", "all"]
+OCCASIONS: List[str] = ["casual", "work", "formal", "gym", "other"]
+STATUSES: List[str] = ["available", "laundry", "borrowed"]
+SLOTS: List[str] = ["top", "bottom", "footwear", "outerwear", "accessory"]
 
-class Auditoria(Base):
-    __tablename__="auditorias"
-    id = Column(Integer, primary_key=True)
-    fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
-    respostas = Column(JSON, nullable=False, default=dict)  # <- evitar default mutável
-    score = Column(Integer, nullable=False, default=0)
-    classificado = Column(String, nullable=False, default="Não Conforme")
-    created_at = Column(Date, server_default=func.current_date())
-    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
-    updated_by = Column(String(150))
-    fornecedor = relationship("Fornecedor", back_populates="auditoria")
+class Item(Base):
+    __tablename__ = "items"
 
-class PlanoStatusEnum(str, enum.Enum):
-    andamento="Em andamento"; concluido="Concluído"; atrasado="Atrasado"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
 
-class PlanoAcao(Base):
-    __tablename__="planos_acao"
-    id = Column(Integer, primary_key=True)
-    fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
-    descricao = Column(String, nullable=False)
-    data_inicio = Column(Date, nullable=False)
-    data_fim = Column(Date, nullable=False)
-    status = Column(Enum(PlanoStatusEnum), nullable=False, default=PlanoStatusEnum.andamento)
-    evidencias = Column(JSON, nullable=False, default=list)
-    created_at = Column(Date, server_default=func.current_date())
-    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
-    updated_by = Column(String(150))
-    fornecedor = relationship("Fornecedor", back_populates="planos_acao")
+    category: Mapped[str] = mapped_column(String(20), nullable=False)
+    type: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    color_primary: Mapped[str] = mapped_column(String(40), nullable=False)
+    color_secondary: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
 
-class Contrato(Base):
-    __tablename__="contratos"
-    id = Column(Integer, primary_key=True)
-    fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
-    arquivo = Column(String, nullable=False)
-    data_assinatura = Column(Date, nullable=False)
-    data_validade = Column(Date, nullable=False)
-    created_at = Column(Date, server_default=func.current_date())
-    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
-    updated_by = Column(String(150))
-    fornecedor = relationship("Fornecedor", back_populates="contratos")
+    season: Mapped[str] = mapped_column(String(10), nullable=False)
+    occasion: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
 
-class MTR(Base):
-    __tablename__="mtrs"
-    id = Column(Integer, primary_key=True)
-    fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
-    arquivo = Column(String, nullable=False)
-    numero_mtr = Column(String)
-    gerador_razao = Column(String); gerador_cnpj = Column(String)
-    gerador_municipio = Column(String); gerador_uf = Column(String)
-    gerador_data_emissao = Column(Date, nullable=True)
-    transportador_razao = Column(String); transportador_cnpj = Column(String)
-    transportador_data_transporte = Column(Date, nullable=True)
-    destinador_razao = Column(String); destinador_cnpj = Column(String)
-    destinador_data_recebimento = Column(Date, nullable=True)
-    codigo_ibama_denom = Column(String)
-    estado_fisico = Column(String); classe = Column(String); acondicionamento = Column(String)
-    qtd_original = Column(String); und_original = Column(String)
-    qtd_kg = Column(Float)
-    dados_raw = Column(JSON)
-    # Escopo 3
-    tipo_residuo = Column(String)
-    destinacao = Column(String)
-    fator_tco2e_por_ton = Column(Float)
-    emissoes_tco2e = Column(Float)
-    cdf_count = Column(Integer, default=0)
-    created_at = Column(Date, server_default=func.current_date())
-    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
-    updated_by = Column(String(150))
-    fornecedor = relationship("Fornecedor", back_populates="mtrs")
-    cdfs = relationship("CDF", back_populates="mtr", cascade="all, delete-orphan")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-class CDF(Base):
-    __tablename__="cdfs"
-    id = Column(Integer, primary_key=True)
-    mtr_id = Column(Integer, ForeignKey('mtrs.id', ondelete="CASCADE"), nullable=False)
-    arquivo = Column(String, nullable=False)
-    data_emissao = Column(Date, nullable=True)
-    observacao = Column(String)
-    created_at = Column(Date, server_default=func.current_date())
-    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
-    updated_by = Column(String(150))
-    mtr = relationship("MTR", back_populates="cdfs")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-# ===== Fatores de Emissão (tabela SQL editável) =====
-class FatorEmissao(Base):
-    __tablename__="fatores_emissao"
-    id = Column(Integer, primary_key=True)
-    tipo_residuo = Column(String, nullable=False)
-    destinacao = Column(String, nullable=False)
-    fator_tco2e_por_ton = Column(Float, nullable=False)
-    fonte = Column(String)
-    ano_ref = Column(Integer)
-    __table_args__=(UniqueConstraint('tipo_residuo','destinacao',name='uq_tipo_destinacao'),)
-
-# =========================
-#     SEGURANÇA / USUÁRIO
-# =========================
-def hash_password(p:str)->str: return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
-def verify_password(p:str,h:str)->bool:
-    try: return bcrypt.checkpw(p.encode(), h.encode())
-    except Exception: return False
-
-def get_user_by_username(db:Session, username:str)->User|None:
-    return db.query(User).filter(User.username==username).first()
-
-def create_user(db:Session, username:str, password:str, role:RoleEnum)->User:
-    u=User(username=username, password_hash=hash_password(password), role=role)
-    db.add(u); db.commit(); db.refresh(u); return u
-
-# =========================
-#      MIGRAÇÃO/SEED
-# =========================
-def run_light_migrations():
-    Base.metadata.create_all(bind=engine)
-
-def seed_users_and_factors():
-    with SessionLocal() as db:
-        if not get_user_by_username(db, "Eduardo"):
-            create_user(db, "Eduardo", "Capitu", RoleEnum.admin)
-    SEED = {
-        "Plástico": {
-            "Incineração c/ recuperação energética": 2.9,
-            "Incineração s/ recuperação energética": 3.1,
-            "Aterro": 0.1,
-            "Reciclagem": -0.7,
-        },
-        "Papel": {
-            "Incineração c/ recuperação energética": 1.2,
-            "Aterro": 1.9,
-            "Reciclagem": -1.0,
-            "Compostagem": 0.1,
-        },
-        "Orgânico": {
-            "Compostagem": 0.1,
-            "Aterro": 1.2,
-            "Digestão anaeróbia": -0.2,
-        },
-        "Madeira": {
-            "Reciclagem": -0.4,
-            "Incineração c/ recuperação energética": 0.6,
-            "Aterro": 0.3,
-        },
-        "Metais": {
-            "Reciclagem": -1.5,
-            "Aterro": 0.05,
-        },
-        "Vidro": {
-            "Reciclagem": -0.3,
-            "Aterro": 0.02,
-        },
-        "Misto/Outros": {
-            "Aterro": 0.3,
-            "Incineração c/ recuperação energética": 1.5,
-            "Reciclagem": -0.2,
-        },
-    }
-    with SessionLocal() as db:
-        cnt = db.query(func.count(FatorEmissao.id)).scalar() or 0
-        if cnt == 0:
-            for tipo, dests in SEED.items():
-                for dest, fator in dests.items():
-                    db.add(FatorEmissao(
-                        tipo_residuo=tipo,
-                        destinacao=dest,
-                        fator_tco2e_por_ton=float(fator),
-                        fonte="Seed inicial",
-                        ano_ref=None
-                    ))
-            db.commit()
-
-# =========================
-#   FATORES (helpers DB)
-# =========================
-def listar_tipos_residuo(db:Session)->list[str]:
-    q = db.query(FatorEmissao.tipo_residuo).distinct().order_by(FatorEmissao.tipo_residuo.asc()).all()
-    tipos=[r[0] for r in q]
-    if "Misto/Outros" not in tipos: tipos.append("Misto/Outros")
-    return tipos
-
-def listar_destinos_para_tipo(db:Session, tipo:str)->list[str]:
-    q = db.query(FatorEmissao.destinacao).filter(FatorEmissao.tipo_residuo==tipo).distinct().order_by(FatorEmissao.destinacao.asc()).all()
-    dests=[r[0] for r in q]
-    if not dests:
-        q2 = db.query(FatorEmissao.destinacao).filter(FatorEmissao.tipo_residuo=="Misto/Outros").distinct().all()
-        dests=[r[0] for r in q2]
-    return dests
-
-def obter_fator(db:Session, tipo:str, destino:str)->float|None:
-    fe = db.query(FatorEmissao).filter(
-        FatorEmissao.tipo_residuo==tipo,
-        FatorEmissao.destinacao==destino
-    ).first()
-    return fe.fator_tco2e_por_ton if fe else None
-
-# =========================
-#   PARSER DA MTR (PDF)
-# =========================
-def _load_pdf_text_all_pages(pdf_path:str) -> str:
-    """
-    Concatena o texto de todas as páginas, lidando com páginas sem OCR.
-    """
-    if not HAVE_PDFPLUMBER:
-        raise RuntimeError("pdfplumber não está instalado.")
-    texts=[]
-    with pdfplumber.open(pdf_path) as pdf:
-        for p in pdf.pages:
-            try:
-                t = p.extract_text() or ""
-            except Exception:
-                t = ""
-            texts.append(t)
-    full = "\n".join(texts).strip()
-    return full
-
-def _find(pattern, src, flags=0):
-    m = re.search(pattern, src, flags)
-    return m.group(1).strip() if m else None
-
-def extract_pdf_data(pdf_path:str)->dict:
-    """
-    Parser tolerante ao layout do MTR (inclui formato do exemplo enviado).
-    - Procura MTR nº
-    - Extrai blocos de Gerador/Transportador/Destinador quando possível
-    - Na seção de resíduos, procura linha de código 'NNNNNN-...' e pares 'Qtde Unid'
-    """
-    dados={}
-    try:
-        text = _load_pdf_text_all_pages(pdf_path)
-
-        # --- MTR nº (aceita variações: nº, n°, número)
-        mtr_match = re.search(r"MTR\s*(?:n[\W_]*[ºo°]?|n[uú]mero)?\s*[:\-]?\s*([0-9]{6,})", text, flags=re.IGNORECASE)
-        dados["MTR - Número"] = (mtr_match.group(1).strip() if mtr_match else "N/A")
-
-        # --- Gerador
-        g0=text.find("Identificação do Gerador"); g1=text.find("Observações do Gerador")
-        generator = text[g0:g1] if (g0!=-1 and g1!=-1 and g1>g0) else text
-        dados["Gerador - Razão Social"] = _find(r"Identificação do Gerador.*?Razão Social:\s*(.*)", generator, re.IGNORECASE|re.DOTALL) or \
-                                          _find(r"Razão Social:\s*(.*)", generator)
-        dados["Gerador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", generator)
-        dados["Gerador - Data da emissão"] = _find(r"Data da emissão:\s*(\d{2}/\d{2}/\d{4})", text)
-        dados["Gerador - Município"] = _find(r"Município:\s*([A-ZÇÃÕÂÊÉÍÓÚ\s]+)\s*UF:", generator)
-        dados["Gerador - UF"] = _find(r"UF:\s*([A-Z]{2})", generator)
-
-        # --- Transportador
-        t0=text.find("Identificação do Transportador"); t1=text.find("Identificação do Destinador")
-        transport = text[t0:t1] if (t0!=-1 and t1!=-1 and t1>t0) else text
-        dados["Transportador - Razão Social"] = _find(r"Identificação do Transportador.*?Razão Social:\s*(.*)", transport, re.IGNORECASE|re.DOTALL) or \
-                                                _find(r"Razão Social:\s*(.*)", transport)
-        dados["Transportador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", transport)
-        dados["Transportador - Data do transporte"] = _find(r"Data do transporte:\s*(\d{2}/\d{2}/\d{4})", text)
-
-        # --- Destinador
-        d0=text.find("Identificação do Destinador"); d1=text.find("Identificação dos Resíduos")
-        destin = text[d0:d1] if (d0!=-1 and d1!=-1 and d1>d0) else text
-        dados["Destinador - Razão Social"] = _find(r"Identificação do Destinador.*?Razão Social:\s*(.*)", destin, re.IGNORECASE|re.DOTALL) or \
-                                             _find(r"Razão Social:\s*(.*)", destin)
-        dados["Destinador - CPF/CNPJ"] = _find(r"CPF/CNPJ:\s*([\d\.\-\/]+)", destin)
-        dados["Destinador - Data do recebimento"] = _find(r"Data do recebimento:\s*(\d{2}/\d{2}/\d{4})", text)
-
-        # --- Resíduos
-        waste_start = text.find("Identificação dos Resíduos")
-        waste_info_raw = text[waste_start:] if waste_start!=-1 else text
-
-        # Código IBAMA + denominação (ex.: 200301-Outros resíduos ...)
-        m_code = re.search(r"\b(\d{6})\s*[-–]\s*([^\n]+)", waste_info_raw)
-        if m_code:
-            dados["Resíduos - Código IBAMA e Denominação"] = f"{m_code.group(1)}-{m_code.group(2).strip()}"
-        else:
-            dados["Resíduos - Código IBAMA e Denominação"] = ""
-
-        # Classe (ex.: CLASSE II A) e estado físico (ex.: SOLIDO)
-        m_estado = re.search(r"\b(S[ÓO]LID[OA]|L[ÍI]QUID[OA]|GASOS[OA])\b", waste_info_raw, re.IGNORECASE)
-        dados["Resíduos - Estado Físico"] = (m_estado.group(1).upper() if m_estado else "")
-        m_class = re.search(r"\bCLASSE\s+([IVX]+(?:\s*[AB])?)\b", waste_info_raw, re.IGNORECASE)
-        dados["Resíduos - Classe"] = (m_class.group(1).upper() if m_class else "")
-
-        # Acondicionamento (ex.: CAÇAMBA FECHADA)
-        m_acond = re.search(r"\b(CA[ÇC]AMBA\s+[A-Z ]+|BOMBONA|TAMBOR|BIG\s*BAG|SACO\s*PL[ÁA]STICO)\b", waste_info_raw, re.IGNORECASE)
-        dados["Resíduos - Acondicionamento"] = (m_acond.group(1).strip().upper() if m_acond else "")
-
-        # Quantidade e Unidade — tenta padrão "0,4800 TON" primeiro (compatível com o exemplo)
-        m_qty_inline = re.search(r"(\d{1,3}(?:\.\d{3})*,\d+|\d+,\d+)\s*([A-Za-z]{2,})", waste_info_raw)
-        if m_qty_inline:
-            dados["Resíduos - Qtde"] = m_qty_inline.group(1).strip()
-            dados["Resíduos - Unidade"] = m_qty_inline.group(2).strip().upper()
-        else:
-            # fallbacks: "Qtde: NNN KG" ou "Peso: NNN KG"
-            m_qty = re.search(r"Qtde[:\s]+([0-9\.\,]+)\s*([A-Za-z]+)", waste_info_raw, re.IGNORECASE)
-            m_qty2 = re.search(r"Peso[:\s]+([0-9\.\,]+)\s*([A-Za-z]+)", waste_info_raw, re.IGNORECASE)
-            if m_qty:
-                dados["Resíduos - Qtde"] = m_qty.group(1).strip()
-                dados["Resíduos - Unidade"] = m_qty.group(2).strip().upper()
-            elif m_qty2:
-                dados["Resíduos - Qtde"] = m_qty2.group(1).strip()
-                dados["Resíduos - Unidade"] = m_qty2.group(2).strip().upper()
-            else:
-                dados["Resíduos - Qtde"] = ""
-                dados["Resíduos - Unidade"] = ""
-
-    except Exception as e:
-        st.error(f"Falha ao ler PDF (parser): {Path(pdf_path).name} — {e}")
-        st.caption("Dica: verifique se o PDF possui texto (OCR) e formatação esperada.")
-        dados.setdefault("MTR - Número", "N/A")
-        for k in ("Gerador - Razão Social","Gerador - CPF/CNPJ","Gerador - Data da emissão","Gerador - Município","Gerador - UF",
-                  "Transportador - Razão Social","Transportador - CPF/CNPJ","Transportador - Data do transporte",
-                  "Destinador - Razão Social","Destinador - CPF/CNPJ","Destinador - Data do recebimento",
-                  "Resíduos - Código IBAMA e Denominação","Resíduos - Qtde","Resíduos - Unidade",
-                  "Resíduos - Estado Físico","Resíduos - Classe","Resíduos - Acondicionamento"):
-            dados.setdefault(k, "")
-    return dados
-
-def extract_and_normalize_mtr(pdf_path:str)->dict:
-    d=extract_pdf_data(pdf_path)
-    qtd=to_float(d.get("Resíduos - Qtde") or "")
-    und=(d.get("Resíduos - Unidade") or "")
-    qtd_kg=unidade_to_kg(qtd, und)
-    return {
-        "numero_mtr": d.get("MTR - Número") or None,
-        "gerador_razao": d.get("Gerador - Razão Social") or None,
-        "gerador_cnpj": so_digitos(d.get("Gerador - CPF/CNPJ") or ""),
-        "gerador_municipio": d.get("Gerador - Município") or None,
-        "gerador_uf": d.get("Gerador - UF") or None,
-        "gerador_data_emissao": parse_data_br(d.get("Gerador - Data da emissão") or ""),
-        "transportador_razao": d.get("Transportador - Razão Social") or None,
-        "transportador_cnpj": so_digitos(d.get("Transportador - CPF/CNPJ") or ""),
-        "transportador_data_transporte": parse_data_br(d.get("Transportador - Data do transporte") or ""),
-        "destinador_razao": d.get("Destinador - Razão Social") or None,
-        "destinador_cnpj": so_digitos(d.get("Destinador - CPF/CNPJ") or ""),
-        "destinador_data_recebimento": parse_data_br(d.get("Destinador - Data do recebimento") or ""),
-        "codigo_ibama_denom": d.get("Resíduos - Código IBAMA e Denominação") or None,
-        "estado_fisico": d.get("Resíduos - Estado Físico") or None,
-        "classe": d.get("Resíduos - Classe") or None,
-        "acondicionamento": d.get("Resíduos - Acondicionamento") or None,
-        "qtd_original": d.get("Resíduos - Qtde") or None,
-        "und_original": und or None,
-        "qtd_kg": qtd_kg,
-        "dados_raw": _make_json_safe(d)  # <- garante JSON serializable
-    }
-
-# =========================
-# AUDITORIA v2 (0–2 ponderado)
-# =========================
-AREAS = {
-    "licenciamento": {"titulo":"Licenciamento e Conformidade Legal","peso":0.30,
-        "perguntas":["Licença válida?","Ocorrência de autuações?","Condição e registros de condicionantes?"]},
-    "gestao": {"titulo":"Gestão Ambiental","peso":0.25,
-        "perguntas":["SGA/ISO 14001 ou equivalente?","Procedimentos escritos (segregação/transporte/destino)?","Indicadores e registros?"]},
-    "infraestrutura": {"titulo":"Infraestrutura e Operação","peso":0.20,
-        "perguntas":["Armazenamento adequado (coberto/impermeável)?","Plano de contingência?","Manutenção de frota/emissões?"]},
-    "seguranca": {"titulo":"Saúde, Segurança e Trabalhadores","peso":0.15,
-        "perguntas":["Trabalhadores registrados?","EPIs entregues/usados (evidências)?","Treinamentos periódicos de SSMA?"]},
-    "desempenho": {"titulo":"Relacionamento e Desempenho","peso":0.10,
-        "perguntas":["Cumpre prazos?","Trata N/C com plano?","Relatórios/MTRs regulares?"]},
-}
-OPCOES = ["Não atende (0)","Atende parcialmente (1)","Atende plenamente (2)"]
-
-def calcular_score_v2(respostas_v2:dict)->tuple[int,dict]:
-    area_pct={}; total=0.0
-    for k,meta in AREAS.items():
-        vals=[]
-        for i in range(1, len(meta["perguntas"])+1):
-            v=int(respostas_v2.get(f"{k}.{i}",0)); v=max(0,min(2,v)); vals.append(v)
-        media=(mean(vals) if vals else 0.0)
-        pct=(media/2.0)*100.0; area_pct[k]=pct
-        total += pct*meta["peso"]
-    score=int(round(total)); return score, area_pct
-
-def classificar(score:int)->str:
-    if score>=80: return "Conforme/Adequado"
-    if score>=60: return "Parcialmente Conforme"
-    return "Não Conforme/Inadequado"
-
-# =============== CHECKLIST IQA (baseado na planilha) ===============
-CHECKLIST_ITEMS = [
-    {"chave":"q1_iso","titulo":"A empresa possui sistema de gestão ISO 14001?",
-     "opcoes":{"NÃO":0, "EM PROCESSO DE CERTIFICAÇÃO":1, "SIM":2}, "max":2},
-    {"chave":"q2_licenca_orgaos","titulo":"A empresa possui licença do órgão ambiental responsável? (Licença Instalação/Operação/polícia federal/CADRI/Outorga)",
-     "opcoes":{"NÃO":0, "SÓ PROTOCOLO":1, "SIM":3}, "max":3},
-    {"chave":"q3_condicionantes","titulo":"Há evidências de que as restrições/condicionantes da licença estão cumpridas?",
-     "opcoes":{"NÃO":0, "PARCIALMENTE":1, "SIM":2}, "max":2},
-    {"chave":"q4_autuacoes","titulo":"A empresa sofreu alguma autuação ambiental nos últimos anos?",
-     "opcoes":{"SIM":0, "NÃO":2}, "max":2},
-    {"chave":"q5_visitas_laudos","titulo":"Há evidências de visitas fiscalizatórias do órgão ambiental? (últimos 3 laudos de inspeção)",
-     "opcoes":{"NÃO":0, "SIM":1}, "max":1},
-    {"chave":"q6_documentacao_sga","titulo":"Existe estrutura de documentação do sistema (manual, procedimentos, instruções, controles de registros)?",
-     "opcoes":{"NÃO":0, "SIM, PORÉM SEM REGISTROS":1, "SIM":2}, "max":2},
-    {"chave":"q7_politica_objetivos","titulo":"Possui Política (Qualidade, Meio Ambiente, Segurança) com objetivos e metas?",
-     "opcoes":{"NÃO":0, "SIM":1}, "max":1},
-    {"chave":"q8_aspectos_controles","titulo":"Levantou aspectos/impactos e controla os significativos?",
-     "opcoes":{"NÃO":0, "SIM, PORÉM SEM OS CONTROLES":1, "SIM":2}, "max":2},
-    {"chave":"q9_espaco_fisico","titulo":"Espaço físico é suficiente para receber a quantidade de materiais gerados?",
-     "opcoes":{"NÃO":0, "SIM":1}, "max":1},
-    {"chave":"q10_ete","titulo":"Possui ETE para tratar efluentes líquidos?",
-     "opcoes":{"NÃO":0, "SIM":3}, "max":3},
-    {"chave":"q11_analises_ete","titulo":"Se ETE existir, realiza análises do efluente tratado?",
-     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
-    {"chave":"q12_area_coberta","titulo":"Área de armazenamento de resíduos é coberta?",
-     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
-    {"chave":"q13_area_impermeavel","titulo":"Área de armazenamento de resíduos é impermeabilizada?",
-     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
-    {"chave":"q14_frota_condicao","titulo":"Caminhões/caçambas em bom estado? Controle de fumaça preta/MOPP?",
-     "opcoes":{"NÃO":0, "ALGUNS":1, "TODOS":2}, "max":2},
-    {"chave":"q15_ibama","titulo":"Possui licença/registro no IBAMA (CTF/APP)?",
-     "opcoes":{"NÃO":0, "PROTOCOLO DE ENTRADA":1, "SIM":2}, "max":2},
-    {"chave":"q16_destinacao_correta","titulo":"Destina adequadamente os resíduos sólidos, quando gera?",
-     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
-    {"chave":"q17_avcb_alvara","titulo":"Possui AVCB e alvará municipal de funcionamento?",
-     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
-    {"chave":"q18_registros_func","titulo":"Todos os funcionários possuem registros?",
-     "opcoes":{"NÃO":0, "SIM":1}, "max":1},
-    {"chave":"q19_epi_uniforme","titulo":"Funcionários trabalham uniformizados e com EPIs pertinentes?",
-     "opcoes":{"NÃO":0, "SIM":2}, "max":2},
-    {"chave":"q20_pontualidade","titulo":"Atende às chamadas para retiradas com pontualidade?",
-     "opcoes":{"NÃO":0, "PARCIALMENTE":1, "SIM":2}, "max":2},
-    {"chave":"q21_treinamentos_ssma","titulo":"Recebem treinamentos frequentes de saúde/segurança/meio ambiente?",
-     "opcoes":{"NÃO":0, "SIM, COM POUCA FREQUÊNCIA":1, "SIM, FREQUENTEMENTE":3}, "max":3},
-]
-
-def calcular_iqa(respostas_dict):
-    obt, maxp = 0, 0
-    for item in CHECKLIST_ITEMS:
-        maxp += item["max"]
-        val = respostas_dict.get(item["chave"])
-        if isinstance(val, int):
-            obt += max(0, min(item["max"], val))
-    iqa = (obt / maxp * 100.0) if maxp > 0 else 0.0
-    return obt, maxp, iqa
-
-def classificar_iqa(iqa_pct):
-    if iqa_pct >= 76:
-        return {"classe":"Excelente", "condicionamento":"Condicionado", "reavaliacao":"2 anos",
-                "acao":"Manter e melhorar o nível alcançado", "status_conformidade":"Conforme"}
-    elif iqa_pct >= 51:
-        return {"classe":"Bom", "condicionamento":"Condicionado", "reavaliacao":"1 ano",
-                "acao":"Eliminar alguns pontos fracos", "status_conformidade":"Conforme"}
-    elif iqa_pct >= 21:
-        return {"classe":"Regular", "condicionamento":"Desqualificado", "reavaliacao":"6 meses",
-                "acao":"Executar melhorias consideráveis", "status_conformidade":"Não conforme"}
-    else:
-        return {"classe":"Desqualificado", "condicionamento":"Desqualificado", "reavaliacao":"-",
-                "acao":"Bloqueio de cadastro", "status_conformidade":"Não conforme"}
-
-# ========================= INICIALIZAÇÃO =========================
-run_light_migrations()
-seed_users_and_factors()
-
-if "logado" not in st.session_state:
-    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
-if "sel_forn_id" not in st.session_state:
-    st.session_state.sel_forn_id=None
-
-# =========================
-#         LOGIN
-# =========================
-def pagina_login():
-    st.title("Sistema de Gerenciamento de Fornecedores - Login")
-    with st.form("form_login"):
-        usuario = st.text_input("Usuário").strip()
-        senha = st.text_input("Senha", type="password").strip()
-        enviar = st.form_submit_button("Entrar")
-    if enviar:
-        with SessionLocal() as db:
-            u=get_user_by_username(db, usuario)
-            if u and verify_password(senha, u.password_hash):
-                st.session_state.logado=True
-                st.session_state.usuario=u.username
-                st.session_state.role=u.role.value
-                st.success(f"Bem-vindo, {u.username}!")
-                _safe_rerun()
-            else:
-                st.error("Usuário ou senha incorretos.")
-
-if not st.session_state.logado:
-    pagina_login()
-    st.stop()
-
-# =========================
-#          MENU
-# =========================
-if st.session_state.role=="Leitor":
-    menu = st.sidebar.selectbox("Menu", ["Overview","Sair"])
-else:
-    menu = st.sidebar.selectbox(
-        "Menu",
-        ["Overview","Cadastrar Fornecedor","Visualizar Fornecedores","MTRs","Fatores de Emissão","Admin (Usuários)","Sair"]
+    images: Mapped[List["ItemImage"]] = relationship(
+        "ItemImage",
+        back_populates="item",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ItemImage.id.asc()",
     )
-st.sidebar.title(f"Usuário: {st.session_state.usuario} ({st.session_state.role})")
 
-# =========================
-#        KPIs / HELPERS
-# =========================
-def documentos_status(docs)->tuple[int,int]:
-    hoje=date.today(); limite=hoje+timedelta(days=30)
-    vencidos=sum(1 for d in docs if d.data_validade and d.data_validade<hoje)
-    a_vencer=sum(1 for d in docs if d.data_validade and hoje<=d.data_validade<=limite)
-    return vencidos, a_vencer
-
-def kpis_gerais(db:Session)->dict:
-    total_fornecedores=db.query(Fornecedor).count()
-    conformes=db.query(Auditoria).filter(Auditoria.classificado=="Conforme/Adequado").count()
-    parcialmente=db.query(Auditoria).filter(Auditoria.classificado=="Parcialmente Conforme").count()
-    nao_conformes=db.query(Auditoria).filter(Auditoria.classificado=="Não Conforme/Inadequado").count()
-    forn_com_contrato=db.query(Fornecedor).join(Contrato).distinct().count()
-    forn_sem_contrato=total_fornecedores - forn_com_contrato
-    docs=db.query(Documento).all()
-    vencidos,a_vencer=documentos_status(docs)
-    mtr_total_kg=float(db.query(func.coalesce(func.sum(MTR.qtd_kg),0.0)).scalar() or 0.0)
-    mtr_por_forn=db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.qtd_kg),0.0))\
-        .join(MTR, MTR.fornecedor_id==Fornecedor.id, isouter=True).group_by(Fornecedor.id).all()
-    total_tco2e=float(db.query(func.coalesce(func.sum(MTR.emissoes_tco2e),0.0)).scalar() or 0.0)
-    tco2e_por_forn=db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.emissoes_tco2e),0.0))\
-        .join(MTR, MTR.fornecedor_id==Fornecedor.id, isouter=True).group_by(Fornecedor.id).all()
-    total_mtrs=int(db.query(MTR).count())
-    mtrs_com_cdf=int(db.query(MTR).filter(MTR.cdf_count>0).count())
-    return {
-        "total_fornecedores": total_fornecedores,
-        "conformes": conformes, "parcial": parcialmente, "nao_conformes": nao_conformes,
-        "forn_com_contrato": forn_com_contrato, "forn_sem_contrato": forn_sem_contrato,
-        "docs_vencidos": vencidos, "docs_a_vencer": a_vencer,
-        "mtr_total_kg": mtr_total_kg, "mtr_por_forn":[(n,float(v or 0.0)) for n,v in mtr_por_forn],
-        "total_tco2e": total_tco2e, "tco2e_por_forn":[(n,float(v or 0.0)) for n,v in tco2e_por_forn],
-        "total_mtrs": total_mtrs, "mtrs_com_cdf": mtrs_com_cdf,
-    }
-
-# =========================
-#           PÁGINAS
-# =========================
-
-
-# ---- Overview ----
-if menu=="Overview":
-    st.header("📊 Overview — Conformidade & Riscos de Fornecedores")
-    # ====== Parâmetros de visão ======
-    colp1, colp2, colp3 = st.columns([0.35, 0.35, 0.3])
-    with colp1:
-        janela_dias = st.slider("Janela de alerta (dias)", 7, 120, 45, help="Período futuro usado para 'a vencer'.")
-    with colp2:
-        crit_only = st.toggle("Mostrar apenas itens críticos", value=False, help="Filtra as tabelas para focar nos casos urgentes/atrasados.")
-    with colp3:
-        st.caption(f"Usuário: **{st.session_state.usuario}**  •  Perfil: **{st.session_state.role}**")
-
-    hoje = date.today()
-    limite = hoje + timedelta(days=janela_dias)
-
-    # ====== KPIs tradicionais (mantidos) ======
-    with SessionLocal() as db:
-        k = kpis_gerais(db)
-
-    fig_total = px.pie(
-        names=["Conforme/Adequado","Parcialmente Conforme","Não Conforme/Inadequado"],
-        values=[k["conformes"], k["parcial"], k["nao_conformes"]],
-        title="Classificação de Auditoria (IQA v2)",
-        color=["Conforme/Adequado","Parcialmente Conforme","Não Conforme/Inadequado"],
-        color_discrete_map={"Conforme/Adequado":"green","Parcialmente Conforme":"orange","Não Conforme/Inadequado":"red"},
+    __table_args__ = (
+        Index("ix_items_name", "name"),
+        Index("ix_items_category", "category"),
+        Index("ix_items_color_primary", "color_primary"),
+        Index("ix_items_season", "season"),
+        Index("ix_items_occasion", "occasion"),
+        Index("ix_items_status", "status"),
     )
-    fig_contrato = px.pie(
-        names=["Com Contrato","Sem Contrato"],
-        values=[k["forn_com_contrato"], k["forn_sem_contrato"]],
-        title="Situação Contratual",
-        color=["Com Contrato","Sem Contrato"],
-        color_discrete_map={"Com Contrato":"green","Sem Contrato":"red"},
+
+class ItemImage(Base):
+    __tablename__ = "item_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+    item: Mapped["Item"] = relationship("Item", back_populates="images")
+
+    __table_args__ = (Index("ix_item_images_item_id", "item_id"),)
+
+class Look(Base):
+    __tablename__ = "looks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+
+    season: Mapped[str] = mapped_column(String(10), nullable=False)
+    occasion: Mapped[str] = mapped_column(String(10), nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items: Mapped[List["LookItem"]] = relationship(
+        "LookItem",
+        back_populates="look",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
-    c1,c2 = st.columns(2)
-    with c1: st.plotly_chart(fig_total, use_container_width=True)
-    with c2: st.plotly_chart(fig_contrato, use_container_width=True)
+    wear_logs: Mapped[List["WearLog"]] = relationship(
+        "WearLog",
+        back_populates="look",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
-    # ====== Coleta de dados para alertas ======
-    with SessionLocal() as db:
-        # Documentos + Fornecedor
-        docs_rows = db.query(Documento, Fornecedor.nome, Fornecedor.id).join(Fornecedor, Documento.fornecedor_id==Fornecedor.id).all()
-        # Contratos + Fornecedor
-        ctr_rows = db.query(Contrato, Fornecedor.nome, Fornecedor.id).join(Fornecedor, Contrato.fornecedor_id==Fornecedor.id).all()
-        # Auditorias (para status geral)
-        aud_rows = db.query(Auditoria, Fornecedor.nome, Fornecedor.id).join(Fornecedor, Auditoria.fornecedor_id==Fornecedor.id).all()
+    __table_args__ = (Index("ix_looks_name", "name"),)
 
-    # Documentos
-    docs_vencidos = []
-    docs_a_vencer = []
-    for d, forn_nome, forn_id in docs_rows:
-        if d.data_validade:
-            if d.data_validade < hoje:
-                docs_vencidos.append((forn_id, forn_nome, d))
-            elif hoje <= d.data_validade <= limite:
-                docs_a_vencer.append((forn_id, forn_nome, d))
+class LookItem(Base):
+    __tablename__ = "look_items"
 
-    # Contratos
-    contratos_vencidos = []
-    contratos_a_vencer = []
-    for c, forn_nome, forn_id in ctr_rows:
-        if c.data_validade:
-            if c.data_validade < hoje:
-                contratos_vencidos.append((forn_id, forn_nome, c))
-            elif hoje <= c.data_validade <= limite:
-                contratos_a_vencer.append((forn_id, forn_nome, c))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    look_id: Mapped[int] = mapped_column(ForeignKey("looks.id", ondelete="CASCADE"), nullable=False)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="RESTRICT"), nullable=False)
+    slot: Mapped[str] = mapped_column(String(15), nullable=False)
 
-    # Fornecedores críticos (qualquer documento/contrato vencido)
-    forn_docs_venc = {fid for fid, _, _ in docs_vencidos}
-    forn_ctr_venc = {fid for fid, _, _ in contratos_vencidos}
-    fornecedores_criticos = forn_docs_venc.union(forn_ctr_venc)
+    look: Mapped["Look"] = relationship("Look", back_populates="items")
+    item: Mapped["Item"] = relationship("Item")
 
-    # Fornecedores com atenção (a vencer na janela)
-    forn_docs_av = {fid for fid, _, _ in docs_a_vencer}
-    forn_ctr_av = {fid for fid, _, _ in contratos_a_vencer}
-    fornecedores_atencao = forn_docs_av.union(forn_ctr_av)
+    __table_args__ = (
+        UniqueConstraint("look_id", "slot", name="uq_look_slot"),
+        Index("ix_look_items_look_id", "look_id"),
+        Index("ix_look_items_item_id", "item_id"),
+    )
 
-    # Auditorias por status (mapa auxiliar)
-    aud_status = {}
-    for a, forn_nome, forn_id in aud_rows:
-        aud_status[forn_id] = a.classificado if a else "N/A"
+class WearLog(Base):
+    __tablename__ = "wear_log"
 
-    # ====== Cartões de risco ======
-    def badge(label, val, ok=True):
-        color = "#2e7d32" if ok else "#c62828"
-        bg = "#e8f5e9" if ok else "#ffebee"
-        return f"<div style='padding:12px;border-radius:10px;background:{bg};margin-bottom:10px;'>"\
-               f"<span style='color:{color};font-weight:700;'>{label}:</span>"\
-               f"<span style='margin-left:8px;color:#111;font-weight:800;'>{val}</span></div>"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    look_id: Mapped[Optional[int]] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"), nullable=True)
 
-    colA, colB, colC, colD = st.columns(4)
-    with colA:
-        st.markdown(badge("Documentos vencidos", len(docs_vencidos), ok=False), unsafe_allow_html=True)
-    with colB:
-        st.markdown(badge(f"Docs a vencer (≤{janela_dias}d)", len(docs_a_vencer), ok=False), unsafe_allow_html=True)
-    with colC:
-        st.markdown(badge("Contratos vencidos", len(contratos_vencidos), ok=False), unsafe_allow_html=True)
-    with colD:
-        st.markdown(badge(f"Contratos a vencer (≤{janela_dias}d)", len(contratos_a_vencer), ok=False), unsafe_allow_html=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # ====== Gráficos de tendência ======
-    # 1) Itens a vencer por semana (docs + contratos)
-    if HAVE_PANDAS:
-        import pandas as pd
-        future_items = []
-        for fid, fn, d in docs_a_vencer:
-            future_items.append({"Fornecedor": fn, "Tipo": "Documento", "Data": d.data_validade, "Dias": (d.data_validade - hoje).days, "Detalhe": d.tipo})
-        for fid, fn, c in contratos_a_vencer:
-            future_items.append({"Fornecedor": fn, "Tipo": "Contrato", "Data": c.data_validade, "Dias": (c.data_validade - hoje).days, "Detalhe": "Contrato"})
-        df_future = pd.DataFrame(future_items)
-        if not df_future.empty:
-            df_future["Semana"] = df_future["Data"].apply(lambda x: x.isocalendar()[1])
-            grp = df_future.groupby(["Semana","Tipo"]).size().reset_index(name="Qtde")
-            if not grp.empty:
-                fig_line = px.bar(grp, x="Semana", y="Qtde", color="Tipo", title=f"Itens a vencer por semana (próx. {janela_dias} dias)")
-                st.plotly_chart(fig_line, use_container_width=True)
-            else:
-                st.caption("Sem itens a vencer na janela para exibir por semana.")
-    else:
-        st.caption("Instale pandas para gráficos de tendência semanais.")
+    look: Mapped[Optional["Look"]] = relationship("Look", back_populates="wear_logs")
 
-    # 2) Fornecedores com maior número de pendências (vencidos)
-    if HAVE_PANDAS:
-        import pandas as pd
-        pend = []
-        for fid, fn, d in docs_vencidos:
-            pend.append({"Fornecedor": fn, "Item": "Documento"})
-        for fid, fn, c in contratos_vencidos:
-            pend.append({"Fornecedor": fn, "Item": "Contrato"})
-        df_pend = pd.DataFrame(pend)
-        if not df_pend.empty:
-            top = df_pend.groupby("Fornecedor").size().reset_index(name="Pendências")
-            if not top.empty and "Pendências" in top.columns:
-                top = top.sort_values("Pendências", ascending=False).head(10)
-            fig_top = px.bar(top, x="Fornecedor", y="Pendências", title="TOP fornecedores com pendências vencidas")
-            st.plotly_chart(fig_top, use_container_width=True)
+    __table_args__ = (
+        Index("ix_wear_log_date", "date"),
+        Index("ix_wear_log_look_id", "look_id"),
+    )
 
-    # ====== Tabelas operacionais ======
-    def _table_docs(rows, titulo, critico=False):
-        st.markdown(f"### {titulo}")
-        if not rows:
-            st.info("Nenhum registro.")
-            return
-        data = []
-        for fid, fn, d in rows:
-            dias = (d.data_validade - hoje).days if d.data_validade else None
-            data.append({
-                "Fornecedor": fn,
-                "Tipo Documento": d.tipo,
-                "Início": d.data_inicio,
-                "Validade": d.data_validade,
-                "Dias para vencer": dias,
-                "Arquivo": Path(d.arquivo).name if d.arquivo else "-"
-            })
-        if HAVE_PANDAS:
-            import pandas as pd
-            df = pd.DataFrame(data)
-            if not df.empty:
-                sort_cols = [c for c in ["Dias para vencer","Fornecedor"] if c in df.columns]
-                if sort_cols:
-                    df = df.sort_values(sort_cols, na_position="last")
-            if crit_only:
-                df = df[df["Dias para vencer"].fillna(-999) <= 7] if not critico else df
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button(f"Baixar CSV — {titulo}", data=csv, file_name=f"{titulo.replace(' ','_')}.csv", mime="text/csv", use_container_width=True)
-        else:
-            for r in data[:200]:
-                st.write(r)
+def init_db() -> None:
+    Base.metadata.create_all(bind=ENGINE)
 
-    def _table_contratos(rows, titulo, critico=False):
-        st.markdown(f"### {titulo}")
-        if not rows:
-            st.info("Nenhum registro.")
-            return
-        data = []
-        for fid, fn, c in rows:
-            dias = (c.data_validade - hoje).days if c.data_validade else None
-            data.append({
-                "Fornecedor": fn,
-                "Assinatura": c.data_assinatura,
-                "Validade": c.data_validade,
-                "Dias para vencer": dias,
-                "Arquivo": Path(c.arquivo).name if c.arquivo else "-"
-            })
-        if HAVE_PANDAS:
-            import pandas as pd
-            df = pd.DataFrame(data)
-            if not df.empty:
-                sort_cols = [c for c in ["Dias para vencer","Fornecedor"] if c in df.columns]
-                if sort_cols:
-                    df = df.sort_values(sort_cols, na_position="last")
-            if crit_only:
-                df = df[df["Dias para vencer"].fillna(-999) <= 7] if not critico else df
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button(f"Baixar CSV — {titulo}", data=csv, file_name=f"{titulo.replace(' ','_')}.csv", mime="text/csv", use_container_width=True)
-        else:
-            for r in data[:200]:
-                st.write(r)
+init_db()
 
-    # Abas com foco operacional
-    t1, t2, t3, t4, t5 = st.tabs([
-        "📄 Docs vencidos",
-        f"⏳ Docs a vencer (≤{janela_dias}d)",
-        "📃 Contratos vencidos",
-        f"🗓️ Contratos a vencer (≤{janela_dias}d)",
-        "🚨 Fornecedores que exigem notificação"
-    ])
+# -----------------------------
+# Repos
+# -----------------------------
+def get_item_primary_path(item: Item) -> Optional[str]:
+    if not item.images:
+        return None
+    primary = next((im for im in item.images if im.is_primary), None) or item.images[0]
+    return primary.file_path
 
-    with t1:
-        _table_docs(docs_vencidos, "Documentos vencidos", critico=True)
+def item_tag_line(item: Item) -> str:
+    return f"{item.category} • {item.type or '—'} • {item.color_primary} • {item.season} • {item.occasion} • {item.status}"
 
-    with t2:
-        _table_docs(docs_a_vencer, f"Documentos a vencer (≤{janela_dias} dias)")
+def repo_list_distinct_types(s: Session) -> List[str]:
+    stmt = select(func.distinct(Item.type)).where(Item.type.isnot(None)).order_by(asc(Item.type))
+    rows = s.execute(stmt).scalars().all()
+    return [r for r in rows if r]
 
-    with t3:
-        _table_contratos(contratos_vencidos, "Contratos vencidos", critico=True)
+def repo_list_distinct_colors(s: Session) -> List[str]:
+    stmt = select(func.distinct(Item.color_primary)).order_by(asc(Item.color_primary))
+    rows = s.execute(stmt).scalars().all()
+    return [r for r in rows if r]
 
-    with t4:
-        _table_contratos(contratos_a_vencer, f"Contratos a vencer (≤{janela_dias} dias)")
+def repo_get_item(s: Session, item_id: int) -> Optional[Item]:
+    stmt = select(Item).where(Item.id == item_id).options(joinedload(Item.images))
+    return s.execute(stmt).scalars().first()
 
-    with t5:
-        # Regra simples: doc vencido OU contrato vencido => notificar imediatamente
-        # A vencer (≤janela) => programar notificação preventiva
-        coln1, coln2 = st.columns(2)
-        with coln1:
-            st.subheader("Notificação imediata (vencidos)")
-            lista_crit = []
-            for fid in sorted(fornecedores_criticos):
-                # Buscar nome na primeira ocorrência
-                nome = next((fn for (idc, fn, _) in docs_vencidos if idc==fid), None) \
-                    or next((fn for (idc, fn, _) in contratos_vencidos if idc==fid), None) \
-                    or f"Fornecedor #{fid}"
-                lista_crit.append({"Fornecedor": nome, "Status Auditoria": aud_status.get(fid, "N/A")})
-            if HAVE_PANDAS:
-                import pandas as pd
-                dfc = pd.DataFrame(lista_crit)
-                if not dfc.empty and "Fornecedor" in dfc.columns:
-                    dfc = dfc.sort_values("Fornecedor")
-                else:
-                    st.info("Nenhum fornecedor para notificação imediata.")
-                    dfc = pd.DataFrame(columns=["Fornecedor","Status Auditoria"])
-                st.dataframe(dfc, use_container_width=True, hide_index=True)
-                csv = dfc.to_csv(index=False).encode("utf-8")
-                st.download_button("Baixar CSV — Notificação imediata", data=csv, file_name="fornecedores_notificar_imediato.csv", mime="text/csv", use_container_width=True)
-            else:
-                for r in lista_crit[:200]:
-                    st.write(r)
+def repo_search_items(
+    s: Session,
+    text: str = "",
+    category: Optional[str] = None,
+    type_: Optional[str] = None,
+    color_primary: Optional[str] = None,
+    season: Optional[str] = None,
+    occasion: Optional[str] = None,
+    status: Optional[str] = None,
+    order_by: str = "recent",
+    limit: int = 500,
+) -> List[Item]:
+    stmt = select(Item).options(joinedload(Item.images))
 
-        with coln2:
-            st.subheader(f"Notificação preventiva (≤{janela_dias}d)")
-            lista_prev = []
-            for fid in sorted(fornecedores_atencao - fornecedores_criticos):
-                nome = next((fn for (idc, fn, _) in docs_a_vencer if idc==fid), None) \
-                    or next((fn for (idc, fn, _) in contratos_a_vencer if idc==fid), None) \
-                    or f"Fornecedor #{fid}"
-                lista_prev.append({"Fornecedor": nome, "Status Auditoria": aud_status.get(fid, "N/A")})
-            if HAVE_PANDAS:
-                import pandas as pd
-                dfp = pd.DataFrame(lista_prev)
-                if not dfp.empty and "Fornecedor" in dfp.columns:
-                    dfp = dfp.sort_values("Fornecedor")
-                else:
-                    st.info("Nenhum fornecedor para notificação preventiva.")
-                    dfp = pd.DataFrame(columns=["Fornecedor","Status Auditoria"])
-                st.dataframe(dfp, use_container_width=True, hide_index=True)
-                csv = dfp.to_csv(index=False).encode("utf-8")
-                st.download_button("Baixar CSV — Notificação preventiva", data=csv, file_name="fornecedores_notificar_preventivo.csv", mime="text/csv", use_container_width=True)
-            else:
-                for r in lista_prev[:200]:
-                    st.write(r)
-
-    st.markdown("---")
-    # ====== Visões ambientais (mantidas/ajustadas) ======
-    # kg por fornecedor (MTR)
-    st.markdown("### ♻️ Kg destinados por fornecedor (MTR)")
-    rows = [{"Fornecedor": n, "Kg_destinados": v} for n, v in k.get("mtr_por_forn", [])]
-    if rows:
-        if HAVE_PANDAS:
-            import pandas as pd
-            df = pd.DataFrame(rows)
-            if not df.empty and "Kg_destinados" in df.columns:
-                df = df.sort_values("Kg_destinados", ascending=False)
-            fig_bar = px.bar(df, x="Fornecedor", y="Kg_destinados", title="Total de kg por fornecedor (MTR)")
-        else:
-            xs = [r["Fornecedor"] for r in rows]; ys = [r["Kg_destinados"] for r in rows]
-            fig_bar = go.Figure(go.Bar(x=xs, y=ys)); fig_bar.update_layout(title="Total de kg por fornecedor (MTR)")
-        fig_bar.update_traces(marker_color="green")
-        st.plotly_chart(fig_bar, use_container_width=True)
-    else:
-        st.info("Sem dados de MTR por fornecedor para exibir.")
-
-    # tCO2e por fornecedor
-    st.markdown("### 🌫️ Emissões de Escopo 3 (resíduos) por fornecedor")
-    rows = [{"Fornecedor": n, "tCO2e": v} for n, v in k.get("tco2e_por_forn", [])]
-    if rows:
-        if HAVE_PANDAS:
-            import pandas as pd
-            df = pd.DataFrame(rows)
-            if not df.empty and "tCO2e" in df.columns:
-                df = df.sort_values("tCO2e", ascending=False)
-            fig_em = px.bar(df, x="Fornecedor", y="tCO2e", title="tCO₂e por fornecedor (resíduos)")
-        else:
-            xs = [r["Fornecedor"] for r in rows]; ys = [r["tCO2e"] for r in rows]
-            fig_em = go.Figure(go.Bar(x=xs, y=ys)); fig_em.update_layout(title="tCO₂e por fornecedor (resíduos)")
-        fig_em.update_traces(marker_color="red")
-        st.plotly_chart(fig_em, use_container_width=True)
-    else:
-        st.info("Sem dados de emissões por fornecedor para exibir.")
-
-
-# ---- Cadastrar Fornecedor ----
-if menu=="Cadastrar Fornecedor":
-    if st.session_state.role not in ("Admin","Auditor"):
-        st.error("Você não tem permissão para cadastrar fornecedores."); st.stop()
-    st.header("Cadastrar novo fornecedor")
-    with st.form("form_cadastro"):
-        nome=st.text_input("Nome do fornecedor")
-        cpf_cnpj=st.text_input("CPF ou CNPJ")
-        endereco=st.text_area("Endereço")
-        telefone=st.text_input("Telefone")
-        enviar=st.form_submit_button("Cadastrar")
-    if enviar:
-        if not nome or not cpf_cnpj: st.error("Nome e CPF/CNPJ são obrigatórios."); st.stop()
-        if not validar_cpf_cnpj(cpf_cnpj): st.error("CPF/CNPJ inválido."); st.stop()
-        with SessionLocal() as db:
-            dig=so_digitos(cpf_cnpj)
-            existe=db.query(Fornecedor).filter_by(cpf_cnpj=dig).first()
-            if existe: st.warning("Fornecedor já cadastrado.")
-            else:
-                f=Fornecedor(nome=nome.strip(), cpf_cnpj=dig, endereco=endereco.strip() if endereco else None,
-                             telefone=normalizar_telefone(telefone), updated_by=st.session_state.usuario)
-                db.add(f); db.commit()
-                st.success(f"Fornecedor '{f.nome}' cadastrado com sucesso!")
-
-# ---- Visualizar Fornecedores ----
-if menu=="Visualizar Fornecedores":
-    if st.session_state.role not in ("Admin","Auditor"):
-        st.error("Acesso restrito. Seu perfil é Leitor e possui acesso apenas ao Overview."); st.stop()
-    st.header("Fornecedores")
-    termo=st.text_input("Buscar por nome", key="busca_forn")
-    with SessionLocal() as db:
-        fornecedores=db.query(Fornecedor).options(
-            joinedload(Fornecedor.documentos),
-            joinedload(Fornecedor.auditoria),
-            joinedload(Fornecedor.planos_acao),
-            joinedload(Fornecedor.contratos),
-            joinedload(Fornecedor.mtrs).joinedload(MTR.cdfs)
-        )
-        if termo: fornecedores=fornecedores.filter(Fornecedor.nome.ilike(f"%{termo.strip()}%"))
-        fornecedores=fornecedores.order_by(Fornecedor.nome.asc()).all()
-    if not fornecedores: st.info("Nenhum fornecedor encontrado."); st.stop()
-
-    col_left, col_right = st.columns([0.35,0.65])
-    with col_left:
-        st.subheader("Lista")
-        for f in fornecedores:
-            is_selected=(st.session_state.sel_forn_id==f.id)
-            style = "background:#e8f5e9;border:1px solid #2e7d32;" if is_selected else "background:#f6f6f6;border:1px solid #ddd;"
-            if st.button(f"📁 {f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}", key=f"btn_f_{f.id}"):
-                st.session_state.sel_forn_id=f.id
-            st.markdown(f"<div style='height:6px;{style}'></div>", unsafe_allow_html=True)
-
-    with col_right:
-        sel = next((f for f in fornecedores if f.id==st.session_state.sel_forn_id), None)
-        if sel is None: st.info("Selecione um fornecedor na lista ao lado para visualizar/editar.")
-        else:
-            st.subheader(f"Detalhes — {sel.nome}")
-            tabs=st.tabs(["Informações","Documentos","Auditoria","Planos de Ação","Contratos","MTRs"])
-
-            # Informações
-            with tabs[0]:
-                st.write(f"**CPF/CNPJ:** {formatar_cpf_cnpj(sel.cpf_cnpj)}")
-                st.write(f"**Endereço:** {sel.endereco or '-'}")
-                st.write(f"**Telefone:** {sel.telefone or '-' }")
-
-            # Documentos
-            with tabs[1]:
-                st.markdown("#### Documentos do fornecedor")
-                if not sel.documentos:
-                    st.info("Nenhum documento. Use o bloco 'Adicionar novo documento' abaixo.")
-                for d in sel.documentos:
-                    with st.container(border=True):
-                        st.write(f"**Tipo:** {d.tipo}")
-                        # botão para baixar o arquivo atual
-                        try:
-                            if d.arquivo and Path(d.arquivo).exists():
-                                with open(d.arquivo,"rb") as f: data_atual=f.read()
-                                st.download_button("Baixar arquivo atual", data=data_atual,
-                                                   file_name=os.path.basename(d.arquivo), key=f"doc_dl_{d.id}")
-                            else:
-                                st.caption("Nenhum arquivo atual encontrado para este documento.")
-                        except Exception:
-                            st.warning("Não foi possível preparar o download do arquivo atual.")
-
-                        c1,c2,c3=st.columns([0.4,0.3,0.3])
-                        with c1:
-                            up=st.file_uploader("Substituir arquivo (opcional)", type=["pdf","jpg","png","jpeg"], key=f"doc_up_{d.id}")
-                        with c2:
-                            dt_ini=st.date_input("Início", value=d.data_inicio, key=f"doc_ini_{d.id}")
-                        with c3:
-                            dt_val=st.date_input("Validade", value=d.data_validade, key=f"doc_val_{d.id}")
-                        if st.button("Salvar alterações", key=f"doc_save_{d.id}"):
-                            if dt_val<dt_ini: st.error("Validade não pode ser anterior ao início.")
-                            else:
-                                caminho=d.arquivo
-                                if up is not None:
-                                    caminho=salvar_arquivo(up, "uploads/documentos", f"{sel.id}_{d.tipo}")
-                                with SessionLocal() as db:
-                                    doc_db=db.query(Documento).filter(Documento.id==d.id).first()
-                                    doc_db.arquivo=caminho; doc_db.data_inicio=dt_ini; doc_db.data_validade=dt_val
-                                    doc_db.updated_by=st.session_state.usuario
-                                    db.commit(); st.success("Documento atualizado com sucesso!"); _safe_rerun()
-
-                st.markdown("#### Adicionar novo documento")
-                tipos_documentos = [
-                    "Licença Ambiental de Operação",
-                    "Consulta de Área Contaminada",
-                    "Alvará de Funcionamento",
-                    "Comprovante de regularidade (CETESB ou órgão estadual)",
-                    "Condicionantes ambientais vigentes",
-                    "AVCB (Auto de Vistoria do Corpo de Bombeiros)",
-                    "CTF - IBAMA"
-                ]
-                c1,c2,c3,c4=st.columns([0.35,0.25,0.2,0.2])
-                with c1: novo_tipo=st.selectbox("Tipo", tipos_documentos, key="novo_tipo")
-                with c2: novo_ini=st.date_input("Início", value=date.today(), key="novo_ini")
-                with c3: novo_val=st.date_input("Validade", value=date.today(), key="novo_val")
-                with c4: novo_up=st.file_uploader("Arquivo", type=["pdf","jpg","png","jpeg"], key="novo_arq")
-                if st.button("Adicionar documento", key="btn_add_doc"):
-                    if novo_up is None: st.error("Envie um arquivo.")
-                    elif novo_val<novo_ini: st.error("Validade não pode ser anterior ao início.")
-                    else:
-                        caminho=salvar_arquivo(novo_up, "uploads/documentos", f"{sel.id}_{novo_tipo}")
-                        with SessionLocal() as db:
-                            try:
-                                d=Documento(fornecedor_id=sel.id, tipo=novo_tipo, arquivo=caminho,
-                                            data_inicio=novo_ini, data_validade=novo_val,
-                                            updated_by=st.session_state.usuario)
-                                db.add(d); db.commit(); st.success("Documento adicionado com sucesso!"); _safe_rerun()
-                            except Exception as e:
-                                db.rollback(); st.error(f"Erro ao salvar documento: {e}")
-
-            # Auditoria
-            with tabs[2]:
-                st.subheader("Auditoria — Checklist IQA")
-                respostas_form = {}
-                aud_exist = sel.auditoria
-                prev = {}
-                anexos_prev = []
-                if aud_exist and isinstance(aud_exist.respostas, dict):
-                    prev = aud_exist.respostas.get("checklist_respostas", {}) or {}
-                    anexos_prev = aud_exist.respostas.get("anexos", []) or []
-
-                for it in CHECKLIST_ITEMS:
-                    opcoes = list(it["opcoes"].keys())
-                    valores = list(it["opcoes"].values())
-                    default_val = prev.get(it["chave"], None)
-                    try:
-                        idx = valores.index(default_val)
-                    except ValueError:
-                        idx = 0
-                    escolha = st.radio(
-                        it["titulo"],
-                        options=opcoes,
-                        index=idx,
-                        key=f"aud_{sel.id}_{it['chave']}",
-                        horizontal=True
-                    )
-                    respostas_form[it["chave"]] = it["opcoes"][escolha]
-
-                st.markdown("#### Anexar documento da auditoria (opcional)")
-                up_aud = st.file_uploader("Relatório/Check-list (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"aud_up_{sel.id}")
-
-                if st.button("Salvar Auditoria (calcular IQA)", key=f"save_aud_{sel.id}"):
-                    obt, maxp, iqa = calcular_iqa(respostas_form)
-                    regra = classificar_iqa(iqa)
-                    anexos = list(anexos_prev)
-                    if up_aud is not None:
-                        p_arquivo = salvar_arquivo(up_aud, "uploads/auditorias", f"{sel.id}_auditoria")
-                        anexos.append(p_arquivo)
-
-                    payload = {
-                        "modelo": "checklist_iqa_v1",
-                        "checklist_respostas": respostas_form,
-                        "pontos_obtidos": obt,
-                        "pontos_max": maxp,
-                        "iqa_pct": iqa,
-                        "regra_aplicada": regra,
-                        "anexos": anexos,
-                    }
-
-                    with SessionLocal() as db:
-                        a = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
-                        if not a:
-                            a = Auditoria(fornecedor_id=sel.id)
-                            db.add(a)
-                        a.respostas = payload
-                        a.score = int(round(iqa))
-                        a.classificado = "Conforme/Adequado" if regra["status_conformidade"] == "Conforme" else "Não Conforme/Inadequado"
-                        a.updated_by = st.session_state.usuario
-                        db.commit()
-                    st.success(f"IQA: {iqa:.1f}% — {regra['classe']} | Reavaliação: {regra['reavaliacao']} | Ação: {regra['acao']}")
-                    _safe_rerun()
-
-                with SessionLocal() as db:
-                    show = db.query(Auditoria).filter_by(fornecedor_id=sel.id).first()
-
-                if show and isinstance(show.respostas, dict) and show.respostas.get("modelo") == "checklist_iqa_v1":
-                    r = show.respostas
-                    st.markdown(
-                        f"**IQA:** {r.get('iqa_pct',0):.1f}% — **Classe:** {r.get('regra_aplicada',{}).get('classe','-')} | "
-                        f"**Condição:** {r.get('regra_aplicada',{}).get('condicionamento','-')} | "
-                        f"**Reavaliação:** {r.get('regra_aplicada',{}).get('reavaliacao','-')}"
-                    )
-                    if r.get("anexos"):
-                        st.markdown("**Anexos da auditoria:**")
-                        for path in r["anexos"]:
-                            exibir_preview_arquivo(path, None)
-
-            # Planos de Ação
-            with tabs[3]:
-                st.subheader("Planos de Ação")
-                with st.form(f"form_plano_{sel.id}"):
-                    descricao = st.text_area("Descrição da Ação")
-                    data_inicio = st.date_input("Início", value=date.today())
-                    data_fim = st.date_input("Fim", value=date.today())
-                    status = st.selectbox("Status", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value])
-                    ev_upload = st.file_uploader("Anexar evidência (opcional)", type=["pdf","jpg","png","jpeg"])
-                    enviar = st.form_submit_button("Adicionar Plano de Ação")
-
-                evidencias = []
-                if enviar:
-                    if not descricao:
-                        st.error("Descreva a ação.")
-                    elif data_fim < data_inicio:
-                        st.error("Data final deve ser maior ou igual à data inicial.")
-                    else:
-                        if ev_upload is not None:
-                            ev_path = salvar_arquivo(ev_upload, "uploads/evidencias", f"{sel.id}_plano")
-                            evidencias.append(ev_path)
-                        with SessionLocal() as db:
-                            plano = PlanoAcao(fornecedor_id=sel.id, descricao=descricao.strip(),
-                                              data_inicio=data_inicio, data_fim=data_fim, status=PlanoStatusEnum(status),
-                                              evidencias=evidencias or [], updated_by=st.session_state.usuario)
-                            db.add(plano); db.commit(); st.success("Plano de ação adicionado."); _safe_rerun()
-
-                st.markdown("#### Ações cadastradas")
-                if not sel.planos_acao:
-                    st.info("Nenhuma ação cadastrada.")
-                else:
-                    hoje = date.today()
-                    for p in sorted(sel.planos_acao, key=lambda x: x.data_fim):
-                        atrasado = (p.data_fim and p.data_fim < hoje and (getattr(p.status, "value", p.status) != PlanoStatusEnum.concluido.value))
-                        with st.container(border=True):
-                            st.write(f"- {p.descricao} | {getattr(p.status, 'value', p.status)} | {p.data_inicio or '-'} → {p.data_fim or '-' }")
-                            if p.evidencias:
-                                for ev in p.evidencias:
-                                    if Path(ev).exists():
-                                        exibir_preview_arquivo(ev, None)
-
-            # Contratos
-            with tabs[4]:
-                st.subheader("Contratos")
-                arquivo_contrato = st.file_uploader("Anexar Contrato", type=["pdf","docx","doc","pdf"], key=f"contr_{sel.id}")
-                data_assinatura = st.date_input("Assinatura", value=date.today(), key=f"contr_ass_{sel.id}")
-                data_validade = st.date_input("Validade", value=date.today(), key=f"contr_val_{sel.id}")
-                if st.button("Salvar Contrato", key=f"contr_save_{sel.id}"):
-                    if not arquivo_contrato:
-                        st.error("Envie um arquivo.")
-                    elif data_validade < data_assinatura:
-                        st.error("Validade não pode ser anterior à assinatura.")
-                    else:
-                        caminho = salvar_arquivo(arquivo_contrato, "uploads/contratos", f"{sel.id}_contrato")
-                        with SessionLocal() as db:
-                            novo = Contrato(fornecedor_id=sel.id, arquivo=caminho,
-                                            data_assinatura=data_assinatura, data_validade=data_validade,
-                                            updated_by=st.session_state.usuario)
-                            db.add(novo); db.commit()
-                        st.success("Contrato salvo!")
-                        _safe_rerun()
-
-                st.markdown("#### Contratos cadastrados")
-                if sel.contratos:
-                    for c in sel.contratos:
-                        st.write(f"- Ass.: {c.data_assinatura or '-'} | Val.: {c.data_validade or '-'}")
-                        if c.arquivo:
-                            try:
-                                exibir_preview_arquivo(c.arquivo, None)
-                            except Exception:
-                                pass
-                else:
-                    st.info("Nenhum contrato anexado.")
-
-            # MTRs do fornecedor
-            with tabs[5]:
-                st.subheader("MTRs do fornecedor")
-                total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
-                total_t = sum(m.emissoes_tco2e or 0.0 for m in sel.mtrs)
-                st.write(f"**Total destinado (kg):** {total_kg:.1f} | **Total tCO₂e:** {total_t:.2f}")
-                for m in sel.mtrs:
-                    with st.container(border=True):
-                        # Garante que a instância está anexada e com CDFs pré-carregados
-                        with SessionLocal() as db:
-                            m_db = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.id==m.id).first()
-                        m = m_db or m
-                        st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Receb.:** {m.destinador_data_recebimento or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
-                        with SessionLocal() as db:
-                            tipos = listar_tipos_residuo(db)
-                            tipo_idx = tipos.index(m.tipo_residuo) if (m.tipo_residuo in tipos) else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
-                            c1,c2,c3,c4=st.columns(4)
-                            with c1: tipo_sel = st.selectbox("Tipo de resíduo", tipos, index=tipo_idx, key=f"tipo_{m.id}")
-                            destinos = listar_destinos_para_tipo(db, tipo_sel)
-                            dest_idx = destinos.index(m.destinacao) if (m.destinacao in destinos) else (0 if destinos else 0)
-                            with c2: dest_sel = st.selectbox("Destinação", destinos or ["(cadastre na página 'Fatores de Emissão')"], index=dest_idx, key=f"dest_{m.id}")
-                            default_fator = obter_fator(db, tipo_sel, dest_sel) if destinos else None
-                        with c3:
-                            fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else (default_fator or 0.0)),
-                                                    step=0.01, format="%.4f", key=f"fator_{m.id}")
-                        with c4:
-                            em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
-                            st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
-
-                        if st.button("Salvar MTR (Escopo 3)", key=f"salvar_mtr_{m.id}"):
-                            with SessionLocal() as db:
-                                mm=db.query(MTR).filter(MTR.id==m.id).first()
-                                mm.tipo_residuo=tipo_sel; mm.destinacao=dest_sel
-                                mm.fator_tco2e_por_ton=float(fator or 0.0)
-                                mm.emissoes_tco2e=kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
-                                mm.updated_by=st.session_state.usuario
-                                db.commit(); st.success("MTR atualizada (escopo 3)."); _safe_rerun()
-
-                        # CDFs
-                        st.markdown("**CDF(s):**")
-                        if m.cdfs:
-                            for cdf in m.cdfs:
-                                with st.container():
-                                    st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
-                                    if Path(cdf.arquivo).exists(): exibir_preview_arquivo(cdf.arquivo, None)
-                        up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_{m.id}")
-                        cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_{m.id}")
-                        cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_{m.id}")
-                        if st.button("Adicionar CDF", key=f"cdf_add_{m.id}"):
-                            if not up_cdf: st.error("Envie um arquivo de CDF.")
-                            else:
-                                caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{m.id}_cdf")
-                                with SessionLocal() as db:
-                                    novo = CDF(mtr_id=m.id, arquivo=caminho, data_emissao=cdf_data,
-                                               observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
-                                    db.add(novo)
-                                    mm=db.query(MTR).filter(MTR.id==m.id).first(); mm.cdf_count=(mm.cdf_count or 0)+1
-                                    db.commit(); st.success("CDF anexado com sucesso!"); _safe_rerun()
-
-# ---- Página MTRs (importação e edição em lote) ----
-if menu=="MTRs":
-    if st.session_state.role not in ("Admin","Auditor"):
-        st.error("Acesso restrito."); st.stop()
-    st.header("Controle de MTRs por Fornecedor")
-    if not HAVE_PDFPLUMBER: st.error("pdfplumber não está instalado. Adicione ao requirements."); st.stop()
-    with SessionLocal() as db:
-        fornecedores=db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
-    if not fornecedores: st.info("Cadastre fornecedores antes de importar MTRs."); st.stop()
-    forn_map={f"{f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}":f.id for f in fornecedores}
-    forn_label=st.selectbox("Associar MTRs ao fornecedor", list(forn_map.keys()))
-    fornecedor_id=forn_map[forn_label]
-    uploads=st.file_uploader("Enviar PDFs de MTR", type=["pdf"], accept_multiple_files=True)
-    if uploads and st.button("Processar MTRs"):
-        ok, fail = 0, 0
-        for up in uploads:
-            try:
-                caminho=salvar_arquivo(up, "uploads/mtrs", f"{fornecedor_id}_mtr")
-                dados=extract_and_normalize_mtr(caminho)
-                with SessionLocal() as db:
-                    m=MTR(
-                        fornecedor_id=fornecedor_id, arquivo=caminho,
-                        numero_mtr=dados["numero_mtr"],
-                        gerador_razao=dados["gerador_razao"], gerador_cnpj=dados["gerador_cnpj"],
-                        gerador_municipio=dados["gerador_municipio"], gerador_uf=dados["gerador_uf"],
-                        gerador_data_emissao=dados["gerador_data_emissao"],
-                        transportador_razao=dados["transportador_razao"], transportador_cnpj=dados["transportador_cnpj"],
-                        transportador_data_transporte=dados["transportador_data_transporte"],
-                        destinador_razao=dados["destinador_razao"], destinador_cnpj=dados["destinador_cnpj"],
-                        destinador_data_recebimento=dados["destinador_data_recebimento"],
-                        codigo_ibama_denom=dados["codigo_ibama_denom"],
-                        estado_fisico=dados.get("estado_fisico"), classe=dados.get("classe"), acondicionamento=dados.get("acondicionamento"),
-                        qtd_original=dados["qtd_original"], und_original=dados["und_original"],
-                        qtd_kg=dados["qtd_kg"],
-                        dados_raw=_make_json_safe(dados),  # <- garante serialização segura
-                        updated_by=st.session_state.usuario
-                    )
-                    db.add(m); db.commit(); ok+=1
-            except Exception as e:
-                fail+=1
-                st.error(f"Erro ao processar {up.name}: {e}")
-        st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
-        _safe_rerun()
-
-    st.markdown("### Edição em lote (selecionar MTR → editar)")
-    with SessionLocal() as db:
-        mtrs = db.query(MTR).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
-
-    if not mtrs:
-        st.info("Nenhuma MTR cadastrada para este fornecedor.")
-    else:
-        lista = [f"{m.id} - MTR {m.numero_mtr or '-'} | kg={m.qtd_kg or 0:.1f} | receb={m.destinador_data_recebimento or '-'}" for m in mtrs]
-        escolha = st.selectbox("Escolha a MTR para editar", lista, key=f"sel_mtr_{fornecedor_id}")
-        mid = int(escolha.split(" - ")[0])
-
-        m = next(mm for mm in mtrs if mm.id == mid)
-        # Recarrega a MTR com CDFs em eager-load para evitar DetachedInstanceError
-        with SessionLocal() as db:
-            m = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.id==mid).first()
-            with SessionLocal() as db:
-                tipos = listar_tipos_residuo(db)
-                tipo_idx = tipos.index(m.tipo_residuo) if m.tipo_residuo in tipos else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
-                c1,c2,c3,c4 = st.columns(4)
-                with c1: tipo_sel = st.selectbox("Tipo de resíduo", tipos, index=tipo_idx, key=f"tipo_batch_{mid}")
-                destinos = listar_destinos_para_tipo(db, tipo_sel)
-                dest_idx = destinos.index(m.destinacao) if m.destinacao in destinos else (0 if destinos else 0)
-                with c2: dest_sel = st.selectbox("Destinação", destinos or ["(cadastre na página 'Fatores de Emissão')"], index=dest_idx, key=f"dest_batch_{mid}")
-                default_fator = obter_fator(db, tipo_sel, dest_sel) if destinos else None
-            with c3:
-                fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else (default_fator or 0.0)),
-                                        step=0.01, format="%.4f", key=f"fator_batch_{mid}")
-            with c4:
-                em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
-                st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
-
-            if st.button("Salvar (Escopo 3)", key=f"save_batch_{mid}"):
-                with SessionLocal() as db:
-                    mm = db.query(MTR).filter(MTR.id==mid).first()
-                    mm.tipo_residuo = tipo_sel
-                    mm.destinacao = dest_sel
-                    mm.fator_tco2e_por_ton = float(fator or 0.0)
-                    mm.emissoes_tco2e = kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
-                    mm.updated_by = st.session_state.usuario
-                    db.commit()
-                st.success("MTR atualizada (escopo 3).")
-                _safe_rerun()
-
-            st.markdown("#### CDF(s) da MTR selecionada")
-            if m.cdfs:
-                for cdf in m.cdfs:
-                    with st.container():
-                        st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
-                        try:
-                            exibir_preview_arquivo(cdf.arquivo, None)
-                        except Exception:
-                            pass
-
-            up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_batch_{mid}")
-            cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_batch_{mid}")
-            cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_batch_{mid}")
-            if st.button("Adicionar CDF", key=f"cdf_add_batch_{mid}"):
-                if not up_cdf:
-                    st.error("Envie um arquivo de CDF.")
-                else:
-                    caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{mid}_cdf")
-                    with SessionLocal() as db:
-                        novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
-                                   observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
-                        db.add(novo)
-                        mm = db.query(MTR).filter(MTR.id==mid).first(); mm.cdf_count = (mm.cdf_count or 0) + 1
-                        db.commit()
-                    st.success("CDF anexado com sucesso!")
-                    _safe_rerun()
-
-    st.markdown("### MTRs cadastradas")
-    with SessionLocal() as db:
-        mtrs_all=db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.id.desc()).all()
-    if not mtrs_all:
-        st.info("Nenhuma MTR cadastrada ainda.")
-    else:
-        rows=[]
-        for m, nome_f in mtrs_all:
-            rows.append({
-                "Fornecedor": nome_f, "MTR nº": m.numero_mtr or "-",
-                "Recebimento": m.destinador_data_recebimento or "",
-                "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
-                "Tipo": m.tipo_residuo or "", "Destinação": m.destinacao or "",
-                "Fator (tCO₂e/t)": m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else "",
-                "tCO₂e": m.emissoes_tco2e if m.emissoes_tco2e is not None else "",
-                "CDF(s)": m.cdf_count or 0, "Arquivo": os.path.basename(m.arquivo),
-            })
-        if HAVE_PANDAS:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
-        else:
-            for r in rows[:200]: st.write(r)
-
-# ---- Fatores de Emissão (EDITÁVEL) ----
-if menu=="Fatores de Emissão":
-    if st.session_state.role not in ("Admin","Auditor"):
-        st.error("Acesso restrito."); st.stop()
-
-    st.header("Fatores de Emissão (tCO₂e por tonelada)")
-    with SessionLocal() as db:
-        fatores = db.query(FatorEmissao).order_by(FatorEmissao.tipo_residuo.asc(), FatorEmissao.destinacao.asc()).all()
-
-    st.markdown("#### Editar existentes (tabela editável)")
-    if fatores:
-        rows = [{
-            "id": f.id,
-            "Tipo de resíduo": f.tipo_residuo,
-            "Destinação": f.destinacao,
-            "Fator (tCO₂e/t)": float(f.fator_tco2e_por_ton or 0.0),
-            "Fonte": f.fonte or "",
-            "Ano ref.": int(f.ano_ref or 0),
-            "Selecionar": False
-        } for f in fatores]
-        if HAVE_PANDAS:
-            df = pd.DataFrame(rows)
-            edited = st.data_editor(
-                df,
-                use_container_width=True,
-                key="fe_editor",
-                column_config={
-                    "id": st.column_config.Column("id", disabled=True),
-                    "Fator (tCO₂e/t)": st.column_config.NumberColumn(format="%.4f"),
-                    "Ano ref.": st.column_config.NumberColumn(step=1, min_value=0),
-                    "Selecionar": st.column_config.CheckboxColumn(help="Marque para excluir"),
-                },
-                hide_index=True
+    if text.strip():
+        t = f"%{text.strip().lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(Item.name).like(t),
+                func.lower(func.coalesce(Item.type, "")).like(t),
+                func.lower(func.coalesce(Item.notes, "")).like(t),
             )
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Salvar alterações"):
-                    try:
-                        with SessionLocal() as db:
-                            for _, r in edited.iterrows():
-                                fe = db.query(FatorEmissao).filter(FatorEmissao.id==int(r["id"])).first()
-                                if not fe: continue
-                                novo_tipo = str(r["Tipo de resíduo"]).strip()
-                                novo_dest = str(r["Destinação"]).strip()
-                                if (fe.tipo_residuo!=novo_tipo or fe.destinacao!=novo_dest):
-                                    exists = db.query(FatorEmissao).filter(
-                                        FatorEmissao.tipo_residuo==novo_tipo,
-                                        FatorEmissao.destinacao==novo_dest
-                                    ).first()
-                                    if exists and exists.id != fe.id:
-                                        st.error(f"Conflito: já existe fator para ({novo_tipo}, {novo_dest}).")
-                                        continue
-                                fe.tipo_residuo = novo_tipo
-                                fe.destinacao = novo_dest
-                                fe.fator_tco2e_por_ton = float(r["Fator (tCO₂e/t)"])
-                                fe.fonte = (str(r["Fonte"]).strip() or None)
-                                ano = int(r["Ano ref."] or 0)
-                                fe.ano_ref = ano if ano>0 else None
-                            db.commit()
-                        st.success("Alterações salvas.")
-                        _safe_rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
-            with col2:
-                if st.button("Excluir selecionados"):
-                    ids_sel = edited.loc[edited["Selecionar"]==True, "id"].tolist()
-                    if not ids_sel:
-                        st.info("Nenhuma linha marcada.")
-                    else:
-                        try:
-                            with SessionLocal() as db:
-                                for i in ids_sel:
-                                    fe = db.query(FatorEmissao).filter(FatorEmissao.id==int(i)).first()
-                                    if fe: db.delete(fe)
-                                db.commit()
-                            st.success(f"Excluídos: {len(ids_sel)} registro(s).")
-                            _safe_rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao excluir: {e}")
-        else:
-            st.info("Para edição em tabela, instale pandas.")
+        )
+
+    if category:
+        stmt = stmt.where(Item.category == category)
+    if type_:
+        stmt = stmt.where(Item.type == type_)
+    if color_primary:
+        stmt = stmt.where(Item.color_primary == color_primary)
+    if season:
+        stmt = stmt.where(Item.season == season)
+    if occasion:
+        stmt = stmt.where(Item.occasion == occasion)
+    if status:
+        stmt = stmt.where(Item.status == status)
+
+    if order_by == "name":
+        stmt = stmt.order_by(asc(Item.name))
     else:
-        st.info("Nenhum fator cadastrado. Use o formulário abaixo para adicionar.")
+        stmt = stmt.order_by(desc(Item.created_at))
 
-    st.markdown("---")
-    st.subheader("Adicionar novo fator")
-    with st.form("form_add_fator"):
-        tipo_new = st.text_input("Tipo de resíduo *")
-        dest_new = st.text_input("Destinação *")
-        fator_new = st.number_input("Fator (tCO₂e/t) *", value=0.0, step=0.01, format="%.4f")
-        fonte_new = st.text_input("Fonte (ex.: IPCC 2019)")
-        ano_new = st.number_input("Ano de referência", value=0, step=1, min_value=0)
-        enviar = st.form_submit_button("Adicionar")
-    if enviar:
-        if not tipo_new or not dest_new:
-            st.error("Preencha tipo e destinação.")
+    return s.execute(stmt.limit(limit)).scalars().all()
+
+def repo_create_item(s: Session, payload: dict, uploads: list, primary_index: int) -> Item:
+    item = Item(**payload)
+    s.add(item)
+    s.commit()
+    s.refresh(item)
+
+    # images
+    imgs: List[ItemImage] = []
+    for i, uf in enumerate(uploads):
+        p = save_upload_to_disk(uf)
+        make_thumbnail(p)
+        imgs.append(ItemImage(item_id=item.id, file_path=str(p.as_posix()), is_primary=(i == primary_index)))
+
+    for im in imgs:
+        item.images.append(im)
+
+    s.add(item)
+    s.commit()
+    s.refresh(item)
+    return item
+
+def repo_update_item(s: Session, item: Item) -> Item:
+    s.add(item)
+    s.commit()
+    s.refresh(item)
+    return item
+
+def repo_set_primary_image(s: Session, item_id: int, image_id: int) -> None:
+    imgs = s.execute(select(ItemImage).where(ItemImage.item_id == item_id)).scalars().all()
+    for img in imgs:
+        img.is_primary = (img.id == image_id)
+    s.commit()
+
+def repo_remove_image(s: Session, image_id: int) -> Optional[ItemImage]:
+    img = s.get(ItemImage, image_id)
+    if not img:
+        return None
+    s.delete(img)
+    s.commit()
+    return img
+
+def repo_delete_item_and_files(s: Session, item: Item) -> None:
+    # Decision: delete files from disk (image + thumb) to avoid accumulating unused files.
+    file_paths = [Path(im.file_path) for im in item.images]
+    to_delete: List[Path] = []
+    for p in file_paths:
+        to_delete.append(p)
+        to_delete.append(thumbnail_path_for(p))
+    delete_files(to_delete)
+
+    s.delete(item)  # cascades to item_images
+    s.commit()
+
+def repo_list_looks(s: Session, order_by: str = "recent", limit: int = 500) -> List[Look]:
+    stmt = select(Look).options(joinedload(Look.items).joinedload(LookItem.item))
+    if order_by == "name":
+        stmt = stmt.order_by(asc(Look.name))
+    else:
+        stmt = stmt.order_by(desc(Look.created_at))
+    return s.execute(stmt.limit(limit)).scalars().all()
+
+def repo_get_look(s: Session, look_id: int) -> Optional[Look]:
+    stmt = select(Look).where(Look.id == look_id).options(joinedload(Look.items).joinedload(LookItem.item))
+    return s.execute(stmt).scalars().first()
+
+def repo_create_look(s: Session, payload: dict) -> Look:
+    lk = Look(**payload)
+    s.add(lk)
+    s.commit()
+    s.refresh(lk)
+    return lk
+
+def repo_update_look(s: Session, lk: Look) -> Look:
+    s.add(lk)
+    s.commit()
+    s.refresh(lk)
+    return lk
+
+def repo_delete_look(s: Session, lk: Look) -> None:
+    s.delete(lk)
+    s.commit()
+
+def repo_replace_look_slots(s: Session, lk: Look, slots: Dict[str, Optional[int]]) -> None:
+    lk.items.clear()
+    for slot, item_id in slots.items():
+        if item_id:
+            lk.items.append(LookItem(look_id=lk.id, item_id=int(item_id), slot=slot))
+    s.add(lk)
+    s.commit()
+    s.refresh(lk)
+
+def repo_log_wear(s: Session, look_id: Optional[int], notes: Optional[str] = None) -> WearLog:
+    now = datetime.utcnow()
+    wl = WearLog(look_id=look_id, date=now.date(), time=now, notes=notes)
+    s.add(wl)
+    s.commit()
+    s.refresh(wl)
+    return wl
+
+def repo_list_wear_logs(s: Session, look_id: Optional[int] = None, limit: int = 500) -> List[WearLog]:
+    stmt = select(WearLog).options(joinedload(WearLog.look)).order_by(desc(WearLog.time))
+    if look_id:
+        stmt = stmt.where(WearLog.look_id == look_id)
+    return s.execute(stmt.limit(limit)).scalars().all()
+
+def repo_wear_counts_by_look(s: Session) -> Dict[int, int]:
+    stmt = select(WearLog.look_id, func.count(WearLog.id)).where(WearLog.look_id.isnot(None)).group_by(WearLog.look_id)
+    rows = s.execute(stmt).all()
+    return {int(look_id): int(cnt) for look_id, cnt in rows if look_id is not None}
+
+# -----------------------------
+# Validation (lightweight)
+# -----------------------------
+def validate_required(value: str, field: str) -> Tuple[bool, str]:
+    if value is None or str(value).strip() == "":
+        return False, f"Campo obrigatório: {field}"
+    return True, ""
+
+def validate_item_payload(payload: dict) -> Tuple[bool, str]:
+    for f in ["name", "category", "color_primary", "season", "occasion", "status"]:
+        ok, msg = validate_required(payload.get(f, ""), f)
+        if not ok:
+            return False, msg
+    if payload["category"] not in CATEGORIES:
+        return False, "category inválida"
+    if payload["season"] not in SEASONS:
+        return False, "season inválida"
+    if payload["occasion"] not in OCCASIONS:
+        return False, "occasion inválida"
+    if payload["status"] not in STATUSES:
+        return False, "status inválido"
+    return True, ""
+
+def validate_look_payload(payload: dict) -> Tuple[bool, str]:
+    for f in ["name", "season", "occasion"]:
+        ok, msg = validate_required(payload.get(f, ""), f)
+        if not ok:
+            return False, msg
+    if payload["season"] not in SEASONS:
+        return False, "season inválida"
+    if payload["occasion"] not in OCCASIONS:
+        return False, "occasion inválida"
+    return True, ""
+
+def validate_slots(slots: Dict[str, Optional[int]]) -> Tuple[bool, str]:
+    # must have top+bottom+footwear
+    for req in ["top", "bottom", "footwear"]:
+        if not slots.get(req):
+            return False, f"Slot obrigatório faltando: {req}"
+    return True, ""
+
+# -----------------------------
+# UI helpers
+# -----------------------------
+def slot_label(slot: str) -> str:
+    return {"top": "Top", "bottom": "Bottom", "footwear": "Footwear", "outerwear": "Outerwear", "accessory": "Accessory"}.get(slot, slot)
+
+def render_item_card(item: Item, key: str = "") -> None:
+    img_path = get_item_primary_path(item)
+    c1, c2 = st.columns([1, 2], gap="small")
+    with c1:
+        if img_path:
+            p = Path(img_path)
+            thumb = thumbnail_path_for(p)
+            if thumb.exists():
+                st.image(str(thumb), use_column_width=True)
+            elif p.exists():
+                st.image(str(p), use_column_width=True)
         else:
-            with SessionLocal() as db:
-                try:
-                    ja = db.query(FatorEmissao).filter(
-                        FatorEmissao.tipo_residuo==tipo_new.strip(),
-                        FatorEmissao.destinacao==dest_new.strip()
-                    ).first()
-                    if ja:
-                        st.error("Já existe um fator para esse (tipo, destinação).")
+            st.info("Sem imagem")
+    with c2:
+        st.markdown(f"### {item.name}")
+        st.caption(item_tag_line(item))
+        if st.button("Abrir", key=f"open_{item.id}_{key}"):
+            st.query_params["item_id"] = str(item.id)
+            st.rerun()
+
+def back_to_normal_route():
+    st.query_params.pop("item_id", None)
+    st.query_params.pop("look_id", None)
+
+# -----------------------------
+# Cached queries
+# -----------------------------
+@st.cache_data(show_spinner=False)
+def cached_totals(_token: int) -> Dict[str, int]:
+    with db_session() as s:
+        total_items = s.execute(select(func.count(Item.id))).scalar_one()
+        total_looks = s.execute(select(func.count(Look.id))).scalar_one()
+        return {"items": int(total_items), "looks": int(total_looks)}
+
+@st.cache_data(show_spinner=False)
+def cached_top_used(_token: int, top_n: int = 5) -> List[Tuple[int, str, int]]:
+    with db_session() as s:
+        counts = repo_wear_counts_by_look(s)
+        looks = repo_list_looks(s, limit=500)
+        rows = [(lk.id, lk.name, counts.get(lk.id, 0)) for lk in looks]
+        rows.sort(key=lambda r: r[2], reverse=True)
+        return rows[:top_n]
+
+@st.cache_data(show_spinner=False)
+def cached_filters(_token: int) -> Tuple[List[str], List[str]]:
+    with db_session() as s:
+        return repo_list_distinct_types(s), repo_list_distinct_colors(s)
+
+@st.cache_data(show_spinner=False)
+def cached_items(_token: int, params: dict) -> List[Item]:
+    with db_session() as s:
+        return repo_search_items(
+            s,
+            text=params["text"],
+            category=params.get("category") or None,
+            type_=params.get("type_") or None,
+            color_primary=params.get("color_primary") or None,
+            season=params.get("season") or None,
+            occasion=params.get("occasion") or None,
+            status=params.get("status") or None,
+            order_by=params.get("order_by") or "recent",
+            limit=500,
+        )
+
+@st.cache_data(show_spinner=False)
+def cached_looks(_token: int, order_by: str) -> List[Look]:
+    with db_session() as s:
+        return repo_list_looks(s, order_by=order_by, limit=500)
+
+@st.cache_data(show_spinner=False)
+def cached_wear_counts(_token: int) -> Dict[int, int]:
+    with db_session() as s:
+        return repo_wear_counts_by_look(s)
+
+@st.cache_data(show_spinner=False)
+def cached_all_items(_token: int) -> List[Item]:
+    with db_session() as s:
+        return repo_search_items(s, limit=500)
+
+@st.cache_data(show_spinner=False)
+def cached_history(_token: int, look_id: Optional[int]) -> List[WearLog]:
+    with db_session() as s:
+        return repo_list_wear_logs(s, look_id=look_id, limit=500)
+
+# -----------------------------
+# Pages
+# -----------------------------
+def page_dashboard():
+    st.title("Dashboard")
+    totals = cached_totals(cache_token())
+    c1, c2 = st.columns(2)
+    c1.metric("Total de peças", totals["items"])
+    c2.metric("Total de looks", totals["looks"])
+    st.divider()
+    st.subheader("Looks mais usados")
+    rows = cached_top_used(cache_token(), 5)
+    if not rows:
+        st.info("Ainda não há uso registrado.")
+        return
+    for look_id, name, cnt in rows:
+        st.write(f"• **{name}** — {cnt} uso(s)")
+
+def page_closet():
+    st.title("Closet (Peças)")
+    types, colors = cached_filters(cache_token())
+
+    with st.expander("Busca e filtros", expanded=True):
+        c1, c2, c3, c4 = st.columns(4)
+        text = c1.text_input("Busca (nome/tipo/notas)", value="")
+        category = c2.selectbox("Category", [""] + CATEGORIES, index=0)
+        type_ = c3.selectbox("Type", [""] + types, index=0)
+        color_primary = c4.selectbox("Color (primary)", [""] + colors, index=0)
+
+        c5, c6, c7, c8 = st.columns(4)
+        season = c5.selectbox("Season", [""] + SEASONS, index=0)
+        occasion = c6.selectbox("Occasion", [""] + OCCASIONS, index=0)
+        status = c7.selectbox("Status", [""] + STATUSES, index=0)
+        order_by = c8.selectbox("Ordenação", ["recent", "name"], index=0)
+
+    params = dict(
+        text=text, category=category, type_=type_, color_primary=color_primary,
+        season=season, occasion=occasion, status=status, order_by=order_by
+    )
+    items = cached_items(cache_token(), params)
+    st.caption(f"{len(items)} peça(s) encontrada(s)")
+
+    if not items:
+        st.info("Nenhuma peça encontrada com esses filtros.")
+        return
+
+    cols = st.columns(3, gap="large")
+    for i, item in enumerate(items):
+        with cols[i % 3]:
+            st.container(border=True)
+            render_item_card(item, key=f"grid_{i}")
+
+def page_item_new():
+    st.title("Nova Peça")
+
+    with st.form("new_item_form"):
+        c1, c2, c3 = st.columns(3)
+        name = c1.text_input("Name (apelido)*")
+        category = c2.selectbox("Category*", CATEGORIES)
+        type_ = c3.text_input("Type (texto livre)")
+
+        c4, c5, c6 = st.columns(3)
+        color_primary = c4.text_input("Color primary*")
+        color_secondary = c5.text_input("Color secondary (opcional)")
+        status = c6.selectbox("Status*", STATUSES)
+
+        c7, c8 = st.columns(2)
+        season = c7.selectbox("Season*", SEASONS)
+        occasion = c8.selectbox("Occasion*", OCCASIONS)
+
+        notes = st.text_area("Notes (opcional)", height=80)
+
+        uploads = st.file_uploader("Fotos (1+)", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+        primary_index = st.number_input("Índice da foto principal (0..)", min_value=0, value=0, step=1)
+
+        submitted = st.form_submit_button("Salvar peça")
+
+    if not submitted:
+        return
+
+    payload = {
+        "name": name.strip(),
+        "category": category,
+        "type": (type_.strip() or None),
+        "color_primary": color_primary.strip(),
+        "color_secondary": (color_secondary.strip() or None),
+        "season": season,
+        "occasion": occasion,
+        "status": status,
+        "notes": (notes.strip() or None),
+    }
+
+    ok, msg = validate_item_payload(payload)
+    if not ok:
+        st.error(f"Erro: {msg}")
+        return
+    if not uploads or len(uploads) == 0:
+        st.error("Envie ao menos 1 foto.")
+        return
+    if primary_index >= len(uploads):
+        st.error("Índice da foto principal inválido.")
+        return
+
+    with db_session() as s:
+        item = repo_create_item(s, payload, uploads, int(primary_index))
+
+    bump_cache()
+    st.success("Peça criada!")
+    st.query_params["item_id"] = str(item.id)
+    st.rerun()
+
+def page_item_detail():
+    st.title("Detalhe da Peça")
+
+    if "item_id" not in st.query_params:
+        st.info("Nenhuma peça selecionada.")
+        return
+
+    item_id = int(st.query_params["item_id"])
+
+    with db_session() as s:
+        item = repo_get_item(s, item_id)
+        if not item:
+            st.error("Peça não encontrada.")
+            if st.button("Voltar"):
+                st.query_params.clear()
+                st.rerun()
+            return
+
+        st.caption(f"ID: {item.id} • Criado: {item.created_at} • Atualizado: {item.updated_at}")
+
+        st.subheader("Fotos")
+        if item.images:
+            cols = st.columns(min(5, len(item.images)))
+            for i, im in enumerate(item.images):
+                with cols[i % len(cols)]:
+                    p = Path(im.file_path)
+                    if p.exists():
+                        st.image(str(p), use_column_width=True, caption=("PRIMARY" if im.is_primary else ""))
                     else:
-                        db.add(FatorEmissao(
-                            tipo_residuo=tipo_new.strip(),
-                            destinacao=dest_new.strip(),
-                            fator_tco2e_por_ton=float(fator_new),
-                            fonte=fonte_new.strip() or None,
-                            ano_ref=int(ano_new) if ano_new>0 else None
-                        ))
-                        db.commit()
-                        st.success("Fator adicionado com sucesso!")
-                        _safe_rerun()
-                except Exception as e:
-                    st.error(f"Erro ao adicionar fator: {e}")
+                        st.warning("Arquivo não encontrado")
 
-# ---- Admin (Usuários) ----
-if menu=="Admin (Usuários)":
-    if st.session_state.role!="Admin":
-        st.error("Apenas Admin pode acessar esta página."); st.stop()
-    st.header("Administração")
-    with SessionLocal() as db: usuarios=db.query(User).all()
-    st.subheader("Usuários")
-    for u in usuarios: st.write(f"- **{u.username}** — {u.role.value}")
-    st.subheader("Criar novo usuário")
-    with st.form("form_user"):
-        username=st.text_input("Usuário").strip()
-        password=st.text_input("Senha", type="password").strip()
-        role=st.selectbox("Papel", [RoleEnum.admin.value, RoleEnum.auditor.value, RoleEnum.leitor.value])
-        enviar=st.form_submit_button("Criar")
-    if enviar:
-        if not username or not password: st.error("Preencha usuário e senha.")
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        if st.button("Primária", key=f"primary_{im.id}"):
+                            repo_set_primary_image(s, item.id, im.id)
+                            bump_cache()
+                            st.success("Imagem primária atualizada.")
+                            st.rerun()
+                    with b2:
+                        if st.button("Remover", key=f"rm_img_{im.id}"):
+                            removed = repo_remove_image(s, im.id)
+                            if removed:
+                                fp = Path(removed.file_path)
+                                delete_files([fp, thumbnail_path_for(fp)])
+                            bump_cache()
+                            st.success("Imagem removida.")
+                            st.rerun()
         else:
-            with SessionLocal() as db:
-                if get_user_by_username(db, username): st.error("Usuário já existe.")
+            st.info("Sem imagens.")
+
+        st.divider()
+        st.subheader("Editar dados")
+        with st.form("edit_item_form"):
+            c1, c2, c3 = st.columns(3)
+            name = c1.text_input("Name*", value=item.name)
+            category = c2.selectbox("Category*", CATEGORIES, index=CATEGORIES.index(item.category))
+            type_ = c3.text_input("Type", value=item.type or "")
+
+            c4, c5, c6 = st.columns(3)
+            color_primary = c4.text_input("Color primary*", value=item.color_primary)
+            color_secondary = c5.text_input("Color secondary", value=item.color_secondary or "")
+            status = c6.selectbox("Status*", STATUSES, index=STATUSES.index(item.status))
+
+            c7, c8 = st.columns(2)
+            season = c7.selectbox("Season*", SEASONS, index=SEASONS.index(item.season))
+            occasion = c8.selectbox("Occasion*", OCCASIONS, index=OCCASIONS.index(item.occasion))
+
+            notes = st.text_area("Notes", value=item.notes or "", height=80)
+
+            st.markdown("**Adicionar novas fotos (opcional)**")
+            uploads = st.file_uploader("Novas fotos", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+            primary_index = st.number_input("Índice da foto principal (novas uploads)", min_value=0, value=0, step=1)
+
+            submit = st.form_submit_button("Salvar alterações")
+
+        st.markdown("### Marcar status rápido")
+        qcols = st.columns(3)
+        for i, stt in enumerate(STATUSES):
+            with qcols[i]:
+                if st.button(f"{stt}", key=f"quick_{stt}"):
+                    item.status = stt
+                    repo_update_item(s, item)
+                    bump_cache()
+                    st.success(f"Status alterado para {stt}.")
+                    st.rerun()
+
+        if submit:
+            payload = {
+                "name": name.strip(),
+                "category": category,
+                "type": (type_.strip() or None),
+                "color_primary": color_primary.strip(),
+                "color_secondary": (color_secondary.strip() or None),
+                "season": season,
+                "occasion": occasion,
+                "status": status,
+                "notes": (notes.strip() or None),
+            }
+            ok, msg = validate_item_payload(payload)
+            if not ok:
+                st.error(f"Erro: {msg}")
+                return
+
+            item.name = payload["name"]
+            item.category = payload["category"]
+            item.type = payload["type"]
+            item.color_primary = payload["color_primary"]
+            item.color_secondary = payload["color_secondary"]
+            item.season = payload["season"]
+            item.occasion = payload["occasion"]
+            item.status = payload["status"]
+            item.notes = payload["notes"]
+            repo_update_item(s, item)
+
+            if uploads and len(uploads) > 0:
+                if primary_index >= len(uploads):
+                    st.error("Índice da foto principal (novas uploads) inválido.")
                 else:
-                    create_user(db, username, password, RoleEnum(role)); st.success("Usuário criado com sucesso!"); _safe_rerun()
+                    for i, uf in enumerate(uploads):
+                        p = save_upload_to_disk(uf)
+                        make_thumbnail(p)
+                        item.images.append(ItemImage(file_path=str(p.as_posix()), is_primary=(i == int(primary_index))))
+                    # if new images were added and one is primary, clear older primaries
+                    if len(uploads) > 0:
+                        # set exactly one primary: prefer the newly uploaded "primary_index"
+                        # first clear all primaries
+                        for im in item.images:
+                            im.is_primary = False
+                        # now set the last batch primary
+                        last_batch = item.images[-len(uploads):]
+                        last_batch[int(primary_index)].is_primary = True
+                    repo_update_item(s, item)
 
-    st.subheader("Exportar dados (Excel)")
-    if not HAVE_PANDAS:
-        st.info("Para exportar, instale: pandas e openpyxl.")
-    else:
-        if st.button("Gerar arquivo .xlsx"):
-            with SessionLocal() as db:
-                fornecedores=db.query(Fornecedor).options(
-                    joinedload(Fornecedor.documentos),
-                    joinedload(Fornecedor.auditoria),
-                    joinedload(Fornecedor.planos_acao),
-                    joinedload(Fornecedor.contratos),
-                    joinedload(Fornecedor.mtrs).joinedload(MTR.cdfs)
-                ).all()
-            output=BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_f = pd.DataFrame([{
-                    "id":f.id,"nome":f.nome,"cpf_cnpj":f.cpf_cnpj,"endereco":f.endereco,"telefone":f.telefone,
-                    "updated_by":f.updated_by,"created_at":f.created_at,"updated_at":f.updated_at
-                } for f in fornecedores])
-                if not df_f.empty: df_f["cpf_cnpj_fmt"]=df_f["cpf_cnpj"].apply(formatar_cpf_cnpj)
-                df_f.to_excel(writer, sheet_name="Fornecedores", index=False)
+            bump_cache()
+            st.success("Peça atualizada!")
+            st.rerun()
 
-                rows_d=[]
-                for f in fornecedores:
-                    for d in f.documentos:
-                        rows_d.append({
-                            "fornecedor_id":f.id,"fornecedor":f.nome,"tipo":d.tipo,
-                            "data_inicio":d.data_inicio,"data_validade":d.data_validade,
-                            "arquivo":d.arquivo,"updated_by":d.updated_by
-                        })
-                pd.DataFrame(rows_d).to_excel(writer, sheet_name="Documentos", index=False)
+        st.divider()
+        st.subheader("Excluir peça")
+        confirm = st.checkbox("Confirmo que quero excluir esta peça", value=False)
+        if st.button("Excluir definitivamente", disabled=not confirm):
+            repo_delete_item_and_files(s, item)
+            bump_cache()
+            st.success("Peça excluída.")
+            st.query_params.clear()
+            st.rerun()
 
-                rows_a=[]
-                for f in fornecedores:
-                    a=f.auditoria
-                    if a:
-                        modelo=a.respostas.get("modelo") if isinstance(a.respostas,dict) else "v1"
-                        area_pct=a.respostas.get("area_pct") if isinstance(a.respostas,dict) else None
-                        rows_a.append({
-                            "fornecedor_id":f.id,"fornecedor":f.nome,"score":a.score,"classificado":a.classificado,
-                            "modelo":modelo,"area_pct_json":json.dumps(_make_json_safe(area_pct),ensure_ascii=False) if area_pct else "",
-                            "respostas_json":json.dumps(_make_json_safe(a.respostas),ensure_ascii=False),"updated_by":a.updated_by
-                        })
-                pd.DataFrame(rows_a).to_excel(writer, sheet_name="Auditorias", index=False)
+        if st.button("Voltar ao Closet"):
+            st.query_params.clear()
+            st.rerun()
 
-                rows_p=[]
-                for f in fornecedores:
-                    for p in f.planos_acao:
-                        rows_p.append({
-                            "fornecedor_id":f.id,"fornecedor":f.nome,"descricao":p.descricao,
-                            "inicio":p.data_inicio,"fim":p.data_fim,"status":p.status,
-                            "evidencias":json.dumps(_make_json_safe(p.evidencias),ensure_ascii=False),"updated_by":p.updated_by
-                        })
-                pd.DataFrame(rows_p).to_excel(writer, sheet_name="Planos", index=False)
+def page_looks():
+    st.title("Looks")
+    order_by = st.selectbox("Ordenação", ["recent", "name"], index=0)
+    looks = cached_looks(cache_token(), order_by)
+    counts = cached_wear_counts(cache_token())
 
-                rows_c=[]
-                for f in fornecedores:
-                    for c in f.contratos:
-                        rows_c.append({
-                            "fornecedor_id":f.id,"fornecedor":f.nome,"assinatura":c.data_assinatura,
-                            "validade":c.data_validade,"arquivo":c.arquivo,"updated_by":c.updated_by
-                        })
-                pd.DataFrame(rows_c).to_excel(writer, sheet_name="Contratos", index=False)
+    st.divider()
+    st.subheader("Criar look (metadados)")
+    st.caption("Para escolher peças por slots (top/bottom/footwear), use **Montar Look** no menu.")
 
-                rows_m=[]
-                for f in fornecedores:
-                    for m in f.mtrs:
-                        rows_m.append({
-                            "fornecedor_id":f.id,"fornecedor":f.nome,"mtr_numero":m.numero_mtr,
-                            "recebimento":m.destinador_data_recebimento,"qtd_kg":m.qtd_kg,
-                            "und_origem":m.und_original,"qtd_original":m.qtd_original,
-                            "tipo_residuo":m.tipo_residuo,"destinacao":m.destinacao,
-                            "fator_tco2e_t":m.fator_tco2e_por_ton,"tco2e":m.emissoes_tco2e,
-                            "cdf_count":m.cdf_count,"arquivo":m.arquivo
-                        })
-                pd.DataFrame(rows_m).to_excel(writer, sheet_name="MTRs", index=False)
+    with st.form("create_look_form"):
+        c1, c2, c3 = st.columns(3)
+        name = c1.text_input("Name*")
+        season = c2.selectbox("Season*", SEASONS)
+        occasion = c3.selectbox("Occasion*", OCCASIONS)
+        notes = st.text_area("Notes", height=60)
+        submit = st.form_submit_button("Criar look")
 
-                rows_cdf=[]
-                for f in fornecedores:
-                    for m in f.mtrs:
-                        for cdf in m.cdfs:
-                            rows_cdf.append({
-                                "fornecedor_id":f.id,"fornecedor":f.nome,"mtr_numero":m.numero_mtr,
-                                "cdf_data":cdf.data_emissao,"observacao":cdf.observacao,"arquivo":cdf.arquivo
-                            })
-                pd.DataFrame(rows_cdf).to_excel(writer, sheet_name="CDFs", index=False)
+    if submit:
+        payload = {"name": name.strip(), "season": season, "occasion": occasion, "notes": (notes.strip() or None)}
+        ok, msg = validate_look_payload(payload)
+        if not ok:
+            st.error(f"Erro: {msg}")
+        else:
+            with db_session() as s:
+                repo_create_look(s, payload)
+            bump_cache()
+            st.success("Look criado. Vá em **Montar Look** para adicionar peças.")
+            st.rerun()
 
-                # Fatores de Emissão
-                with SessionLocal() as db:
-                    fac=db.query(FatorEmissao).order_by(FatorEmissao.tipo_residuo.asc(),FatorEmissao.destinacao.asc()).all()
-                rows_fe=[{
-                    "id":fe.id,"tipo":fe.tipo_residuo,"destinacao":fe.destinacao,
-                    "fator_tco2e_t":fe.fator_tco2e_por_ton,"fonte":fe.fonte,"ano_ref":fe.ano_ref
-                } for fe in fac]
-                pd.DataFrame(rows_fe).to_excel(writer, sheet_name="FatoresEmissao", index=False)
+    st.divider()
+    st.subheader("Lista de looks")
 
-            output.seek(0)
-            st.download_button("Baixar Excel", data=output.read(),
-                               file_name="fornecedores_export.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if not looks:
+        st.info("Nenhum look criado ainda.")
+        return
 
-# ---- Sair ----
-if menu=="Sair":
-    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
-    st.session_state.sel_forn_id=None; _safe_rerun()
+    for lk in looks:
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+            c1.markdown(f"### {lk.name}")
+            c2.caption(f"season: {lk.season}")
+            c3.caption(f"occasion: {lk.occasion}")
+            c4.metric("Usos", counts.get(lk.id, 0))
 
+            slots = {li.slot: li.item.name for li in lk.items}
+            st.caption("Slots: " + (" • ".join([f"{k}:{v}" for k, v in slots.items()]) if slots else "—"))
+
+            b1, b2, b3 = st.columns(3)
+            with b1:
+                if st.button("Editar/Montar", key=f"edit_{lk.id}"):
+                    st.query_params["look_id"] = str(lk.id)
+                    st.rerun()
+            with b2:
+                if st.button("Usei hoje", key=f"use_{lk.id}"):
+                    with db_session() as s:
+                        repo_log_wear(s, lk.id, None)
+                    bump_cache()
+                    st.success("Uso registrado.")
+                    st.rerun()
+            with b3:
+                if st.button("Excluir", key=f"del_{lk.id}"):
+                    st.session_state["delete_look_id"] = lk.id
+
+    if "delete_look_id" in st.session_state:
+        look_id = st.session_state["delete_look_id"]
+        st.warning(f"Confirmar exclusão do look ID={look_id}?")
+        c1, c2 = st.columns(2)
+        if c1.button("Confirmar excluir"):
+            with db_session() as s:
+                lk = repo_get_look(s, look_id)
+                if lk:
+                    repo_delete_look(s, lk)
+            st.session_state.pop("delete_look_id", None)
+            bump_cache()
+            st.success("Look excluído.")
+            st.rerun()
+        if c2.button("Cancelar"):
+            st.session_state.pop("delete_look_id", None)
+            st.rerun()
+
+def page_look_builder():
+    st.title("Montar Look (manual)")
+
+    qp = st.query_params
+    look_id = int(qp["look_id"]) if "look_id" in qp else None
+
+    with db_session() as s:
+        st.subheader("1) Selecione/crie um look")
+        look = repo_get_look(s, look_id) if look_id else None
+
+        if not look:
+            st.info("Nenhum look selecionado. Crie um novo abaixo ou escolha um existente em Looks.")
+            with st.form("create_look_builder_form"):
+                c1, c2, c3 = st.columns(3)
+                name = c1.text_input("Name*")
+                season = c2.selectbox("Season*", SEASONS)
+                occasion = c3.selectbox("Occasion*", OCCASIONS)
+                notes = st.text_area("Notes", height=60)
+                submit = st.form_submit_button("Criar e montar")
+            if submit:
+                payload = {"name": name.strip(), "season": season, "occasion": occasion, "notes": (notes.strip() or None)}
+                ok, msg = validate_look_payload(payload)
+                if not ok:
+                    st.error(f"Erro: {msg}")
+                    return
+                lk = repo_create_look(s, payload)
+                bump_cache()
+                st.query_params["look_id"] = str(lk.id)
+                st.rerun()
+            return
+
+        st.success(f"Editando look: {look.name} (ID {look.id})")
+
+        st.divider()
+        st.subheader("2) Escolha peças por slot (top/bottom/footwear obrigatórios)")
+
+        items_all = cached_all_items(cache_token())
+        colors = sorted({it.color_primary for it in items_all if it.color_primary})
+
+        current = {li.slot: li.item_id for li in look.items}
+        selections: Dict[str, Optional[int]] = {}
+
+        # Shared filters for search while selecting
+        f1, f2, f3, f4 = st.columns(4)
+        qtext = f1.text_input("Filtro texto", value="")
+        qcolor = f2.selectbox("Cor primária", [""] + colors, index=0)
+        qseason = f3.selectbox("Preferência de season", ["", "summer", "winter", "mid", "all"], index=0)
+        qstatus = f4.selectbox("Status", ["", "available", "laundry", "borrowed"], index=0)
+
+        def filter_candidates(slot: str) -> List[Item]:
+            cat = slot
+            out = [it for it in items_all if it.category == cat]
+            if qtext.strip():
+                t = qtext.strip().lower()
+                out = [it for it in out if (t in it.name.lower()) or (t in (it.type or "").lower()) or (t in (it.notes or "").lower())]
+            if qcolor:
+                out = [it for it in out if it.color_primary == qcolor]
+            if qseason:
+                # allow all-season to pass
+                if qseason != "all":
+                    out = [it for it in out if it.season in (qseason, "all")]
+                else:
+                    out = [it for it in out if it.season in ("all", "summer", "winter", "mid")]
+            if qstatus:
+                out = [it for it in out if it.status == qstatus]
+            return out
+
+        for slot in SLOTS:
+            st.markdown(f"### {slot_label(slot)} {'(obrigatório)' if slot in ('top','bottom','footwear') else '(opcional)'}")
+            candidates = filter_candidates(slot)
+
+            options = {f"{it.name} • {it.type or '—'} • {it.color_primary} • {it.status} (ID {it.id})": it.id for it in candidates}
+            labels = [""] + list(options.keys())
+
+            current_id = current.get(slot)
+            current_label = ""
+            if current_id:
+                for lbl, iid in options.items():
+                    if iid == current_id:
+                        current_label = lbl
+                        break
+
+            idx = labels.index(current_label) if current_label in labels else 0
+            chosen = st.selectbox(f"Selecionar {slot_label(slot)}", labels, index=idx, key=f"slot_{slot}_{look.id}")
+            selections[slot] = options.get(chosen) if chosen else None
+
+            if selections[slot]:
+                it = next((x for x in candidates if x.id == selections[slot]), None)
+                if it:
+                    img = get_item_primary_path(it)
+                    if img and Path(img).exists():
+                        st.image(img, width=220, caption=it.name)
+
+        st.divider()
+        st.subheader("Pré-visualização")
+        preview_cols = st.columns(5)
+        for i, slot in enumerate(SLOTS):
+            with preview_cols[i]:
+                st.caption(slot_label(slot))
+                it_id = selections.get(slot)
+                if not it_id:
+                    st.write("—")
+                    continue
+                it = next((x for x in items_all if x.id == it_id), None)
+                if not it:
+                    st.write("—")
+                    continue
+                img = get_item_primary_path(it)
+                if img and Path(img).exists():
+                    st.image(img, use_column_width=True)
+                st.write(it.name)
+
+        st.divider()
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            if st.button("Salvar slots"):
+                ok, msg = validate_slots(selections)
+                if not ok:
+                    st.error(f"Erro: {msg}")
+                else:
+                    repo_replace_look_slots(s, look, selections)
+                    bump_cache()
+                    st.success("Slots salvos.")
+                    st.rerun()
+        with b2:
+            if st.button("Usei hoje"):
+                repo_log_wear(s, look.id, None)
+                bump_cache()
+                st.success("Uso registrado.")
+                st.rerun()
+        with b3:
+            if st.button("Limpar seleção"):
+                st.query_params.clear()
+                st.rerun()
+
+def page_history():
+    st.title("Histórico (wear_log)")
+    looks = cached_looks(cache_token(), "recent")
+    options = [(0, "— todos —")] + [(lk.id, lk.name) for lk in looks]
+    choice = st.selectbox("Filtrar por look", options, format_func=lambda x: x[1])
+    look_id = choice[0] or None
+
+    logs = cached_history(cache_token(), look_id)
+    if not logs:
+        st.info("Sem registros ainda.")
+        return
+
+    for wl in logs:
+        with st.container(border=True):
+            title = wl.look.name if wl.look else "(look removido)"
+            st.markdown(f"**{title}**")
+            st.caption(f"Data: {wl.date} • Time(UTC): {wl.time}")
+            if wl.notes:
+                st.write(wl.notes)
+
+# -----------------------------
+# Main Router + Sidebar
+# -----------------------------
+def run_app():
+    ensure_cache_buster()
+
+    st.sidebar.title("👗 Armário da Cher")
+    menu = st.sidebar.radio(
+        "Menu",
+        ["Dashboard", "Closet (Peças)", "Nova Peça", "Looks", "Montar Look", "Histórico"],
+        index=0,
+    )
+
+    # deep-link: item detail has priority
+    if "item_id" in st.query_params:
+        page_item_detail()
+        return
+
+    if menu == "Dashboard":
+        page_dashboard()
+    elif menu == "Closet (Peças)":
+        page_closet()
+    elif menu == "Nova Peça":
+        page_item_new()
+    elif menu == "Looks":
+        page_looks()
+    elif menu == "Montar Look":
+        page_look_builder()
+    elif menu == "Histórico":
+        page_history()
+
+run_app()
