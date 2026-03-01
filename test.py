@@ -3,6 +3,7 @@ import streamlit as st
 import sqlite3
 import hashlib
 from datetime import datetime
+from io import BytesIO
 
 DB_PATH = "armario_cher.db"
 
@@ -36,10 +37,6 @@ def insert_image(conn, filename: str, mime: str, content: bytes):
     conn.commit()
 
 def fetch_images(conn, query: str = ""):
-    """
-    IMPORTANT: SQLite pode devolver BLOB como 'memoryview' dependendo do ambiente.
-    O Streamlit st.image pode falhar com memoryview. Então convertemos para bytes aqui.
-    """
     if query.strip():
         q = f"%{query.strip().lower()}%"
         cur = conn.execute(
@@ -56,18 +53,46 @@ def fetch_images(conn, query: str = ""):
 
     fixed = []
     for (image_id, filename, mime, content, uploaded_at) in rows:
-        # content pode vir como memoryview -> converte para bytes
+        # SQLite pode devolver BLOB como memoryview
         if isinstance(content, memoryview):
             content = content.tobytes()
-        elif not isinstance(content, (bytes, bytearray)):
-            # fallback ultra defensivo
+        elif isinstance(content, bytearray):
             content = bytes(content)
+        elif not isinstance(content, (bytes,)):
+            # fallback defensivo
+            content = bytes(content)
+
         fixed.append((image_id, filename, mime, content, uploaded_at))
     return fixed
 
 def delete_image(conn, image_id: int):
     conn.execute("DELETE FROM images WHERE id = ?", (image_id,))
     conn.commit()
+
+# -------------------------
+# Image rendering (robusto)
+# -------------------------
+def render_image(content: bytes, caption: str):
+    """
+    Render robusto para Streamlit Cloud/Py3.13:
+    1) Tenta st.image(BytesIO(...)) (bem compatível)
+    2) Se falhar, tenta Pillow (se instalado)
+    3) Se falhar, mostra aviso
+    """
+    try:
+        st.image(BytesIO(content), caption=caption, use_container_width=True)
+        return
+    except Exception:
+        pass
+
+    # fallback com Pillow (se existir)
+    try:
+        from PIL import Image  # pillow opcional
+        img = Image.open(BytesIO(content))
+        st.image(img, caption=caption, use_container_width=True)
+        return
+    except Exception:
+        st.warning("Não foi possível renderizar esta imagem (arquivo pode estar corrompido ou formato inesperado).")
 
 # -------------------------
 # UI pages
@@ -82,34 +107,28 @@ def page_upload(conn):
         accept_multiple_files=True
     )
 
-    if files:
-        if st.button("Salvar no banco", type="primary"):
-            saved, skipped, failed = 0, 0, 0
+    if files and st.button("Salvar no banco", type="primary"):
+        saved, skipped, failed = 0, 0, 0
 
-            for f in files:
-                try:
-                    content = f.getvalue()
-                    if not content:
-                        failed += 1
-                        continue
-
-                    mime = f.type or "application/octet-stream"
-
-                    try:
-                        insert_image(conn, f.name, mime, content)
-                        saved += 1
-                    except sqlite3.IntegrityError:
-                        # sha256 UNIQUE -> já existe
-                        skipped += 1
-
-                except Exception:
+        for f in files:
+            try:
+                content = f.getvalue()
+                if not content:
                     failed += 1
+                    continue
 
-            st.success(f"✅ Salvas: {saved} | ⚠️ Duplicadas ignoradas: {skipped} | ❌ Falhas: {failed}")
+                mime = f.type or "application/octet-stream"
 
-    st.divider()
-    st.subheader("Próximos passos (quando você quiser)")
-    st.write("Tags, categoria, cor, ocasião, estação, lookbook, etc.")
+                try:
+                    insert_image(conn, f.name, mime, content)
+                    saved += 1
+                except sqlite3.IntegrityError:
+                    skipped += 1
+
+            except Exception:
+                failed += 1
+
+        st.success(f"✅ Salvas: {saved} | ⚠️ Duplicadas ignoradas: {skipped} | ❌ Falhas: {failed}")
 
 def page_gallery(conn):
     st.header("🖼️ Galeria (todas as imagens)")
@@ -130,11 +149,18 @@ def page_gallery(conn):
         for col, row in zip(cols, rows[i:i + cols_per_row]):
             image_id, filename, mime, content, uploaded_at = row
             with col:
-                # content já está em bytes por causa do fetch_images
-                st.image(content, caption=filename, use_container_width=True)
+                render_image(content, caption=filename)
                 st.caption(f"ID: {image_id} • {uploaded_at}")
 
                 with st.expander("Opções", expanded=False):
+                    st.download_button(
+                        "⬇️ Baixar arquivo",
+                        data=content,
+                        file_name=filename,
+                        mime=mime,
+                        key=f"dl_{image_id}"
+                    )
+
                     if st.button(f"🗑️ Excluir (ID {image_id})", key=f"del_{image_id}"):
                         delete_image(conn, image_id)
                         st.rerun()
