@@ -1,4 +1,4 @@
-# app.py
+# test.py
 import streamlit as st
 import sqlite3
 import hashlib
@@ -36,17 +36,34 @@ def insert_image(conn, filename: str, mime: str, content: bytes):
     conn.commit()
 
 def fetch_images(conn, query: str = ""):
+    """
+    IMPORTANT: SQLite pode devolver BLOB como 'memoryview' dependendo do ambiente.
+    O Streamlit st.image pode falhar com memoryview. Então convertemos para bytes aqui.
+    """
     if query.strip():
         q = f"%{query.strip().lower()}%"
         cur = conn.execute(
-            "SELECT id, filename, mime, content, uploaded_at FROM images WHERE LOWER(filename) LIKE ? ORDER BY id DESC",
+            "SELECT id, filename, mime, content, uploaded_at FROM images "
+            "WHERE LOWER(filename) LIKE ? ORDER BY id DESC",
             (q,)
         )
     else:
         cur = conn.execute(
             "SELECT id, filename, mime, content, uploaded_at FROM images ORDER BY id DESC"
         )
-    return cur.fetchall()
+
+    rows = cur.fetchall()
+
+    fixed = []
+    for (image_id, filename, mime, content, uploaded_at) in rows:
+        # content pode vir como memoryview -> converte para bytes
+        if isinstance(content, memoryview):
+            content = content.tobytes()
+        elif not isinstance(content, (bytes, bytearray)):
+            # fallback ultra defensivo
+            content = bytes(content)
+        fixed.append((image_id, filename, mime, content, uploaded_at))
+    return fixed
 
 def delete_image(conn, image_id: int):
     conn.execute("DELETE FROM images WHERE id = ?", (image_id,))
@@ -57,7 +74,7 @@ def delete_image(conn, image_id: int):
 # -------------------------
 def page_upload(conn):
     st.header("📤 Upload de imagens (peças)")
-    st.caption("As imagens serão salvas no SQLite como BLOB. Duplicatas são evitadas por hash (sha256).")
+    st.caption("As imagens são salvas no SQLite como BLOB. Duplicatas são evitadas via hash (sha256).")
 
     files = st.file_uploader(
         "Selecione uma ou mais imagens",
@@ -68,26 +85,31 @@ def page_upload(conn):
     if files:
         if st.button("Salvar no banco", type="primary"):
             saved, skipped, failed = 0, 0, 0
+
             for f in files:
                 try:
                     content = f.getvalue()
                     if not content:
                         failed += 1
                         continue
+
+                    mime = f.type or "application/octet-stream"
+
                     try:
-                        insert_image(conn, f.name, f.type or "application/octet-stream", content)
+                        insert_image(conn, f.name, mime, content)
                         saved += 1
                     except sqlite3.IntegrityError:
                         # sha256 UNIQUE -> já existe
                         skipped += 1
+
                 except Exception:
                     failed += 1
 
             st.success(f"✅ Salvas: {saved} | ⚠️ Duplicadas ignoradas: {skipped} | ❌ Falhas: {failed}")
 
     st.divider()
-    st.subheader("Dica")
-    st.write("Se depois quisermos, dá pra adicionar: tags, categoria, cor, ocasião, estação, etc.")
+    st.subheader("Próximos passos (quando você quiser)")
+    st.write("Tags, categoria, cor, ocasião, estação, lookbook, etc.")
 
 def page_gallery(conn):
     st.header("🖼️ Galeria (todas as imagens)")
@@ -102,17 +124,16 @@ def page_gallery(conn):
         st.info("Nenhuma imagem encontrada. Vá na página de Upload e adicione algumas.")
         return
 
-    # Mostra em grid
     cols_per_row = 3
     for i in range(0, len(rows), cols_per_row):
         cols = st.columns(cols_per_row)
-        for col, row in zip(cols, rows[i:i+cols_per_row]):
+        for col, row in zip(cols, rows[i:i + cols_per_row]):
             image_id, filename, mime, content, uploaded_at = row
             with col:
+                # content já está em bytes por causa do fetch_images
                 st.image(content, caption=filename, use_container_width=True)
                 st.caption(f"ID: {image_id} • {uploaded_at}")
 
-                # (Opcional, mas útil) deletar — pode remover se quiser manter ultra simples
                 with st.expander("Opções", expanded=False):
                     if st.button(f"🗑️ Excluir (ID {image_id})", key=f"del_{image_id}"):
                         delete_image(conn, image_id)
@@ -123,7 +144,6 @@ def page_gallery(conn):
 # -------------------------
 def main():
     st.set_page_config(page_title="Armário da Cher (MVP)", page_icon="👗", layout="wide")
-
     conn = get_conn()
 
     st.sidebar.title("👗 Armário da Cher (MVP)")
