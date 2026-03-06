@@ -1333,7 +1333,7 @@ if menu=="MTRs":
                                 continue
                             with SessionLocal() as db:
                                 m=MTR(
-                                    fornecedor_id=fornecedor_id,
+                                    fornecedor_id=int(original.get("fornecedor_id") or fornecedor_id),
                                     arquivo=original["arquivo"],
                                     numero_mtr=str(r.get("numero_mtr") or "").strip() or None,
                                     gerador_razao=str(r.get("gerador_razao") or "").strip() or None,
