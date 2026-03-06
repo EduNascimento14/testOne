@@ -169,12 +169,32 @@ def _make_json_safe(obj):
 class RoleEnum(str, enum.Enum):
     admin="Admin"; auditor="Auditor"; leitor="Leitor"
 
+class SiteEnum(str, enum.Enum):
+    CAC = "CAC"
+    SJC = "SJC"
+    PER = "PER"
+    JUN = "JUN"
+    JAC = "JAC"
+    DIA = "DIA"
+    LAG = "LAG"
+
+SITES_PRODUTIVOS = (
+    SiteEnum.CAC.value,
+    SiteEnum.SJC.value,
+    SiteEnum.PER.value,
+    SiteEnum.JUN.value,
+    SiteEnum.JAC.value,
+    SiteEnum.DIA.value,
+)
+TODOS_SITES = SITES_PRODUTIVOS + (SiteEnum.LAG.value,)
+
 class User(Base):
     __tablename__="users"
     id = Column(Integer, primary_key=True)
     username = Column(String(150), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     role = Column(Enum(RoleEnum), nullable=False, default=RoleEnum.auditor)
+    site = Column(Enum(SiteEnum), nullable=False, default=SiteEnum.CAC)
     created_at = Column(Date, server_default=func.current_date())
 
 class Fornecedor(Base):
@@ -267,6 +287,7 @@ class MTR(Base):
     qtd_kg = Column(Float)
     dados_raw = Column(JSON)
     cdf_count = Column(Integer, default=0)
+    site = Column(Enum(SiteEnum), nullable=False, default=SiteEnum.CAC)
     created_at = Column(Date, server_default=func.current_date())
     updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
     updated_by = Column(String(150))
@@ -296,8 +317,8 @@ def verify_password(p:str,h:str)->bool:
 def get_user_by_username(db:Session, username:str)->User|None:
     return db.query(User).filter(User.username==username).first()
 
-def create_user(db:Session, username:str, password:str, role:RoleEnum)->User:
-    u=User(username=username, password_hash=hash_password(password), role=role)
+def create_user(db:Session, username:str, password:str, role:RoleEnum, site:SiteEnum)->User:
+    u=User(username=username, password_hash=hash_password(password), role=role, site=site)
     db.add(u); db.commit(); db.refresh(u); return u
 
 # =========================
@@ -305,11 +326,27 @@ def create_user(db:Session, username:str, password:str, role:RoleEnum)->User:
 # =========================
 def run_light_migrations():
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        try:
+            cols = [r[1] for r in conn.execute(text("PRAGMA table_info(users)"))]
+            if "site" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN site VARCHAR(3) DEFAULT 'CAC' NOT NULL"))
+                conn.execute(text("UPDATE users SET site='LAG' WHERE username='Eduardo'"))
+                conn.execute(text("UPDATE users SET site='CAC' WHERE site IS NULL OR site=''"))
+        except Exception:
+            pass
+        try:
+            cols = [r[1] for r in conn.execute(text("PRAGMA table_info(mtrs)"))]
+            if "site" not in cols:
+                conn.execute(text("ALTER TABLE mtrs ADD COLUMN site VARCHAR(3) DEFAULT 'CAC' NOT NULL"))
+                conn.execute(text("UPDATE mtrs SET site='CAC' WHERE site IS NULL OR site=''"))
+        except Exception:
+            pass
 
 def seed_users():
     with SessionLocal() as db:
         if not get_user_by_username(db, "Eduardo"):
-            create_user(db, "Eduardo", "Capitu", RoleEnum.admin)
+            create_user(db, "Eduardo", "Capitu", RoleEnum.admin, SiteEnum.LAG)
 
 # =========================
 #   PARSER DA MTR (PDF)
@@ -564,7 +601,7 @@ run_light_migrations()
 seed_users()
 
 if "logado" not in st.session_state:
-    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
+    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None; st.session_state.site=None
 if "sel_forn_id" not in st.session_state:
     st.session_state.sel_forn_id=None
 
@@ -584,6 +621,7 @@ def pagina_login():
                 st.session_state.logado=True
                 st.session_state.usuario=u.username
                 st.session_state.role=u.role.value
+                st.session_state.site=u.site.value
                 st.success(f"Bem-vindo, {u.username}!")
                 _safe_rerun()
             else:
@@ -604,17 +642,32 @@ else:
         ["Overview","Cadastrar Fornecedor","Visualizar Fornecedores","MTRs","Admin (Usuários)","Sair"]
     )
 st.sidebar.title(f"Usuário: {st.session_state.usuario} ({st.session_state.role})")
+site_logado = st.session_state.site
+acesso_corporativo = site_logado == SiteEnum.LAG.value
+st.sidebar.caption(f"Site: {site_logado}")
 
 # =========================
 #        KPIs / HELPERS
 # =========================
+def mtr_query_por_site(db:Session):
+    q = db.query(MTR)
+    if not acesso_corporativo:
+        q = q.filter(MTR.site==site_logado)
+    return q
+
+def mtrs_do_fornecedor_query(db:Session, fornecedor_id:int):
+    q = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.fornecedor_id==fornecedor_id)
+    if not acesso_corporativo:
+        q = q.filter(MTR.site==site_logado)
+    return q
+
 def documentos_status(docs)->tuple[int,int]:
     hoje=date.today(); limite=hoje+timedelta(days=30)
     vencidos=sum(1 for d in docs if d.data_validade and d.data_validade<hoje)
     a_vencer=sum(1 for d in docs if d.data_validade and hoje<=d.data_validade<=limite)
     return vencidos, a_vencer
 
-def kpis_gerais(db:Session)->dict:
+def kpis_gerais(db:Session, site:str, acesso_total:bool)->dict:
     total_fornecedores=db.query(Fornecedor).count()
     conformes=db.query(Auditoria).filter(Auditoria.classificado=="Conforme/Adequado").count()
     parcialmente=db.query(Auditoria).filter(Auditoria.classificado=="Parcialmente Conforme").count()
@@ -623,11 +676,18 @@ def kpis_gerais(db:Session)->dict:
     forn_sem_contrato=total_fornecedores - forn_com_contrato
     docs=db.query(Documento).all()
     vencidos,a_vencer=documentos_status(docs)
-    mtr_total_kg=float(db.query(func.coalesce(func.sum(MTR.qtd_kg),0.0)).scalar() or 0.0)
-    mtr_por_forn=db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.qtd_kg),0.0))\
-        .join(MTR, MTR.fornecedor_id==Fornecedor.id, isouter=True).group_by(Fornecedor.id).all()
-    total_mtrs=int(db.query(MTR).count())
-    mtrs_com_cdf=int(db.query(MTR).filter(MTR.cdf_count>0).count())
+    mtr_q = db.query(MTR)
+    if not acesso_total:
+        mtr_q = mtr_q.filter(MTR.site==site)
+    mtr_total_kg=float(mtr_q.with_entities(func.coalesce(func.sum(MTR.qtd_kg),0.0)).scalar() or 0.0)
+
+    mtr_por_forn_q=db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.qtd_kg),0.0))        .join(MTR, MTR.fornecedor_id==Fornecedor.id, isouter=False)
+    if not acesso_total:
+        mtr_por_forn_q = mtr_por_forn_q.filter(MTR.site==site)
+    mtr_por_forn=mtr_por_forn_q.group_by(Fornecedor.id).all()
+
+    total_mtrs=int(mtr_q.count())
+    mtrs_com_cdf=int(mtr_q.filter(MTR.cdf_count>0).count())
     return {
         "total_fornecedores": total_fornecedores,
         "conformes": conformes, "parcial": parcialmente, "nao_conformes": nao_conformes,
@@ -652,14 +712,14 @@ if menu=="Overview":
     with colp2:
         crit_only = st.toggle("Mostrar apenas itens críticos", value=False, help="Filtra as tabelas para focar nos casos urgentes/atrasados.")
     with colp3:
-        st.caption(f"Usuário: **{st.session_state.usuario}**  •  Perfil: **{st.session_state.role}**")
+        st.caption(f"Usuário: **{st.session_state.usuario}**  •  Perfil: **{st.session_state.role}**  •  Site: **{site_logado}**")
 
     hoje = date.today()
     limite = hoje + timedelta(days=janela_dias)
 
     # ====== KPIs tradicionais (mantidos) ======
     with SessionLocal() as db:
-        k = kpis_gerais(db)
+        k = kpis_gerais(db, site_logado, acesso_corporativo)
 
     fig_total = px.pie(
         names=["Conforme/Adequado","Parcialmente Conforme","Não Conforme/Inadequado"],
@@ -1225,14 +1285,13 @@ if menu=="Visualizar Fornecedores":
             # MTRs do fornecedor
             with tabs[5]:
                 st.subheader("MTRs do fornecedor")
-                total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
+                with SessionLocal() as db:
+                    mtrs_visiveis = mtrs_do_fornecedor_query(db, sel.id).order_by(MTR.id.desc()).all()
+                total_kg = sum(m.qtd_kg or 0.0 for m in mtrs_visiveis)
                 st.write(f"**Total destinado (kg):** {total_kg:.1f}")
-                for m in sel.mtrs:
+                for m in mtrs_visiveis:
                     with st.container(border=True):
-                        with SessionLocal() as db:
-                            m_db = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.id==m.id).first()
-                        m = m_db or m
-                        st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Receb.:** {m.destinador_data_recebimento or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
+                        st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Site:** {m.site.value if m.site else '-'} | **Receb.:** {m.destinador_data_recebimento or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
 
                         st.markdown("**CDF(s):**")
                         if m.cdfs:
@@ -1251,7 +1310,11 @@ if menu=="Visualizar Fornecedores":
                                     novo = CDF(mtr_id=m.id, arquivo=caminho, data_emissao=cdf_data,
                                                observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
                                     db.add(novo)
-                                    mm=db.query(MTR).filter(MTR.id==m.id).first(); mm.cdf_count=(mm.cdf_count or 0)+1
+                                    mm=mtr_query_por_site(db).filter(MTR.id==m.id).first()
+                                    if not mm:
+                                        st.error("MTR não encontrada para o seu site.")
+                                        st.stop()
+                                    mm.cdf_count=(mm.cdf_count or 0)+1
                                     db.commit(); st.success("CDF anexado com sucesso!"); _safe_rerun()
 
 # ---- Página MTRs (importação com revisão e confirmação) ----
@@ -1267,7 +1330,7 @@ if menu=="MTRs":
 
     with SessionLocal() as db:
         fornecedores=db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
-        mtrs_all=db.query(MTR).options(joinedload(MTR.fornecedor), selectinload(MTR.cdfs)).order_by(MTR.id.desc()).all()
+        mtrs_all=mtr_query_por_site(db).options(joinedload(MTR.fornecedor), selectinload(MTR.cdfs)).order_by(MTR.id.desc()).all()
 
     if not fornecedores:
         st.info("Cadastre fornecedores antes de gerenciar MTRs.")
@@ -1277,22 +1340,24 @@ if menu=="MTRs":
     if not mtrs_all:
         st.info("Nenhuma MTR cadastrada ainda.")
     else:
-        head = st.columns([1.1, 1.2, 0.8, 0.8, 0.6, 0.3])
+        head = st.columns([1.0, 1.1, 0.6, 0.8, 0.8, 0.6, 0.3])
         head[0].markdown("**MTR nº**")
         head[1].markdown("**Fornecedor**")
-        head[2].markdown("**Recebimento**")
-        head[3].markdown("**Status CDF**")
-        head[4].markdown("**CDF(s)**")
-        head[5].markdown("**Doc**")
+        head[2].markdown("**Site**")
+        head[3].markdown("**Recebimento**")
+        head[4].markdown("**Status CDF**")
+        head[5].markdown("**CDF(s)**")
+        head[6].markdown("**Doc**")
 
         for m in mtrs_all:
-            cols = st.columns([1.1, 1.2, 0.8, 0.8, 0.6, 0.3])
+            cols = st.columns([1.0, 1.1, 0.6, 0.8, 0.8, 0.6, 0.3])
             cols[0].write(m.numero_mtr or "-")
             cols[1].write(m.fornecedor.nome if m.fornecedor else "-")
-            cols[2].write(str(m.destinador_data_recebimento or "-"))
-            cols[3].write("Com CDF" if (m.cdf_count or 0) > 0 else "Sem CDF")
-            cols[4].write(m.cdf_count or 0)
-            if cols[5].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
+            cols[2].write(m.site.value if m.site else "-")
+            cols[3].write(str(m.destinador_data_recebimento or "-"))
+            cols[4].write("Com CDF" if (m.cdf_count or 0) > 0 else "Sem CDF")
+            cols[5].write(m.cdf_count or 0)
+            if cols[6].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
                 st.session_state.mtr_doc_view_id = m.id
 
         mtr_doc_view_id = st.session_state.get("mtr_doc_view_id")
@@ -1321,6 +1386,12 @@ if menu=="MTRs":
 
         forn_label=st.selectbox("Associar MTRs ao fornecedor", list(forn_map.keys()), key="forn_cad_mtr")
         fornecedor_id=forn_map[forn_label]
+
+        if acesso_corporativo:
+            site_gerador = st.selectbox("Site gerador do resíduo", SITES_PRODUTIVOS, key="site_gerador_mtr")
+        else:
+            site_gerador = site_logado
+            st.caption(f"Site gerador fixado pelo seu acesso: **{site_gerador}**")
 
         uploads=st.file_uploader("Enviar PDFs de MTR", type=["pdf"], accept_multiple_files=True, key="up_mtr_cad")
         if uploads and st.button("Processar MTRs"):
@@ -1405,6 +1476,7 @@ if menu=="MTRs":
                                         und_original=str(r.get("und_original") or "").strip() or None,
                                         qtd_kg=float(r.get("qtd_kg") or 0.0),
                                         dados_raw=_make_json_safe(original.get("dados_raw") or {}),
+                                        site=SiteEnum(site_gerador),
                                         updated_by=st.session_state.usuario
                                     )
                                     db.add(m); db.commit(); ok += 1
@@ -1425,7 +1497,7 @@ if menu=="MTRs":
         forn_label=st.selectbox("Fornecedor", list(forn_map.keys()), key="forn_add_cdf")
         fornecedor_id=forn_map[forn_label]
         with SessionLocal() as db:
-            mtrs = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
+            mtrs = mtrs_do_fornecedor_query(db, fornecedor_id).order_by(MTR.id.desc()).all()
 
         if not mtrs:
             st.info("Nenhuma MTR cadastrada para este fornecedor.")
@@ -1452,7 +1524,11 @@ if menu=="MTRs":
                         novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
                                    observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
                         db.add(novo)
-                        mm = db.query(MTR).filter(MTR.id==mid).first(); mm.cdf_count = (mm.cdf_count or 0) + 1
+                        mm = mtr_query_por_site(db).filter(MTR.id==mid).first()
+                        if not mm:
+                            st.error("MTR não encontrada para o seu site.")
+                            st.stop()
+                        mm.cdf_count = (mm.cdf_count or 0) + 1
                         db.commit()
                     st.success("CDF anexado com sucesso!")
                     _safe_rerun()
@@ -1462,7 +1538,7 @@ if menu=="MTRs":
         forn_label=st.selectbox("Fornecedor", list(forn_map.keys()), key="forn_edit_mtr")
         fornecedor_id=forn_map[forn_label]
         with SessionLocal() as db:
-            mtrs = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
+            mtrs = mtrs_do_fornecedor_query(db, fornecedor_id).order_by(MTR.id.desc()).all()
 
         if not mtrs:
             st.info("Nenhuma MTR cadastrada para este fornecedor.")
@@ -1481,7 +1557,10 @@ if menu=="MTRs":
 
             if edit_obs:
                 with SessionLocal() as db:
-                    me = db.query(MTR).filter(MTR.id==mid).first()
+                    me = mtr_query_por_site(db).filter(MTR.id==mid).first()
+                    if not me:
+                        st.error("MTR não encontrada para o seu site.")
+                        st.stop()
                     me.numero_mtr = numero_mtr.strip() or None
                     me.qtd_kg = float(qtd_kg or 0.0)
                     me.gerador_data_emissao = parse_data_flex(dt_emissao)
@@ -1521,12 +1600,13 @@ if menu=="Admin (Usuários)":
     st.header("Administração")
     with SessionLocal() as db: usuarios=db.query(User).all()
     st.subheader("Usuários")
-    for u in usuarios: st.write(f"- **{u.username}** — {u.role.value}")
+    for u in usuarios: st.write(f"- **{u.username}** — {u.role.value} — site {u.site.value}")
     st.subheader("Criar novo usuário")
     with st.form("form_user"):
         username=st.text_input("Usuário").strip()
         password=st.text_input("Senha", type="password").strip()
         role=st.selectbox("Papel", [RoleEnum.admin.value, RoleEnum.auditor.value, RoleEnum.leitor.value])
+        site=st.selectbox("Site", TODOS_SITES, index=0)
         enviar=st.form_submit_button("Criar")
     if enviar:
         if not username or not password: st.error("Preencha usuário e senha.")
@@ -1534,7 +1614,7 @@ if menu=="Admin (Usuários)":
             with SessionLocal() as db:
                 if get_user_by_username(db, username): st.error("Usuário já existe.")
                 else:
-                    create_user(db, username, password, RoleEnum(role)); st.success("Usuário criado com sucesso!"); _safe_rerun()
+                    create_user(db, username, password, RoleEnum(role), SiteEnum(site)); st.success("Usuário criado com sucesso!"); _safe_rerun()
 
     st.subheader("Exportar dados (Excel)")
     if not HAVE_PANDAS:
@@ -1607,7 +1687,7 @@ if menu=="Admin (Usuários)":
                             "fornecedor_id":f.id,"fornecedor":f.nome,"mtr_numero":m.numero_mtr,
                             "recebimento":m.destinador_data_recebimento,"qtd_kg":m.qtd_kg,
                             "und_origem":m.und_original,"qtd_original":m.qtd_original,
-                            "cdf_count":m.cdf_count,"arquivo":m.arquivo
+                            "cdf_count":m.cdf_count,"arquivo":m.arquivo,"site":m.site.value if m.site else None
                         })
                 pd.DataFrame(rows_m).to_excel(writer, sheet_name="MTRs", index=False)
 
@@ -1630,5 +1710,5 @@ if menu=="Admin (Usuários)":
 
 # ---- Sair ----
 if menu=="Sair":
-    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
+    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None; st.session_state.site=None
     st.session_state.sel_forn_id=None; _safe_rerun()
