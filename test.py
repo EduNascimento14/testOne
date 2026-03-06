@@ -1,6 +1,6 @@
 # app.py — Streamlit único com:
 # - Importação/parse de MTR robusto (todas as páginas + fallbacks)
-# - Tabela "Fatores de Emissão" editável (st.data_editor + salvar alterações + excluir)
+# - Fluxo de importação de MTR com revisão e confirmação antes de salvar
 # - Planos de Ação com painel de status (editar status no cartão)
 # - Restante das features existentes (login, docs com download, auditoria, CDF, KPIs, export Excel)
 
@@ -118,6 +118,17 @@ def exibir_preview_arquivo(caminho: str, mime_type: str | None):
 def parse_data_br(s:str)->date|None:
     try: return datetime.strptime(s, "%d/%m/%Y").date()
     except Exception: return None
+
+def parse_data_flex(s:str)->date|None:
+    txt = (s or "").strip()
+    if not txt:
+        return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(txt, fmt).date()
+        except Exception:
+            pass
+    return None
 
 def to_float(s:str)->float|None:
     if not s: return None
@@ -255,11 +266,6 @@ class MTR(Base):
     qtd_original = Column(String); und_original = Column(String)
     qtd_kg = Column(Float)
     dados_raw = Column(JSON)
-    # Escopo 3
-    tipo_residuo = Column(String)
-    destinacao = Column(String)
-    fator_tco2e_por_ton = Column(Float)
-    emissoes_tco2e = Column(Float)
     cdf_count = Column(Integer, default=0)
     created_at = Column(Date, server_default=func.current_date())
     updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
@@ -278,17 +284,6 @@ class CDF(Base):
     updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
     updated_by = Column(String(150))
     mtr = relationship("MTR", back_populates="cdfs")
-
-# ===== Fatores de Emissão (tabela SQL editável) =====
-class FatorEmissao(Base):
-    __tablename__="fatores_emissao"
-    id = Column(Integer, primary_key=True)
-    tipo_residuo = Column(String, nullable=False)
-    destinacao = Column(String, nullable=False)
-    fator_tco2e_por_ton = Column(Float, nullable=False)
-    fonte = Column(String)
-    ano_ref = Column(Integer)
-    __table_args__=(UniqueConstraint('tipo_residuo','destinacao',name='uq_tipo_destinacao'),)
 
 # =========================
 #     SEGURANÇA / USUÁRIO
@@ -311,84 +306,10 @@ def create_user(db:Session, username:str, password:str, role:RoleEnum)->User:
 def run_light_migrations():
     Base.metadata.create_all(bind=engine)
 
-def seed_users_and_factors():
+def seed_users():
     with SessionLocal() as db:
         if not get_user_by_username(db, "Eduardo"):
             create_user(db, "Eduardo", "Capitu", RoleEnum.admin)
-    SEED = {
-        "Plástico": {
-            "Incineração c/ recuperação energética": 2.9,
-            "Incineração s/ recuperação energética": 3.1,
-            "Aterro": 0.1,
-            "Reciclagem": -0.7,
-        },
-        "Papel": {
-            "Incineração c/ recuperação energética": 1.2,
-            "Aterro": 1.9,
-            "Reciclagem": -1.0,
-            "Compostagem": 0.1,
-        },
-        "Orgânico": {
-            "Compostagem": 0.1,
-            "Aterro": 1.2,
-            "Digestão anaeróbia": -0.2,
-        },
-        "Madeira": {
-            "Reciclagem": -0.4,
-            "Incineração c/ recuperação energética": 0.6,
-            "Aterro": 0.3,
-        },
-        "Metais": {
-            "Reciclagem": -1.5,
-            "Aterro": 0.05,
-        },
-        "Vidro": {
-            "Reciclagem": -0.3,
-            "Aterro": 0.02,
-        },
-        "Misto/Outros": {
-            "Aterro": 0.3,
-            "Incineração c/ recuperação energética": 1.5,
-            "Reciclagem": -0.2,
-        },
-    }
-    with SessionLocal() as db:
-        cnt = db.query(func.count(FatorEmissao.id)).scalar() or 0
-        if cnt == 0:
-            for tipo, dests in SEED.items():
-                for dest, fator in dests.items():
-                    db.add(FatorEmissao(
-                        tipo_residuo=tipo,
-                        destinacao=dest,
-                        fator_tco2e_por_ton=float(fator),
-                        fonte="Seed inicial",
-                        ano_ref=None
-                    ))
-            db.commit()
-
-# =========================
-#   FATORES (helpers DB)
-# =========================
-def listar_tipos_residuo(db:Session)->list[str]:
-    q = db.query(FatorEmissao.tipo_residuo).distinct().order_by(FatorEmissao.tipo_residuo.asc()).all()
-    tipos=[r[0] for r in q]
-    if "Misto/Outros" not in tipos: tipos.append("Misto/Outros")
-    return tipos
-
-def listar_destinos_para_tipo(db:Session, tipo:str)->list[str]:
-    q = db.query(FatorEmissao.destinacao).filter(FatorEmissao.tipo_residuo==tipo).distinct().order_by(FatorEmissao.destinacao.asc()).all()
-    dests=[r[0] for r in q]
-    if not dests:
-        q2 = db.query(FatorEmissao.destinacao).filter(FatorEmissao.tipo_residuo=="Misto/Outros").distinct().all()
-        dests=[r[0] for r in q2]
-    return dests
-
-def obter_fator(db:Session, tipo:str, destino:str)->float|None:
-    fe = db.query(FatorEmissao).filter(
-        FatorEmissao.tipo_residuo==tipo,
-        FatorEmissao.destinacao==destino
-    ).first()
-    return fe.fator_tco2e_por_ton if fe else None
 
 # =========================
 #   PARSER DA MTR (PDF)
@@ -640,7 +561,7 @@ def classificar_iqa(iqa_pct):
 
 # ========================= INICIALIZAÇÃO =========================
 run_light_migrations()
-seed_users_and_factors()
+seed_users()
 
 if "logado" not in st.session_state:
     st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None
@@ -680,7 +601,7 @@ if st.session_state.role=="Leitor":
 else:
     menu = st.sidebar.selectbox(
         "Menu",
-        ["Overview","Cadastrar Fornecedor","Visualizar Fornecedores","MTRs","Fatores de Emissão","Admin (Usuários)","Sair"]
+        ["Overview","Cadastrar Fornecedor","Visualizar Fornecedores","MTRs","Admin (Usuários)","Sair"]
     )
 st.sidebar.title(f"Usuário: {st.session_state.usuario} ({st.session_state.role})")
 
@@ -705,9 +626,6 @@ def kpis_gerais(db:Session)->dict:
     mtr_total_kg=float(db.query(func.coalesce(func.sum(MTR.qtd_kg),0.0)).scalar() or 0.0)
     mtr_por_forn=db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.qtd_kg),0.0))\
         .join(MTR, MTR.fornecedor_id==Fornecedor.id, isouter=True).group_by(Fornecedor.id).all()
-    total_tco2e=float(db.query(func.coalesce(func.sum(MTR.emissoes_tco2e),0.0)).scalar() or 0.0)
-    tco2e_por_forn=db.query(Fornecedor.nome, func.coalesce(func.sum(MTR.emissoes_tco2e),0.0))\
-        .join(MTR, MTR.fornecedor_id==Fornecedor.id, isouter=True).group_by(Fornecedor.id).all()
     total_mtrs=int(db.query(MTR).count())
     mtrs_com_cdf=int(db.query(MTR).filter(MTR.cdf_count>0).count())
     return {
@@ -716,7 +634,6 @@ def kpis_gerais(db:Session)->dict:
         "forn_com_contrato": forn_com_contrato, "forn_sem_contrato": forn_sem_contrato,
         "docs_vencidos": vencidos, "docs_a_vencer": a_vencer,
         "mtr_total_kg": mtr_total_kg, "mtr_por_forn":[(n,float(v or 0.0)) for n,v in mtr_por_forn],
-        "total_tco2e": total_tco2e, "tco2e_por_forn":[(n,float(v or 0.0)) for n,v in tco2e_por_forn],
         "total_mtrs": total_mtrs, "mtrs_com_cdf": mtrs_com_cdf,
     }
 
@@ -1017,23 +934,9 @@ if menu=="Overview":
     else:
         st.info("Sem dados de MTR por fornecedor para exibir.")
 
-    # tCO2e por fornecedor
-    st.markdown("### 🌫️ Emissões de Escopo 3 (resíduos) por fornecedor")
-    rows = [{"Fornecedor": n, "tCO2e": v} for n, v in k.get("tco2e_por_forn", [])]
-    if rows:
-        if HAVE_PANDAS:
-            import pandas as pd
-            df = pd.DataFrame(rows)
-            if not df.empty and "tCO2e" in df.columns:
-                df = df.sort_values("tCO2e", ascending=False)
-            fig_em = px.bar(df, x="Fornecedor", y="tCO2e", title="tCO₂e por fornecedor (resíduos)")
-        else:
-            xs = [r["Fornecedor"] for r in rows]; ys = [r["tCO2e"] for r in rows]
-            fig_em = go.Figure(go.Bar(x=xs, y=ys)); fig_em.update_layout(title="tCO₂e por fornecedor (resíduos)")
-        fig_em.update_traces(marker_color="red")
-        st.plotly_chart(fig_em, use_container_width=True)
-    else:
-        st.info("Sem dados de emissões por fornecedor para exibir.")
+
+
+
 
 
 # ---- Cadastrar Fornecedor ----
@@ -1323,41 +1226,14 @@ if menu=="Visualizar Fornecedores":
             with tabs[5]:
                 st.subheader("MTRs do fornecedor")
                 total_kg = sum(m.qtd_kg or 0.0 for m in sel.mtrs)
-                total_t = sum(m.emissoes_tco2e or 0.0 for m in sel.mtrs)
-                st.write(f"**Total destinado (kg):** {total_kg:.1f} | **Total tCO₂e:** {total_t:.2f}")
+                st.write(f"**Total destinado (kg):** {total_kg:.1f}")
                 for m in sel.mtrs:
                     with st.container(border=True):
-                        # Garante que a instância está anexada e com CDFs pré-carregados
                         with SessionLocal() as db:
                             m_db = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.id==m.id).first()
                         m = m_db or m
                         st.write(f"**MTR nº**: {m.numero_mtr or '-'} | **Receb.:** {m.destinador_data_recebimento or '-'} | **kg:** {m.qtd_kg or 0.0:.1f}")
-                        with SessionLocal() as db:
-                            tipos = listar_tipos_residuo(db)
-                            tipo_idx = tipos.index(m.tipo_residuo) if (m.tipo_residuo in tipos) else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
-                            c1,c2,c3,c4=st.columns(4)
-                            with c1: tipo_sel = st.selectbox("Tipo de resíduo", tipos, index=tipo_idx, key=f"tipo_{m.id}")
-                            destinos = listar_destinos_para_tipo(db, tipo_sel)
-                            dest_idx = destinos.index(m.destinacao) if (m.destinacao in destinos) else (0 if destinos else 0)
-                            with c2: dest_sel = st.selectbox("Destinação", destinos or ["(cadastre na página 'Fatores de Emissão')"], index=dest_idx, key=f"dest_{m.id}")
-                            default_fator = obter_fator(db, tipo_sel, dest_sel) if destinos else None
-                        with c3:
-                            fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else (default_fator or 0.0)),
-                                                    step=0.01, format="%.4f", key=f"fator_{m.id}")
-                        with c4:
-                            em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
-                            st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
 
-                        if st.button("Salvar MTR (Escopo 3)", key=f"salvar_mtr_{m.id}"):
-                            with SessionLocal() as db:
-                                mm=db.query(MTR).filter(MTR.id==m.id).first()
-                                mm.tipo_residuo=tipo_sel; mm.destinacao=dest_sel
-                                mm.fator_tco2e_por_ton=float(fator or 0.0)
-                                mm.emissoes_tco2e=kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
-                                mm.updated_by=st.session_state.usuario
-                                db.commit(); st.success("MTR atualizada (escopo 3)."); _safe_rerun()
-
-                        # CDFs
                         st.markdown("**CDF(s):**")
                         if m.cdfs:
                             for cdf in m.cdfs:
@@ -1378,7 +1254,7 @@ if menu=="Visualizar Fornecedores":
                                     mm=db.query(MTR).filter(MTR.id==m.id).first(); mm.cdf_count=(mm.cdf_count or 0)+1
                                     db.commit(); st.success("CDF anexado com sucesso!"); _safe_rerun()
 
-# ---- Página MTRs (importação e edição em lote) ----
+# ---- Página MTRs (importação com revisão e confirmação) ----
 if menu=="MTRs":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito."); st.stop()
@@ -1387,44 +1263,116 @@ if menu=="MTRs":
     with SessionLocal() as db:
         fornecedores=db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
     if not fornecedores: st.info("Cadastre fornecedores antes de importar MTRs."); st.stop()
+
+    if "mtr_pending" not in st.session_state:
+        st.session_state.mtr_pending = []
+
     forn_map={f"{f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}":f.id for f in fornecedores}
     forn_label=st.selectbox("Associar MTRs ao fornecedor", list(forn_map.keys()))
     fornecedor_id=forn_map[forn_label]
+
     uploads=st.file_uploader("Enviar PDFs de MTR", type=["pdf"], accept_multiple_files=True)
     if uploads and st.button("Processar MTRs"):
-        ok, fail = 0, 0
+        pendentes=[]
         for up in uploads:
             try:
                 caminho=salvar_arquivo(up, "uploads/mtrs", f"{fornecedor_id}_mtr")
                 dados=extract_and_normalize_mtr(caminho)
-                with SessionLocal() as db:
-                    m=MTR(
-                        fornecedor_id=fornecedor_id, arquivo=caminho,
-                        numero_mtr=dados["numero_mtr"],
-                        gerador_razao=dados["gerador_razao"], gerador_cnpj=dados["gerador_cnpj"],
-                        gerador_municipio=dados["gerador_municipio"], gerador_uf=dados["gerador_uf"],
-                        gerador_data_emissao=dados["gerador_data_emissao"],
-                        transportador_razao=dados["transportador_razao"], transportador_cnpj=dados["transportador_cnpj"],
-                        transportador_data_transporte=dados["transportador_data_transporte"],
-                        destinador_razao=dados["destinador_razao"], destinador_cnpj=dados["destinador_cnpj"],
-                        destinador_data_recebimento=dados["destinador_data_recebimento"],
-                        codigo_ibama_denom=dados["codigo_ibama_denom"],
-                        estado_fisico=dados.get("estado_fisico"), classe=dados.get("classe"), acondicionamento=dados.get("acondicionamento"),
-                        qtd_original=dados["qtd_original"], und_original=dados["und_original"],
-                        qtd_kg=dados["qtd_kg"],
-                        dados_raw=_make_json_safe(dados),  # <- garante serialização segura
-                        updated_by=st.session_state.usuario
-                    )
-                    db.add(m); db.commit(); ok+=1
+                pendentes.append({
+                    "arquivo": caminho,
+                    "arquivo_nome": up.name,
+                    "fornecedor_id": fornecedor_id,
+                    "numero_mtr": dados.get("numero_mtr") or "",
+                    "gerador_razao": dados.get("gerador_razao") or "",
+                    "gerador_cnpj": dados.get("gerador_cnpj") or "",
+                    "gerador_municipio": dados.get("gerador_municipio") or "",
+                    "gerador_uf": dados.get("gerador_uf") or "",
+                    "gerador_data_emissao": (dados.get("gerador_data_emissao").isoformat() if dados.get("gerador_data_emissao") else ""),
+                    "transportador_razao": dados.get("transportador_razao") or "",
+                    "transportador_cnpj": dados.get("transportador_cnpj") or "",
+                    "transportador_data_transporte": (dados.get("transportador_data_transporte").isoformat() if dados.get("transportador_data_transporte") else ""),
+                    "destinador_razao": dados.get("destinador_razao") or "",
+                    "destinador_cnpj": dados.get("destinador_cnpj") or "",
+                    "destinador_data_recebimento": (dados.get("destinador_data_recebimento").isoformat() if dados.get("destinador_data_recebimento") else ""),
+                    "codigo_ibama_denom": dados.get("codigo_ibama_denom") or "",
+                    "estado_fisico": dados.get("estado_fisico") or "",
+                    "classe": dados.get("classe") or "",
+                    "acondicionamento": dados.get("acondicionamento") or "",
+                    "qtd_original": dados.get("qtd_original") or "",
+                    "und_original": dados.get("und_original") or "",
+                    "qtd_kg": float(dados.get("qtd_kg") or 0.0),
+                    "dados_raw": _make_json_safe(dados),
+                    "_idx": len(pendentes),
+                })
             except Exception as e:
-                fail+=1
                 st.error(f"Erro ao processar {up.name}: {e}")
-        st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
-        _safe_rerun()
+        st.session_state.mtr_pending = pendentes
+
+    if st.session_state.mtr_pending:
+        st.markdown("### Revisar dados processados antes de salvar")
+        if HAVE_PANDAS:
+            import pandas as pd
+            df_preview = pd.DataFrame(st.session_state.mtr_pending)
+            cols = [
+                "arquivo_nome","numero_mtr","gerador_razao","gerador_cnpj","gerador_municipio","gerador_uf",
+                "gerador_data_emissao","transportador_razao","transportador_cnpj","transportador_data_transporte",
+                "destinador_razao","destinador_cnpj","destinador_data_recebimento","codigo_ibama_denom",
+                "estado_fisico","classe","acondicionamento","qtd_original","und_original","qtd_kg"
+            ]
+            edited = st.data_editor(df_preview[["_idx"] + cols], use_container_width=True, num_rows="dynamic", key="mtr_preview_editor")
+
+            cprev1, cprev2 = st.columns(2)
+            with cprev1:
+                if st.button("Confirmar e salvar MTRs"):
+                    ok, fail = 0, 0
+                    for _, r in edited.iterrows():
+                        try:
+                            original = next((x for x in st.session_state.mtr_pending if x.get("_idx") == int(r.get("_idx", -1))), None)
+                            if not original:
+                                fail += 1
+                                continue
+                            with SessionLocal() as db:
+                                m=MTR(
+                                    fornecedor_id=fornecedor_id,
+                                    arquivo=original["arquivo"],
+                                    numero_mtr=str(r.get("numero_mtr") or "").strip() or None,
+                                    gerador_razao=str(r.get("gerador_razao") or "").strip() or None,
+                                    gerador_cnpj=str(r.get("gerador_cnpj") or "").strip() or None,
+                                    gerador_municipio=str(r.get("gerador_municipio") or "").strip() or None,
+                                    gerador_uf=str(r.get("gerador_uf") or "").strip() or None,
+                                    gerador_data_emissao=parse_data_flex(str(r.get("gerador_data_emissao") or "")),
+                                    transportador_razao=str(r.get("transportador_razao") or "").strip() or None,
+                                    transportador_cnpj=str(r.get("transportador_cnpj") or "").strip() or None,
+                                    transportador_data_transporte=parse_data_flex(str(r.get("transportador_data_transporte") or "")),
+                                    destinador_razao=str(r.get("destinador_razao") or "").strip() or None,
+                                    destinador_cnpj=str(r.get("destinador_cnpj") or "").strip() or None,
+                                    destinador_data_recebimento=parse_data_flex(str(r.get("destinador_data_recebimento") or "")),
+                                    codigo_ibama_denom=str(r.get("codigo_ibama_denom") or "").strip() or None,
+                                    estado_fisico=str(r.get("estado_fisico") or "").strip() or None,
+                                    classe=str(r.get("classe") or "").strip() or None,
+                                    acondicionamento=str(r.get("acondicionamento") or "").strip() or None,
+                                    qtd_original=str(r.get("qtd_original") or "").strip() or None,
+                                    und_original=str(r.get("und_original") or "").strip() or None,
+                                    qtd_kg=float(r.get("qtd_kg") or 0.0),
+                                    dados_raw=_make_json_safe(original.get("dados_raw") or {}),
+                                    updated_by=st.session_state.usuario
+                                )
+                                db.add(m); db.commit(); ok += 1
+                        except Exception:
+                            fail += 1
+                    st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
+                    st.session_state.mtr_pending = []
+                    _safe_rerun()
+            with cprev2:
+                if st.button("Cancelar revisão"):
+                    st.session_state.mtr_pending = []
+                    _safe_rerun()
+        else:
+            st.warning("Instale pandas para revisar/editar os dados processados antes de confirmar.")
 
     st.markdown("### Edição em lote (selecionar MTR → editar)")
     with SessionLocal() as db:
-        mtrs = db.query(MTR).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
+        mtrs = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
 
     if not mtrs:
         st.info("Nenhuma MTR cadastrada para este fornecedor.")
@@ -1432,65 +1380,34 @@ if menu=="MTRs":
         lista = [f"{m.id} - MTR {m.numero_mtr or '-'} | kg={m.qtd_kg or 0:.1f} | receb={m.destinador_data_recebimento or '-'}" for m in mtrs]
         escolha = st.selectbox("Escolha a MTR para editar", lista, key=f"sel_mtr_{fornecedor_id}")
         mid = int(escolha.split(" - ")[0])
-
         m = next(mm for mm in mtrs if mm.id == mid)
-        # Recarrega a MTR com CDFs em eager-load para evitar DetachedInstanceError
-        with SessionLocal() as db:
-            m = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.id==mid).first()
-            with SessionLocal() as db:
-                tipos = listar_tipos_residuo(db)
-                tipo_idx = tipos.index(m.tipo_residuo) if m.tipo_residuo in tipos else (tipos.index("Misto/Outros") if "Misto/Outros" in tipos else 0)
-                c1,c2,c3,c4 = st.columns(4)
-                with c1: tipo_sel = st.selectbox("Tipo de resíduo", tipos, index=tipo_idx, key=f"tipo_batch_{mid}")
-                destinos = listar_destinos_para_tipo(db, tipo_sel)
-                dest_idx = destinos.index(m.destinacao) if m.destinacao in destinos else (0 if destinos else 0)
-                with c2: dest_sel = st.selectbox("Destinação", destinos or ["(cadastre na página 'Fatores de Emissão')"], index=dest_idx, key=f"dest_batch_{mid}")
-                default_fator = obter_fator(db, tipo_sel, dest_sel) if destinos else None
-            with c3:
-                fator = st.number_input("Fator (tCO₂e/t)", value=float(m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else (default_fator or 0.0)),
-                                        step=0.01, format="%.4f", key=f"fator_batch_{mid}")
-            with c4:
-                em_calc = kg_to_ton(m.qtd_kg) * (fator or 0.0)
-                st.write(f"**tCO₂e calc.:** {em_calc:.4f}")
 
-            if st.button("Salvar (Escopo 3)", key=f"save_batch_{mid}"):
+        st.markdown("#### CDF(s) da MTR selecionada")
+        if m.cdfs:
+            for cdf in m.cdfs:
+                with st.container():
+                    st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
+                    try:
+                        exibir_preview_arquivo(cdf.arquivo, None)
+                    except Exception:
+                        pass
+
+        up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_batch_{mid}")
+        cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_batch_{mid}")
+        cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_batch_{mid}")
+        if st.button("Adicionar CDF", key=f"cdf_add_batch_{mid}"):
+            if not up_cdf:
+                st.error("Envie um arquivo de CDF.")
+            else:
+                caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{mid}_cdf")
                 with SessionLocal() as db:
-                    mm = db.query(MTR).filter(MTR.id==mid).first()
-                    mm.tipo_residuo = tipo_sel
-                    mm.destinacao = dest_sel
-                    mm.fator_tco2e_por_ton = float(fator or 0.0)
-                    mm.emissoes_tco2e = kg_to_ton(mm.qtd_kg) * (mm.fator_tco2e_por_ton or 0.0)
-                    mm.updated_by = st.session_state.usuario
+                    novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
+                               observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
+                    db.add(novo)
+                    mm = db.query(MTR).filter(MTR.id==mid).first(); mm.cdf_count = (mm.cdf_count or 0) + 1
                     db.commit()
-                st.success("MTR atualizada (escopo 3).")
+                st.success("CDF anexado com sucesso!")
                 _safe_rerun()
-
-            st.markdown("#### CDF(s) da MTR selecionada")
-            if m.cdfs:
-                for cdf in m.cdfs:
-                    with st.container():
-                        st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
-                        try:
-                            exibir_preview_arquivo(cdf.arquivo, None)
-                        except Exception:
-                            pass
-
-            up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_batch_{mid}")
-            cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_batch_{mid}")
-            cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_batch_{mid}")
-            if st.button("Adicionar CDF", key=f"cdf_add_batch_{mid}"):
-                if not up_cdf:
-                    st.error("Envie um arquivo de CDF.")
-                else:
-                    caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{mid}_cdf")
-                    with SessionLocal() as db:
-                        novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
-                                   observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
-                        db.add(novo)
-                        mm = db.query(MTR).filter(MTR.id==mid).first(); mm.cdf_count = (mm.cdf_count or 0) + 1
-                        db.commit()
-                    st.success("CDF anexado com sucesso!")
-                    _safe_rerun()
 
     st.markdown("### MTRs cadastradas")
     with SessionLocal() as db:
@@ -1504,9 +1421,6 @@ if menu=="MTRs":
                 "Fornecedor": nome_f, "MTR nº": m.numero_mtr or "-",
                 "Recebimento": m.destinador_data_recebimento or "",
                 "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
-                "Tipo": m.tipo_residuo or "", "Destinação": m.destinacao or "",
-                "Fator (tCO₂e/t)": m.fator_tco2e_por_ton if m.fator_tco2e_por_ton is not None else "",
-                "tCO₂e": m.emissoes_tco2e if m.emissoes_tco2e is not None else "",
                 "CDF(s)": m.cdf_count or 0, "Arquivo": os.path.basename(m.arquivo),
             })
         if HAVE_PANDAS:
@@ -1514,124 +1428,6 @@ if menu=="MTRs":
         else:
             for r in rows[:200]: st.write(r)
 
-# ---- Fatores de Emissão (EDITÁVEL) ----
-if menu=="Fatores de Emissão":
-    if st.session_state.role not in ("Admin","Auditor"):
-        st.error("Acesso restrito."); st.stop()
-
-    st.header("Fatores de Emissão (tCO₂e por tonelada)")
-    with SessionLocal() as db:
-        fatores = db.query(FatorEmissao).order_by(FatorEmissao.tipo_residuo.asc(), FatorEmissao.destinacao.asc()).all()
-
-    st.markdown("#### Editar existentes (tabela editável)")
-    if fatores:
-        rows = [{
-            "id": f.id,
-            "Tipo de resíduo": f.tipo_residuo,
-            "Destinação": f.destinacao,
-            "Fator (tCO₂e/t)": float(f.fator_tco2e_por_ton or 0.0),
-            "Fonte": f.fonte or "",
-            "Ano ref.": int(f.ano_ref or 0),
-            "Selecionar": False
-        } for f in fatores]
-        if HAVE_PANDAS:
-            df = pd.DataFrame(rows)
-            edited = st.data_editor(
-                df,
-                use_container_width=True,
-                key="fe_editor",
-                column_config={
-                    "id": st.column_config.Column("id", disabled=True),
-                    "Fator (tCO₂e/t)": st.column_config.NumberColumn(format="%.4f"),
-                    "Ano ref.": st.column_config.NumberColumn(step=1, min_value=0),
-                    "Selecionar": st.column_config.CheckboxColumn(help="Marque para excluir"),
-                },
-                hide_index=True
-            )
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Salvar alterações"):
-                    try:
-                        with SessionLocal() as db:
-                            for _, r in edited.iterrows():
-                                fe = db.query(FatorEmissao).filter(FatorEmissao.id==int(r["id"])).first()
-                                if not fe: continue
-                                novo_tipo = str(r["Tipo de resíduo"]).strip()
-                                novo_dest = str(r["Destinação"]).strip()
-                                if (fe.tipo_residuo!=novo_tipo or fe.destinacao!=novo_dest):
-                                    exists = db.query(FatorEmissao).filter(
-                                        FatorEmissao.tipo_residuo==novo_tipo,
-                                        FatorEmissao.destinacao==novo_dest
-                                    ).first()
-                                    if exists and exists.id != fe.id:
-                                        st.error(f"Conflito: já existe fator para ({novo_tipo}, {novo_dest}).")
-                                        continue
-                                fe.tipo_residuo = novo_tipo
-                                fe.destinacao = novo_dest
-                                fe.fator_tco2e_por_ton = float(r["Fator (tCO₂e/t)"])
-                                fe.fonte = (str(r["Fonte"]).strip() or None)
-                                ano = int(r["Ano ref."] or 0)
-                                fe.ano_ref = ano if ano>0 else None
-                            db.commit()
-                        st.success("Alterações salvas.")
-                        _safe_rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
-            with col2:
-                if st.button("Excluir selecionados"):
-                    ids_sel = edited.loc[edited["Selecionar"]==True, "id"].tolist()
-                    if not ids_sel:
-                        st.info("Nenhuma linha marcada.")
-                    else:
-                        try:
-                            with SessionLocal() as db:
-                                for i in ids_sel:
-                                    fe = db.query(FatorEmissao).filter(FatorEmissao.id==int(i)).first()
-                                    if fe: db.delete(fe)
-                                db.commit()
-                            st.success(f"Excluídos: {len(ids_sel)} registro(s).")
-                            _safe_rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao excluir: {e}")
-        else:
-            st.info("Para edição em tabela, instale pandas.")
-    else:
-        st.info("Nenhum fator cadastrado. Use o formulário abaixo para adicionar.")
-
-    st.markdown("---")
-    st.subheader("Adicionar novo fator")
-    with st.form("form_add_fator"):
-        tipo_new = st.text_input("Tipo de resíduo *")
-        dest_new = st.text_input("Destinação *")
-        fator_new = st.number_input("Fator (tCO₂e/t) *", value=0.0, step=0.01, format="%.4f")
-        fonte_new = st.text_input("Fonte (ex.: IPCC 2019)")
-        ano_new = st.number_input("Ano de referência", value=0, step=1, min_value=0)
-        enviar = st.form_submit_button("Adicionar")
-    if enviar:
-        if not tipo_new or not dest_new:
-            st.error("Preencha tipo e destinação.")
-        else:
-            with SessionLocal() as db:
-                try:
-                    ja = db.query(FatorEmissao).filter(
-                        FatorEmissao.tipo_residuo==tipo_new.strip(),
-                        FatorEmissao.destinacao==dest_new.strip()
-                    ).first()
-                    if ja:
-                        st.error("Já existe um fator para esse (tipo, destinação).")
-                    else:
-                        db.add(FatorEmissao(
-                            tipo_residuo=tipo_new.strip(),
-                            destinacao=dest_new.strip(),
-                            fator_tco2e_por_ton=float(fator_new),
-                            fonte=fonte_new.strip() or None,
-                            ano_ref=int(ano_new) if ano_new>0 else None
-                        ))
-                        db.commit()
-                        st.success("Fator adicionado com sucesso!")
-                        _safe_rerun()
-                except Exception as e:
-                    st.error(f"Erro ao adicionar fator: {e}")
 
 # ---- Admin (Usuários) ----
 if menu=="Admin (Usuários)":
@@ -1726,8 +1522,6 @@ if menu=="Admin (Usuários)":
                             "fornecedor_id":f.id,"fornecedor":f.nome,"mtr_numero":m.numero_mtr,
                             "recebimento":m.destinador_data_recebimento,"qtd_kg":m.qtd_kg,
                             "und_origem":m.und_original,"qtd_original":m.qtd_original,
-                            "tipo_residuo":m.tipo_residuo,"destinacao":m.destinacao,
-                            "fator_tco2e_t":m.fator_tco2e_por_ton,"tco2e":m.emissoes_tco2e,
                             "cdf_count":m.cdf_count,"arquivo":m.arquivo
                         })
                 pd.DataFrame(rows_m).to_excel(writer, sheet_name="MTRs", index=False)
@@ -1742,14 +1536,7 @@ if menu=="Admin (Usuários)":
                             })
                 pd.DataFrame(rows_cdf).to_excel(writer, sheet_name="CDFs", index=False)
 
-                # Fatores de Emissão
-                with SessionLocal() as db:
-                    fac=db.query(FatorEmissao).order_by(FatorEmissao.tipo_residuo.asc(),FatorEmissao.destinacao.asc()).all()
-                rows_fe=[{
-                    "id":fe.id,"tipo":fe.tipo_residuo,"destinacao":fe.destinacao,
-                    "fator_tco2e_t":fe.fator_tco2e_por_ton,"fonte":fe.fonte,"ano_ref":fe.ano_ref
-                } for fe in fac]
-                pd.DataFrame(rows_fe).to_excel(writer, sheet_name="FatoresEmissao", index=False)
+
 
             output.seek(0)
             st.download_button("Baixar Excel", data=output.read(),
