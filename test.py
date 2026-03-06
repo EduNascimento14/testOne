@@ -689,6 +689,17 @@ def status_contrato(data_validade:date|None)->str:
         return "Próximo do vencimento"
     return "Vigente"
 
+def status_documento(data_validade:date|None)->str:
+    if not data_validade:
+        return "Sem validade"
+    hoje = date.today()
+    limite = hoje + timedelta(days=30)
+    if data_validade < hoje:
+        return "Vencido"
+    if data_validade <= limite:
+        return "Próximo de vencer"
+    return "Vigente"
+
 def kpis_gerais(db:Session, site:str, acesso_total:bool)->dict:
     total_fornecedores=db.query(Fornecedor).count()
     conformes=db.query(Auditoria).filter(Auditoria.classificado=="Conforme/Adequado").count()
@@ -1089,6 +1100,7 @@ if menu=="Visualizar Fornecedores":
             with tabs[1]:
                 st.markdown("#### Documentos do fornecedor")
                 docs_existentes = {d.tipo: d for d in sel.documentos}
+                docs_ordenados = sorted(sel.documentos, key=lambda x: (x.data_validade or date.max, x.tipo or ""))
                 tipos_documentos = [
                     "Licença Ambiental de Operação",
                     "Consulta de Área Contaminada",
@@ -1099,13 +1111,39 @@ if menu=="Visualizar Fornecedores":
                     "CTF - IBAMA"
                 ]
 
+                st.markdown("##### Lista de documentos cadastrados")
+                if not docs_ordenados:
+                    st.info("Nenhum documento cadastrado para este fornecedor.")
+                else:
+                    head = st.columns([2.0, 1.1, 1.1, 1.0, 0.8])
+                    head[0].markdown("**Nome do documento**")
+                    head[1].markdown("**Início de vigência**")
+                    head[2].markdown("**Vencimento**")
+                    head[3].markdown("**Status**")
+                    head[4].markdown("**Arquivo**")
+                    for d in docs_ordenados:
+                        row = st.columns([2.0, 1.1, 1.1, 1.0, 0.8])
+                        row[0].write(d.tipo)
+                        row[1].write(str(d.data_inicio or "-"))
+                        row[2].write(str(d.data_validade or "-"))
+                        row[3].write(status_documento(d.data_validade))
+                        if d.arquivo and Path(d.arquivo).exists():
+                            with open(d.arquivo, "rb") as f:
+                                data_atual = f.read()
+                            row[4].download_button("Baixar", data=data_atual, file_name=os.path.basename(d.arquivo), key=f"doc_dl_{d.id}")
+                        else:
+                            row[4].caption("-")
+
+                st.divider()
+                st.markdown("##### Ações de gerenciamento")
+
                 if "novo_doc_tipos" not in st.session_state:
                     st.session_state.novo_doc_tipos = {}
                 if sel.id not in st.session_state.novo_doc_tipos:
                     faltantes = [t for t in tipos_documentos if t not in docs_existentes]
                     st.session_state.novo_doc_tipos[sel.id] = faltantes[:1] if faltantes else []
 
-                st.caption("Use o botão para adicionar os tipos de documentos necessários e preencha os dados em cada item da lista.")
+                st.caption("Adicione novos documentos abaixo ou edite documentos já cadastrados.")
                 if st.button("Adicionar documento", key=f"btn_add_doc_item_{sel.id}"):
                     faltantes = [t for t in tipos_documentos if t not in docs_existentes and t not in st.session_state.novo_doc_tipos[sel.id]]
                     if faltantes:
@@ -1113,75 +1151,62 @@ if menu=="Visualizar Fornecedores":
                     else:
                         st.warning("Todos os tipos de documentos já foram adicionados.")
 
-                lista_itens = []
-                for d in sel.documentos:
-                    lista_itens.append({"id": d.id, "tipo": d.tipo, "novo": False})
-                for idx, tipo_tmp in enumerate(st.session_state.novo_doc_tipos[sel.id]):
-                    lista_itens.append({"id": f"novo_{idx}", "tipo": tipo_tmp, "novo": True})
+                novos_itens = [{"id": f"novo_{idx}", "tipo": tipo_tmp} for idx, tipo_tmp in enumerate(st.session_state.novo_doc_tipos[sel.id])]
 
-                if not lista_itens:
-                    st.info("Nenhum documento. Clique em 'Adicionar documento' para iniciar.")
-
-                for item in lista_itens:
+                for item in novos_itens:
                     with st.container(border=True):
-                        if item["novo"]:
-                            tipo_opts = [t for t in tipos_documentos if t not in docs_existentes or t == item["tipo"]]
-                            tipo_escolhido = st.selectbox(
-                                "Tipo",
-                                tipo_opts,
-                                index=tipo_opts.index(item["tipo"]) if item["tipo"] in tipo_opts else 0,
-                                key=f"novo_tipo_{sel.id}_{item['id']}"
-                            )
-                            c1, c2, c3 = st.columns([0.35, 0.25, 0.25])
-                            with c1:
-                                novo_up = st.file_uploader("Arquivo", type=["pdf", "jpg", "png", "jpeg"], key=f"novo_arq_{sel.id}_{item['id']}")
-                            with c2:
-                                novo_ini = st.date_input("Início", value=date.today(), key=f"novo_ini_{sel.id}_{item['id']}")
-                            with c3:
-                                novo_val = st.date_input("Validade", value=date.today(), key=f"novo_val_{sel.id}_{item['id']}")
-                            csave, crem = st.columns([0.5, 0.5])
-                            if csave.button("Salvar documento", key=f"btn_save_doc_{sel.id}_{item['id']}"):
-                                if novo_up is None:
-                                    st.error("Envie um arquivo.")
-                                elif novo_val < novo_ini:
-                                    st.error("Validade não pode ser anterior ao início.")
-                                else:
-                                    caminho = salvar_arquivo(novo_up, "uploads/documentos", f"{sel.id}_{tipo_escolhido}")
-                                    with SessionLocal() as db:
-                                        try:
-                                            d = Documento(
-                                                fornecedor_id=sel.id,
-                                                tipo=tipo_escolhido,
-                                                arquivo=caminho,
-                                                data_inicio=novo_ini,
-                                                data_validade=novo_val,
-                                                updated_by=st.session_state.usuario
-                                            )
-                                            db.add(d)
-                                            db.commit()
-                                            st.success("Documento adicionado com sucesso!")
-                                            st.session_state.novo_doc_tipos[sel.id] = [t for t in st.session_state.novo_doc_tipos[sel.id] if t != item["tipo"]]
-                                            _safe_rerun()
-                                        except Exception as e:
-                                            db.rollback()
-                                            st.error(f"Erro ao salvar documento: {e}")
-                            if crem.button("Remover item", key=f"btn_rm_doc_{sel.id}_{item['id']}"):
-                                st.session_state.novo_doc_tipos[sel.id] = [t for t in st.session_state.novo_doc_tipos[sel.id] if t != item["tipo"]]
-                                _safe_rerun()
-                        else:
-                            d = docs_existentes[item["tipo"]]
-                            st.write(f"**Tipo:** {d.tipo}")
-                            try:
-                                if d.arquivo and Path(d.arquivo).exists():
-                                    with open(d.arquivo, "rb") as f:
-                                        data_atual = f.read()
-                                    st.download_button("Baixar arquivo atual", data=data_atual,
-                                                       file_name=os.path.basename(d.arquivo), key=f"doc_dl_{d.id}")
-                                else:
-                                    st.caption("Nenhum arquivo atual encontrado para este documento.")
-                            except Exception:
-                                st.warning("Não foi possível preparar o download do arquivo atual.")
+                        tipo_opts = [t for t in tipos_documentos if t not in docs_existentes or t == item["tipo"]]
+                        tipo_escolhido = st.selectbox(
+                            "Tipo",
+                            tipo_opts,
+                            index=tipo_opts.index(item["tipo"]) if item["tipo"] in tipo_opts else 0,
+                            key=f"novo_tipo_{sel.id}_{item['id']}"
+                        )
+                        c1, c2, c3 = st.columns([0.35, 0.25, 0.25])
+                        with c1:
+                            novo_up = st.file_uploader("Arquivo", type=["pdf", "jpg", "png", "jpeg"], key=f"novo_arq_{sel.id}_{item['id']}")
+                        with c2:
+                            novo_ini = st.date_input("Início", value=date.today(), key=f"novo_ini_{sel.id}_{item['id']}")
+                        with c3:
+                            novo_val = st.date_input("Validade", value=date.today(), key=f"novo_val_{sel.id}_{item['id']}")
+                        csave, crem = st.columns([0.5, 0.5])
+                        if csave.button("Salvar documento", key=f"btn_save_doc_{sel.id}_{item['id']}"):
+                            if novo_up is None:
+                                st.error("Envie um arquivo.")
+                            elif novo_val < novo_ini:
+                                st.error("Validade não pode ser anterior ao início.")
+                            else:
+                                caminho = salvar_arquivo(novo_up, "uploads/documentos", f"{sel.id}_{tipo_escolhido}")
+                                with SessionLocal() as db:
+                                    try:
+                                        d = Documento(
+                                            fornecedor_id=sel.id,
+                                            tipo=tipo_escolhido,
+                                            arquivo=caminho,
+                                            data_inicio=novo_ini,
+                                            data_validade=novo_val,
+                                            updated_by=st.session_state.usuario
+                                        )
+                                        db.add(d)
+                                        db.commit()
+                                        st.success("Documento adicionado com sucesso!")
+                                        st.session_state.novo_doc_tipos[sel.id] = [t for t in st.session_state.novo_doc_tipos[sel.id] if t != item["tipo"]]
+                                        _safe_rerun()
+                                    except Exception as e:
+                                        db.rollback()
+                                        st.error(f"Erro ao salvar documento: {e}")
+                        if crem.button("Remover item", key=f"btn_rm_doc_{sel.id}_{item['id']}"):
+                            st.session_state.novo_doc_tipos[sel.id] = [t for t in st.session_state.novo_doc_tipos[sel.id] if t != item["tipo"]]
+                            _safe_rerun()
 
+                if docs_ordenados:
+                    st.markdown("##### Editar documento existente")
+                    doc_opts = [f"{d.id} — {d.tipo}" for d in docs_ordenados]
+                    doc_sel = st.selectbox("Selecione o documento", doc_opts, key=f"doc_sel_{sel.id}")
+                    doc_id = int(doc_sel.split(" — ", 1)[0])
+                    d = next((x for x in docs_ordenados if x.id == doc_id), None)
+                    if d:
+                        with st.container(border=True):
                             c1, c2, c3 = st.columns([0.4, 0.3, 0.3])
                             with c1:
                                 up = st.file_uploader("Substituir arquivo (opcional)", type=["pdf", "jpg", "png", "jpeg"], key=f"doc_up_{d.id}")
@@ -1205,7 +1230,6 @@ if menu=="Visualizar Fornecedores":
                                         db.commit()
                                         st.success("Documento atualizado com sucesso!")
                                         _safe_rerun()
-
             # Auditoria
             with tabs[2]:
                 st.subheader("Auditoria — Checklist IQA")
@@ -1285,106 +1309,64 @@ if menu=="Visualizar Fornecedores":
             # Planos de Ação
             with tabs[3]:
                 st.subheader("Planos de Ação")
-                with st.form(f"form_plano_{sel.id}"):
-                    descricao = st.text_area("Descrição")
-                    responsavel = st.text_input("Responsável")
-                    data_inicio = st.date_input("Início", value=date.today())
-                    data_fim = st.date_input("Prazo", value=date.today())
-                    status = st.selectbox("Status", [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value])
-                    ev_upload = st.file_uploader("Anexar evidência (opcional)", type=["pdf", "jpg", "png", "jpeg"])
-                    enviar = st.form_submit_button("Adicionar Plano de Ação")
+                st.caption("Funcionalidade simplificada: registrar ação e editar ação existente.")
 
-                evidencias = []
+                with st.form(f"form_plano_{sel.id}"):
+                    descricao = st.text_area("Descrição da ação")
+                    responsavel = st.text_input("Responsável")
+                    prazo = st.date_input("Prazo", value=date.today())
+                    enviar = st.form_submit_button("Criar ação")
+
                 if enviar:
-                    if not descricao:
+                    if not descricao.strip():
                         st.error("Descreva a ação.")
-                    elif data_fim < data_inicio:
-                        st.error("Data final deve ser maior ou igual à data inicial.")
                     else:
-                        if ev_upload is not None:
-                            ev_path = salvar_arquivo(ev_upload, "uploads/evidencias", f"{sel.id}_plano")
-                            evidencias.append(ev_path)
                         with SessionLocal() as db:
                             plano = PlanoAcao(
                                 fornecedor_id=sel.id,
                                 descricao=descricao.strip(),
                                 responsavel=responsavel.strip() or None,
-                                data_inicio=data_inicio,
-                                data_fim=data_fim,
-                                status=PlanoStatusEnum(status),
-                                evidencias=evidencias or [],
+                                data_inicio=date.today(),
+                                data_fim=prazo,
+                                status=PlanoStatusEnum.andamento,
+                                evidencias=[],
                                 atualizacoes=[],
                                 updated_by=st.session_state.usuario
                             )
                             db.add(plano)
                             db.commit()
-                            st.success("Plano de ação adicionado.")
+                            st.success("Ação criada com sucesso.")
                             _safe_rerun()
 
                 st.markdown("#### Ações cadastradas")
                 if not sel.planos_acao:
                     st.info("Nenhuma ação cadastrada.")
                 else:
-                    for p in sorted(sel.planos_acao, key=lambda x: x.data_fim):
+                    acoes_ordenadas = sorted(sel.planos_acao, key=lambda x: x.data_fim or date.max)
+                    for p in acoes_ordenadas:
                         with st.container(border=True):
                             st.write(f"**Descrição:** {p.descricao}")
-                            st.write(f"**Responsável:** {p.responsavel or '-'} | **Prazo:** {p.data_fim or '-'} | **Status:** {getattr(p.status, 'value', p.status)}")
+                            st.write(f"**Responsável:** {p.responsavel or '-'}")
+                            st.write(f"**Prazo:** {p.data_fim or '-'}")
 
+                            novo_desc = st.text_area("Descrição da ação", value=p.descricao or "", key=f"pl_desc_{p.id}")
                             c1, c2 = st.columns(2)
                             novo_resp = c1.text_input("Responsável", value=p.responsavel or "", key=f"pl_resp_{p.id}")
-                            novo_status = c2.selectbox(
-                                "Status",
-                                [PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value],
-                                index=[PlanoStatusEnum.andamento.value, PlanoStatusEnum.concluido.value, PlanoStatusEnum.atrasado.value].index(getattr(p.status, 'value', p.status)),
-                                key=f"pl_status_{p.id}"
-                            )
-                            novo_prazo = st.date_input("Prazo", value=p.data_fim, key=f"pl_prazo_{p.id}")
-                            if st.button("Salvar dados do plano", key=f"pl_save_{p.id}"):
-                                if novo_prazo < p.data_inicio:
-                                    st.error("Prazo não pode ser anterior ao início.")
+                            novo_prazo = c2.date_input("Prazo", value=p.data_fim, key=f"pl_prazo_{p.id}")
+
+                            if st.button("Salvar ação", key=f"pl_save_{p.id}"):
+                                if not novo_desc.strip():
+                                    st.error("Descrição da ação é obrigatória.")
                                 else:
                                     with SessionLocal() as db:
                                         plano_db = db.query(PlanoAcao).filter(PlanoAcao.id == p.id).first()
+                                        plano_db.descricao = novo_desc.strip()
                                         plano_db.responsavel = novo_resp.strip() or None
                                         plano_db.data_fim = novo_prazo
-                                        plano_db.status = PlanoStatusEnum(novo_status)
                                         plano_db.updated_by = st.session_state.usuario
                                         db.commit()
-                                    st.success("Plano atualizado.")
+                                    st.success("Ação atualizada.")
                                     _safe_rerun()
-
-                            st.markdown("**Atualização periódica**")
-                            upd_data = st.date_input("Data da atualização", value=date.today(), key=f"pl_upd_dt_{p.id}")
-                            upd_com = st.text_area("Comentário de progresso", key=f"pl_upd_com_{p.id}")
-                            upd_sit = st.selectbox("Situação atual", ["Dentro da meta", "Em risco", "Atrasado"], key=f"pl_upd_sit_{p.id}")
-                            if st.button("Registrar atualização", key=f"pl_upd_save_{p.id}"):
-                                if not upd_com.strip():
-                                    st.error("Informe um comentário de progresso.")
-                                else:
-                                    with SessionLocal() as db:
-                                        plano_db = db.query(PlanoAcao).filter(PlanoAcao.id == p.id).first()
-                                        historico = list(plano_db.atualizacoes or [])
-                                        historico.append({
-                                            "data": upd_data.isoformat(),
-                                            "comentario": upd_com.strip(),
-                                            "situacao": upd_sit,
-                                            "usuario": st.session_state.usuario,
-                                        })
-                                        plano_db.atualizacoes = historico
-                                        plano_db.updated_by = st.session_state.usuario
-                                        db.commit()
-                                    st.success("Atualização registrada.")
-                                    _safe_rerun()
-
-                            if p.atualizacoes:
-                                st.markdown("**Histórico de atualizações**")
-                                for a in reversed(p.atualizacoes):
-                                    st.caption(f"{a.get('data','-')} | {a.get('situacao','-')} — {a.get('comentario','-')}")
-
-                            if p.evidencias:
-                                for ev in p.evidencias:
-                                    if Path(ev).exists():
-                                        exibir_preview_arquivo(ev, None)
             # Contratos
             with tabs[4]:
                 st.subheader("Contratos")
@@ -1528,24 +1510,41 @@ if menu=="MTRs":
     if not mtrs_all:
         st.info("Nenhuma MTR cadastrada ainda.")
     else:
-        head = st.columns([1.0, 1.1, 0.6, 0.8, 0.8, 0.6, 0.3])
+        head = st.columns([1.0, 1.1, 0.6, 0.8, 0.8, 0.5, 0.5, 0.3])
         head[0].markdown("**MTR nº**")
         head[1].markdown("**Fornecedor**")
         head[2].markdown("**Site**")
         head[3].markdown("**Recebimento**")
         head[4].markdown("**Status CDF**")
-        head[5].markdown("**CDF(s)**")
-        head[6].markdown("**Doc**")
+        head[5].markdown("**MTR**")
+        head[6].markdown("**CDF**")
+        head[7].markdown("**Doc**")
 
         for m in mtrs_all:
-            cols = st.columns([1.0, 1.1, 0.6, 0.8, 0.8, 0.6, 0.3])
+            cols = st.columns([1.0, 1.1, 0.6, 0.8, 0.8, 0.5, 0.5, 0.3])
             cols[0].write(m.numero_mtr or "-")
             cols[1].write(m.fornecedor.nome if m.fornecedor else "-")
             cols[2].write(m.site.value if m.site else "-")
             cols[3].write(str(m.destinador_data_recebimento or "-"))
             cols[4].write("Com CDF" if (m.cdf_count or 0) > 0 else "Sem CDF")
-            cols[5].write(m.cdf_count or 0)
-            if cols[6].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
+            if m.arquivo and Path(m.arquivo).exists():
+                with open(m.arquivo, "rb") as f:
+                    arquivo_mtr = f.read()
+                cols[5].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_geral_dl_{m.id}")
+            else:
+                cols[5].caption("-")
+
+            primeiro_cdf = m.cdfs[0] if m.cdfs else None
+            if primeiro_cdf and primeiro_cdf.arquivo and Path(primeiro_cdf.arquivo).exists():
+                with open(primeiro_cdf.arquivo, "rb") as f:
+                    arquivo_cdf = f.read()
+                nome_cdf = os.path.basename(primeiro_cdf.arquivo)
+                label_cdf = "Baixar" if (m.cdf_count or 0) <= 1 else f"Baixar 1º/{m.cdf_count}"
+                cols[6].download_button(label_cdf, data=arquivo_cdf, file_name=nome_cdf, key=f"cdf_geral_dl_{m.id}")
+            else:
+                cols[6].button("Sem CDF", key=f"cdf_disabled_{m.id}", disabled=True, use_container_width=True)
+
+            if cols[7].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
                 st.session_state.mtr_doc_view_id = m.id
 
         mtr_doc_view_id = st.session_state.get("mtr_doc_view_id")
