@@ -1259,174 +1259,259 @@ if menu=="MTRs":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito."); st.stop()
     st.header("Controle de MTRs por Fornecedor")
-    if not HAVE_PDFPLUMBER: st.error("pdfplumber não está instalado. Adicione ao requirements."); st.stop()
-    with SessionLocal() as db:
-        fornecedores=db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
-    if not fornecedores: st.info("Cadastre fornecedores antes de importar MTRs."); st.stop()
 
     if "mtr_pending" not in st.session_state:
         st.session_state.mtr_pending = []
+    if "mtr_action" not in st.session_state:
+        st.session_state.mtr_action = "cadastro"
 
-    forn_map={f"{f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}":f.id for f in fornecedores}
-    forn_label=st.selectbox("Associar MTRs ao fornecedor", list(forn_map.keys()))
-    fornecedor_id=forn_map[forn_label]
-
-    uploads=st.file_uploader("Enviar PDFs de MTR", type=["pdf"], accept_multiple_files=True)
-    if uploads and st.button("Processar MTRs"):
-        pendentes=[]
-        for up in uploads:
-            try:
-                caminho=salvar_arquivo(up, "uploads/mtrs", f"{fornecedor_id}_mtr")
-                dados=extract_and_normalize_mtr(caminho)
-                pendentes.append({
-                    "arquivo": caminho,
-                    "arquivo_nome": up.name,
-                    "fornecedor_id": fornecedor_id,
-                    "numero_mtr": dados.get("numero_mtr") or "",
-                    "gerador_razao": dados.get("gerador_razao") or "",
-                    "gerador_cnpj": dados.get("gerador_cnpj") or "",
-                    "gerador_municipio": dados.get("gerador_municipio") or "",
-                    "gerador_uf": dados.get("gerador_uf") or "",
-                    "gerador_data_emissao": (dados.get("gerador_data_emissao").isoformat() if dados.get("gerador_data_emissao") else ""),
-                    "transportador_razao": dados.get("transportador_razao") or "",
-                    "transportador_cnpj": dados.get("transportador_cnpj") or "",
-                    "transportador_data_transporte": (dados.get("transportador_data_transporte").isoformat() if dados.get("transportador_data_transporte") else ""),
-                    "destinador_razao": dados.get("destinador_razao") or "",
-                    "destinador_cnpj": dados.get("destinador_cnpj") or "",
-                    "destinador_data_recebimento": (dados.get("destinador_data_recebimento").isoformat() if dados.get("destinador_data_recebimento") else ""),
-                    "codigo_ibama_denom": dados.get("codigo_ibama_denom") or "",
-                    "estado_fisico": dados.get("estado_fisico") or "",
-                    "classe": dados.get("classe") or "",
-                    "acondicionamento": dados.get("acondicionamento") or "",
-                    "qtd_original": dados.get("qtd_original") or "",
-                    "und_original": dados.get("und_original") or "",
-                    "qtd_kg": float(dados.get("qtd_kg") or 0.0),
-                    "dados_raw": _make_json_safe(dados),
-                    "_idx": len(pendentes),
-                })
-            except Exception as e:
-                st.error(f"Erro ao processar {up.name}: {e}")
-        st.session_state.mtr_pending = pendentes
-
-    if st.session_state.mtr_pending:
-        st.markdown("### Revisar dados processados antes de salvar")
-        if HAVE_PANDAS:
-            import pandas as pd
-            df_preview = pd.DataFrame(st.session_state.mtr_pending)
-            cols = [
-                "arquivo_nome","numero_mtr","gerador_razao","gerador_cnpj","gerador_municipio","gerador_uf",
-                "gerador_data_emissao","transportador_razao","transportador_cnpj","transportador_data_transporte",
-                "destinador_razao","destinador_cnpj","destinador_data_recebimento","codigo_ibama_denom",
-                "estado_fisico","classe","acondicionamento","qtd_original","und_original","qtd_kg"
-            ]
-            edited = st.data_editor(df_preview[["_idx"] + cols], use_container_width=True, num_rows="dynamic", key="mtr_preview_editor")
-
-            cprev1, cprev2 = st.columns(2)
-            with cprev1:
-                if st.button("Confirmar e salvar MTRs"):
-                    ok, fail = 0, 0
-                    for _, r in edited.iterrows():
-                        try:
-                            original = next((x for x in st.session_state.mtr_pending if x.get("_idx") == int(r.get("_idx", -1))), None)
-                            if not original:
-                                fail += 1
-                                continue
-                            with SessionLocal() as db:
-                                m=MTR(
-                                    fornecedor_id=fornecedor_id,
-                                    arquivo=original["arquivo"],
-                                    numero_mtr=str(r.get("numero_mtr") or "").strip() or None,
-                                    gerador_razao=str(r.get("gerador_razao") or "").strip() or None,
-                                    gerador_cnpj=str(r.get("gerador_cnpj") or "").strip() or None,
-                                    gerador_municipio=str(r.get("gerador_municipio") or "").strip() or None,
-                                    gerador_uf=str(r.get("gerador_uf") or "").strip() or None,
-                                    gerador_data_emissao=parse_data_flex(str(r.get("gerador_data_emissao") or "")),
-                                    transportador_razao=str(r.get("transportador_razao") or "").strip() or None,
-                                    transportador_cnpj=str(r.get("transportador_cnpj") or "").strip() or None,
-                                    transportador_data_transporte=parse_data_flex(str(r.get("transportador_data_transporte") or "")),
-                                    destinador_razao=str(r.get("destinador_razao") or "").strip() or None,
-                                    destinador_cnpj=str(r.get("destinador_cnpj") or "").strip() or None,
-                                    destinador_data_recebimento=parse_data_flex(str(r.get("destinador_data_recebimento") or "")),
-                                    codigo_ibama_denom=str(r.get("codigo_ibama_denom") or "").strip() or None,
-                                    estado_fisico=str(r.get("estado_fisico") or "").strip() or None,
-                                    classe=str(r.get("classe") or "").strip() or None,
-                                    acondicionamento=str(r.get("acondicionamento") or "").strip() or None,
-                                    qtd_original=str(r.get("qtd_original") or "").strip() or None,
-                                    und_original=str(r.get("und_original") or "").strip() or None,
-                                    qtd_kg=float(r.get("qtd_kg") or 0.0),
-                                    dados_raw=_make_json_safe(original.get("dados_raw") or {}),
-                                    updated_by=st.session_state.usuario
-                                )
-                                db.add(m); db.commit(); ok += 1
-                        except Exception:
-                            fail += 1
-                    st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
-                    st.session_state.mtr_pending = []
-                    _safe_rerun()
-            with cprev2:
-                if st.button("Cancelar revisão"):
-                    st.session_state.mtr_pending = []
-                    _safe_rerun()
-        else:
-            st.warning("Instale pandas para revisar/editar os dados processados antes de confirmar.")
-
-    st.markdown("### Edição em lote (selecionar MTR → editar)")
     with SessionLocal() as db:
-        mtrs = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
+        fornecedores=db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
+        mtrs_all=db.query(MTR).options(joinedload(MTR.fornecedor), selectinload(MTR.cdfs)).order_by(MTR.id.desc()).all()
 
-    if not mtrs:
-        st.info("Nenhuma MTR cadastrada para este fornecedor.")
-    else:
-        lista = [f"{m.id} - MTR {m.numero_mtr or '-'} | kg={m.qtd_kg or 0:.1f} | receb={m.destinador_data_recebimento or '-'}" for m in mtrs]
-        escolha = st.selectbox("Escolha a MTR para editar", lista, key=f"sel_mtr_{fornecedor_id}")
-        mid = int(escolha.split(" - ")[0])
-        m = next(mm for mm in mtrs if mm.id == mid)
+    if not fornecedores:
+        st.info("Cadastre fornecedores antes de gerenciar MTRs.")
+        st.stop()
 
-        st.markdown("#### CDF(s) da MTR selecionada")
-        if m.cdfs:
-            for cdf in m.cdfs:
-                with st.container():
-                    st.write(f"- Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
-                    try:
-                        exibir_preview_arquivo(cdf.arquivo, None)
-                    except Exception:
-                        pass
-
-        up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_batch_{mid}")
-        cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_batch_{mid}")
-        cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_batch_{mid}")
-        if st.button("Adicionar CDF", key=f"cdf_add_batch_{mid}"):
-            if not up_cdf:
-                st.error("Envie um arquivo de CDF.")
-            else:
-                caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{mid}_cdf")
-                with SessionLocal() as db:
-                    novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
-                               observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
-                    db.add(novo)
-                    mm = db.query(MTR).filter(MTR.id==mid).first(); mm.cdf_count = (mm.cdf_count or 0) + 1
-                    db.commit()
-                st.success("CDF anexado com sucesso!")
-                _safe_rerun()
-
-    st.markdown("### MTRs cadastradas")
-    with SessionLocal() as db:
-        mtrs_all=db.query(MTR).join(Fornecedor).add_columns(Fornecedor.nome).order_by(MTR.id.desc()).all()
+    st.markdown("### Lista geral de MTRs cadastradas")
     if not mtrs_all:
         st.info("Nenhuma MTR cadastrada ainda.")
     else:
-        rows=[]
-        for m, nome_f in mtrs_all:
-            rows.append({
-                "Fornecedor": nome_f, "MTR nº": m.numero_mtr or "-",
-                "Recebimento": m.destinador_data_recebimento or "",
-                "Qtde (kg)": m.qtd_kg if m.qtd_kg is not None else "",
-                "CDF(s)": m.cdf_count or 0, "Arquivo": os.path.basename(m.arquivo),
-            })
-        if HAVE_PANDAS:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        head = st.columns([1.1, 1.2, 0.8, 0.8, 0.6, 0.3])
+        head[0].markdown("**MTR nº**")
+        head[1].markdown("**Fornecedor**")
+        head[2].markdown("**Recebimento**")
+        head[3].markdown("**Status CDF**")
+        head[4].markdown("**CDF(s)**")
+        head[5].markdown("**Doc**")
+
+        for m in mtrs_all:
+            cols = st.columns([1.1, 1.2, 0.8, 0.8, 0.6, 0.3])
+            cols[0].write(m.numero_mtr or "-")
+            cols[1].write(m.fornecedor.nome if m.fornecedor else "-")
+            cols[2].write(str(m.destinador_data_recebimento or "-"))
+            cols[3].write("Com CDF" if (m.cdf_count or 0) > 0 else "Sem CDF")
+            cols[4].write(m.cdf_count or 0)
+            if cols[5].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
+                st.session_state.mtr_doc_view_id = m.id
+
+        mtr_doc_view_id = st.session_state.get("mtr_doc_view_id")
+        if mtr_doc_view_id:
+            selected = next((x for x in mtrs_all if x.id == mtr_doc_view_id), None)
+            if selected:
+                st.markdown(f"**Documento da MTR {selected.numero_mtr or '-'}**")
+                exibir_preview_arquivo(selected.arquivo, None)
+
+    st.markdown("### Ações")
+    c1, c2, c3 = st.columns(3)
+    if c1.button("Cadastrar MTR", use_container_width=True):
+        st.session_state.mtr_action = "cadastro"
+    if c2.button("Adicionar CDF", use_container_width=True):
+        st.session_state.mtr_action = "cdf"
+    if c3.button("Editar MTR e CDF", use_container_width=True):
+        st.session_state.mtr_action = "edicao"
+
+    forn_map={f"{f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}":f.id for f in fornecedores}
+
+    if st.session_state.mtr_action == "cadastro":
+        st.markdown("### Cadastro de MTR (metodologia atual)")
+        if not HAVE_PDFPLUMBER:
+            st.error("pdfplumber não está instalado. Adicione ao requirements.")
+            st.stop()
+
+        forn_label=st.selectbox("Associar MTRs ao fornecedor", list(forn_map.keys()), key="forn_cad_mtr")
+        fornecedor_id=forn_map[forn_label]
+
+        uploads=st.file_uploader("Enviar PDFs de MTR", type=["pdf"], accept_multiple_files=True, key="up_mtr_cad")
+        if uploads and st.button("Processar MTRs"):
+            pendentes=[]
+            for up in uploads:
+                try:
+                    caminho=salvar_arquivo(up, "uploads/mtrs", f"{fornecedor_id}_mtr")
+                    dados=extract_and_normalize_mtr(caminho)
+                    pendentes.append({
+                        "arquivo": caminho,
+                        "arquivo_nome": up.name,
+                        "fornecedor_id": fornecedor_id,
+                        "numero_mtr": dados.get("numero_mtr") or "",
+                        "gerador_razao": dados.get("gerador_razao") or "",
+                        "gerador_cnpj": dados.get("gerador_cnpj") or "",
+                        "gerador_municipio": dados.get("gerador_municipio") or "",
+                        "gerador_uf": dados.get("gerador_uf") or "",
+                        "gerador_data_emissao": (dados.get("gerador_data_emissao").isoformat() if dados.get("gerador_data_emissao") else ""),
+                        "transportador_razao": dados.get("transportador_razao") or "",
+                        "transportador_cnpj": dados.get("transportador_cnpj") or "",
+                        "transportador_data_transporte": (dados.get("transportador_data_transporte").isoformat() if dados.get("transportador_data_transporte") else ""),
+                        "destinador_razao": dados.get("destinador_razao") or "",
+                        "destinador_cnpj": dados.get("destinador_cnpj") or "",
+                        "destinador_data_recebimento": (dados.get("destinador_data_recebimento").isoformat() if dados.get("destinador_data_recebimento") else ""),
+                        "codigo_ibama_denom": dados.get("codigo_ibama_denom") or "",
+                        "estado_fisico": dados.get("estado_fisico") or "",
+                        "classe": dados.get("classe") or "",
+                        "acondicionamento": dados.get("acondicionamento") or "",
+                        "qtd_original": dados.get("qtd_original") or "",
+                        "und_original": dados.get("und_original") or "",
+                        "qtd_kg": float(dados.get("qtd_kg") or 0.0),
+                        "dados_raw": _make_json_safe(dados),
+                        "_idx": len(pendentes),
+                    })
+                except Exception as e:
+                    st.error(f"Erro ao processar {up.name}: {e}")
+            st.session_state.mtr_pending = pendentes
+
+        if st.session_state.mtr_pending:
+            st.markdown("#### Revisar dados processados antes de salvar")
+            if HAVE_PANDAS:
+                import pandas as pd
+                df_preview = pd.DataFrame(st.session_state.mtr_pending)
+                cols = [
+                    "arquivo_nome","numero_mtr","gerador_razao","gerador_cnpj","gerador_municipio","gerador_uf",
+                    "gerador_data_emissao","transportador_razao","transportador_cnpj","transportador_data_transporte",
+                    "destinador_razao","destinador_cnpj","destinador_data_recebimento","codigo_ibama_denom",
+                    "estado_fisico","classe","acondicionamento","qtd_original","und_original","qtd_kg"
+                ]
+                edited = st.data_editor(df_preview[["_idx"] + cols], use_container_width=True, num_rows="dynamic", key="mtr_preview_editor")
+                cprev1, cprev2 = st.columns(2)
+                with cprev1:
+                    if st.button("Confirmar e salvar MTRs"):
+                        ok, fail = 0, 0
+                        for _, r in edited.iterrows():
+                            try:
+                                original = next((x for x in st.session_state.mtr_pending if x.get("_idx") == int(r.get("_idx", -1))), None)
+                                if not original:
+                                    fail += 1
+                                    continue
+                                with SessionLocal() as db:
+                                    m=MTR(
+                                        fornecedor_id=int(r.get("fornecedor_id") or original.get("fornecedor_id")),
+                                        arquivo=original.get("arquivo"),
+                                        numero_mtr=str(r.get("numero_mtr") or "").strip() or None,
+                                        gerador_razao=str(r.get("gerador_razao") or "").strip() or None,
+                                        gerador_cnpj=str(r.get("gerador_cnpj") or "").strip() or None,
+                                        gerador_municipio=str(r.get("gerador_municipio") or "").strip() or None,
+                                        gerador_uf=str(r.get("gerador_uf") or "").strip() or None,
+                                        gerador_data_emissao=parse_data_flex(str(r.get("gerador_data_emissao") or "")),
+                                        transportador_razao=str(r.get("transportador_razao") or "").strip() or None,
+                                        transportador_cnpj=str(r.get("transportador_cnpj") or "").strip() or None,
+                                        transportador_data_transporte=parse_data_flex(str(r.get("transportador_data_transporte") or "")),
+                                        destinador_razao=str(r.get("destinador_razao") or "").strip() or None,
+                                        destinador_cnpj=str(r.get("destinador_cnpj") or "").strip() or None,
+                                        destinador_data_recebimento=parse_data_flex(str(r.get("destinador_data_recebimento") or "")),
+                                        codigo_ibama_denom=str(r.get("codigo_ibama_denom") or "").strip() or None,
+                                        estado_fisico=str(r.get("estado_fisico") or "").strip() or None,
+                                        classe=str(r.get("classe") or "").strip() or None,
+                                        acondicionamento=str(r.get("acondicionamento") or "").strip() or None,
+                                        qtd_original=str(r.get("qtd_original") or "").strip() or None,
+                                        und_original=str(r.get("und_original") or "").strip() or None,
+                                        qtd_kg=float(r.get("qtd_kg") or 0.0),
+                                        dados_raw=_make_json_safe(original.get("dados_raw") or {}),
+                                        updated_by=st.session_state.usuario
+                                    )
+                                    db.add(m); db.commit(); ok += 1
+                            except Exception:
+                                fail += 1
+                        st.success(f"Processo finalizado. Sucesso: {ok} | Falhas: {fail}")
+                        st.session_state.mtr_pending = []
+                        _safe_rerun()
+                with cprev2:
+                    if st.button("Cancelar revisão"):
+                        st.session_state.mtr_pending = []
+                        _safe_rerun()
+            else:
+                st.warning("Instale pandas para revisar/editar os dados processados antes de confirmar.")
+
+    elif st.session_state.mtr_action == "cdf":
+        st.markdown("### Adicionar CDF em MTR já cadastrada")
+        forn_label=st.selectbox("Fornecedor", list(forn_map.keys()), key="forn_add_cdf")
+        fornecedor_id=forn_map[forn_label]
+        with SessionLocal() as db:
+            mtrs = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
+
+        if not mtrs:
+            st.info("Nenhuma MTR cadastrada para este fornecedor.")
         else:
-            for r in rows[:200]: st.write(r)
+            lista = [f"{m.id} - MTR {m.numero_mtr or '-'} | CDF(s): {m.cdf_count or 0}" for m in mtrs]
+            escolha = st.selectbox("Selecione a MTR", lista, key=f"sel_mtr_cdf_{fornecedor_id}")
+            mid = int(escolha.split(" - ")[0])
+            m = next(mm for mm in mtrs if mm.id == mid)
+
+            if m.cdfs:
+                st.markdown("#### CDF(s) já vinculados")
+                for cdf in m.cdfs:
+                    st.write(f"- #{cdf.id} | Emissão: {cdf.data_emissao or '-'} | Obs: {cdf.observacao or '-'}")
+
+            up_cdf = st.file_uploader("Anexar CDF (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"cdf_up_batch_{mid}")
+            cdf_data = st.date_input("Data de emissão do CDF", value=date.today(), key=f"cdf_dt_batch_{mid}")
+            cdf_obs = st.text_input("Observação (opcional)", key=f"cdf_obs_batch_{mid}")
+            if st.button("Salvar CDF nesta MTR", key=f"cdf_add_batch_{mid}"):
+                if not up_cdf:
+                    st.error("Envie um arquivo de CDF.")
+                else:
+                    caminho = salvar_arquivo(up_cdf, "uploads/cdfs", f"{mid}_cdf")
+                    with SessionLocal() as db:
+                        novo = CDF(mtr_id=mid, arquivo=caminho, data_emissao=cdf_data,
+                                   observacao=cdf_obs.strip() or None, updated_by=st.session_state.usuario)
+                        db.add(novo)
+                        mm = db.query(MTR).filter(MTR.id==mid).first(); mm.cdf_count = (mm.cdf_count or 0) + 1
+                        db.commit()
+                    st.success("CDF anexado com sucesso!")
+                    _safe_rerun()
+
+    else:
+        st.markdown("### Editar MTR e CDF")
+        forn_label=st.selectbox("Fornecedor", list(forn_map.keys()), key="forn_edit_mtr")
+        fornecedor_id=forn_map[forn_label]
+        with SessionLocal() as db:
+            mtrs = db.query(MTR).options(selectinload(MTR.cdfs)).filter(MTR.fornecedor_id==fornecedor_id).order_by(MTR.id.desc()).all()
+
+        if not mtrs:
+            st.info("Nenhuma MTR cadastrada para este fornecedor.")
+        else:
+            lista = [f"{m.id} - MTR {m.numero_mtr or '-'} | kg={m.qtd_kg or 0:.1f}" for m in mtrs]
+            escolha = st.selectbox("Escolha a MTR para editar", lista, key=f"sel_mtr_edit_{fornecedor_id}")
+            mid = int(escolha.split(" - ")[0])
+            m = next(mm for mm in mtrs if mm.id == mid)
+
+            with st.form(f"form_edit_mtr_{mid}"):
+                numero_mtr = st.text_input("Número da MTR", value=m.numero_mtr or "")
+                qtd_kg = st.number_input("Quantidade (kg)", min_value=0.0, value=float(m.qtd_kg or 0.0), step=1.0)
+                dt_emissao = st.text_input("Data emissão gerador (YYYY-MM-DD)", value=(m.gerador_data_emissao.isoformat() if m.gerador_data_emissao else ""))
+                dt_receb = st.text_input("Data recebimento destinador (YYYY-MM-DD)", value=(m.destinador_data_recebimento.isoformat() if m.destinador_data_recebimento else ""))
+                edit_obs = st.form_submit_button("Salvar alterações da MTR")
+
+            if edit_obs:
+                with SessionLocal() as db:
+                    me = db.query(MTR).filter(MTR.id==mid).first()
+                    me.numero_mtr = numero_mtr.strip() or None
+                    me.qtd_kg = float(qtd_kg or 0.0)
+                    me.gerador_data_emissao = parse_data_flex(dt_emissao)
+                    me.destinador_data_recebimento = parse_data_flex(dt_receb)
+                    me.updated_by = st.session_state.usuario
+                    db.commit()
+                st.success("MTR atualizada com sucesso!")
+                _safe_rerun()
+
+            if m.cdfs:
+                st.markdown("#### Editar CDF vinculado")
+                cdf_opt = [f"{c.id} - Emissão {c.data_emissao or '-'}" for c in m.cdfs]
+                cdf_sel = st.selectbox("Selecione o CDF", cdf_opt, key=f"cdf_sel_edit_{mid}")
+                cdf_id = int(cdf_sel.split(" - ")[0])
+                cdf_obj = next(c for c in m.cdfs if c.id == cdf_id)
+                with st.form(f"form_edit_cdf_{cdf_id}"):
+                    cdf_dt = st.text_input("Data de emissão (YYYY-MM-DD)", value=(cdf_obj.data_emissao.isoformat() if cdf_obj.data_emissao else ""))
+                    cdf_ob = st.text_input("Observação", value=cdf_obj.observacao or "")
+                    save_cdf = st.form_submit_button("Salvar alterações do CDF")
+                if save_cdf:
+                    with SessionLocal() as db:
+                        ce = db.query(CDF).filter(CDF.id==cdf_id).first()
+                        ce.data_emissao = parse_data_flex(cdf_dt)
+                        ce.observacao = cdf_ob.strip() or None
+                        ce.updated_by = st.session_state.usuario
+                        db.commit()
+                    st.success("CDF atualizado com sucesso!")
+                    _safe_rerun()
+            else:
+                st.caption("Esta MTR ainda não possui CDF para edição.")
 
 
 # ---- Admin (Usuários) ----
