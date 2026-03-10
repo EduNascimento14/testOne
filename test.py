@@ -221,7 +221,8 @@ class Documento(Base):
     tipo = Column(String, nullable=False)
     arquivo = Column(String, nullable=False)
     data_inicio = Column(Date, nullable=False)
-    data_validade = Column(Date, nullable=False)
+    data_validade = Column(Date, nullable=True)
+    sem_validade = Column(Integer, nullable=False, default=0)
     created_at = Column(Date, server_default=func.current_date())
     updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
     updated_by = Column(String(150))
@@ -344,6 +345,13 @@ def run_light_migrations():
             if "atualizacoes" not in cols:
                 conn.execute(text("ALTER TABLE planos_acao ADD COLUMN atualizacoes JSON"))
                 conn.execute(text("UPDATE planos_acao SET atualizacoes='[]' WHERE atualizacoes IS NULL"))
+        except Exception:
+            pass
+        try:
+            cols = [r[1] for r in conn.execute(text("PRAGMA table_info(documentos)"))]
+            if "sem_validade" not in cols:
+                conn.execute(text("ALTER TABLE documentos ADD COLUMN sem_validade INTEGER DEFAULT 0 NOT NULL"))
+                conn.execute(text("UPDATE documentos SET sem_validade=0 WHERE sem_validade IS NULL"))
         except Exception:
             pass
         try:
@@ -650,7 +658,7 @@ if st.session_state.role=="Leitor":
 else:
     menu = st.sidebar.selectbox(
         "Menu",
-        ["Overview","Cadastrar Fornecedor","Visualizar Fornecedores","MTRs","Contratos","Admin (Usuários)","Sair"]
+        ["Overview","Visão Geral Fornecedores","Cadastrar Fornecedor","Visualizar Fornecedores","MTRs","Contratos","Admin (Usuários)","Sair"]
     )
 st.sidebar.title(f"Usuário: {st.session_state.usuario} ({st.session_state.role})")
 site_logado = st.session_state.site
@@ -699,6 +707,35 @@ def status_documento(data_validade:date|None)->str:
     if data_validade <= limite:
         return "Próximo de vencer"
     return "Vigente"
+
+
+def auditoria_status(score:int|None)->str:
+    if score is None:
+        return "Sem auditoria"
+    if score >= 76:
+        return "Excelente"
+    if score >= 51:
+        return "Bom"
+    if score >= 21:
+        return "Condicionado"
+    return "Crítico"
+
+
+def calcular_tempo_mtr_cdf(mtr:MTR)->int|None:
+    if not mtr or not mtr.gerador_data_emissao:
+        return None
+    base = mtr.gerador_data_emissao
+    if mtr.cdfs:
+        datas = [c.data_emissao for c in mtr.cdfs if c.data_emissao]
+        if datas:
+            return (min(datas) - base).days
+    return (date.today() - base).days
+
+
+def parse_auditoria_itens(auditoria_obj:Auditoria|None)->dict:
+    if not auditoria_obj or not isinstance(auditoria_obj.respostas, dict):
+        return {}
+    return auditoria_obj.respostas.get("itens_detalhes", {}) or {}
 
 def kpis_gerais(db:Session, site:str, acesso_total:bool)->dict:
     total_fornecedores=db.query(Fornecedor).count()
@@ -1032,6 +1069,56 @@ if menu=="Overview":
 
 
 
+
+# ---- Visão Geral Fornecedores ----
+if menu=="Visão Geral Fornecedores":
+    if st.session_state.role not in ("Admin","Auditor"):
+        st.error("Acesso restrito.")
+        st.stop()
+    st.header("Visão Geral de Fornecedores")
+    with SessionLocal() as db:
+        fornecedores = db.query(Fornecedor).options(
+            joinedload(Fornecedor.documentos),
+            joinedload(Fornecedor.contratos),
+            joinedload(Fornecedor.auditoria)
+        ).order_by(Fornecedor.nome.asc()).all()
+
+    if not fornecedores:
+        st.info("Nenhum fornecedor cadastrado.")
+    else:
+        linhas = []
+        for f in fornecedores:
+            total_docs = len(f.documentos)
+            docs_completos = sum(1 for d in f.documentos if d.arquivo)
+            pct_docs = int(round((docs_completos / total_docs) * 100)) if total_docs else 0
+            faltantes = total_docs == 0 or docs_completos < total_docs
+            prox_vencer = any(status_documento(d.data_validade)=="Próximo de vencer" for d in f.documentos if not d.sem_validade)
+            vencidos = any(status_documento(d.data_validade)=="Vencido" for d in f.documentos if not d.sem_validade)
+            alerta = f"Faltantes:{'✅' if not faltantes else '⚠️'} | Próx:{'✅' if not prox_vencer else '⚠️'} | Vencidos:{'✅' if not vencidos else '🚨'}"
+            contrato = f.contratos[0] if f.contratos else None
+            linhas.append({
+                "Fornecedor": f.id,
+                "Nome do fornecedor": f.nome,
+                "Contrato": "Sim" if contrato else "Não",
+                "Status da documentação": f"{pct_docs}%",
+                "Alertas de documentação": alerta,
+                "Score auditoria": f.auditoria.score if f.auditoria else None,
+                "Status auditoria": auditoria_status(f.auditoria.score if f.auditoria else None),
+            })
+
+        st.dataframe(linhas, use_container_width=True)
+        st.markdown("#### Downloads de contratos")
+        for f in fornecedores:
+            if not f.contratos:
+                continue
+            c = f.contratos[0]
+            c1, c2 = st.columns([2,1])
+            c1.write(f"{f.nome} — validade: {c.data_validade or '-'}")
+            if c.arquivo and Path(c.arquivo).exists():
+                with open(c.arquivo, "rb") as arq:
+                    c2.download_button("Baixar contrato", data=arq.read(), file_name=os.path.basename(c.arquivo), key=f"overview_contr_dl_{c.id}")
+
+
 # ---- Cadastrar Fornecedor ----
 if menu=="Cadastrar Fornecedor":
     if st.session_state.role not in ("Admin","Auditor"):
@@ -1125,8 +1212,8 @@ if menu=="Visualizar Fornecedores":
                         row = st.columns([2.0, 1.1, 1.1, 1.0, 0.8])
                         row[0].write(d.tipo)
                         row[1].write(str(d.data_inicio or "-"))
-                        row[2].write(str(d.data_validade or "-"))
-                        row[3].write(status_documento(d.data_validade))
+                        row[2].write("Sem validade" if d.sem_validade else str(d.data_validade or "-"))
+                        row[3].write("Vigente" if d.sem_validade else status_documento(d.data_validade))
                         if d.arquivo and Path(d.arquivo).exists():
                             with open(d.arquivo, "rb") as f:
                                 data_atual = f.read()
@@ -1168,12 +1255,13 @@ if menu=="Visualizar Fornecedores":
                         with c2:
                             novo_ini = st.date_input("Início", value=date.today(), key=f"novo_ini_{sel.id}_{item['id']}")
                         with c3:
-                            novo_val = st.date_input("Validade", value=date.today(), key=f"novo_val_{sel.id}_{item['id']}")
+                            sem_validade = st.checkbox("Documento sem data de validade", key=f"novo_sem_val_{sel.id}_{item['id']}")
+                            novo_val = st.date_input("Validade", value=date.today(), key=f"novo_val_{sel.id}_{item['id']}", disabled=sem_validade)
                         csave, crem = st.columns([0.5, 0.5])
                         if csave.button("Salvar documento", key=f"btn_save_doc_{sel.id}_{item['id']}"):
                             if novo_up is None:
                                 st.error("Envie um arquivo.")
-                            elif novo_val < novo_ini:
+                            elif (not sem_validade) and novo_val < novo_ini:
                                 st.error("Validade não pode ser anterior ao início.")
                             else:
                                 caminho = salvar_arquivo(novo_up, "uploads/documentos", f"{sel.id}_{tipo_escolhido}")
@@ -1184,7 +1272,8 @@ if menu=="Visualizar Fornecedores":
                                             tipo=tipo_escolhido,
                                             arquivo=caminho,
                                             data_inicio=novo_ini,
-                                            data_validade=novo_val,
+                                            data_validade=None if sem_validade else novo_val,
+                                            sem_validade=1 if sem_validade else 0,
                                             updated_by=st.session_state.usuario
                                         )
                                         db.add(d)
@@ -1213,9 +1302,11 @@ if menu=="Visualizar Fornecedores":
                             with c2:
                                 dt_ini = st.date_input("Início", value=d.data_inicio, key=f"doc_ini_{d.id}")
                             with c3:
-                                dt_val = st.date_input("Validade", value=d.data_validade, key=f"doc_val_{d.id}")
+                                doc_sem_validade = st.checkbox("Documento sem data de validade", value=bool(d.sem_validade), key=f"doc_sem_val_{d.id}")
+                                dt_default = d.data_validade or date.today()
+                                dt_val = st.date_input("Validade", value=dt_default, key=f"doc_val_{d.id}", disabled=doc_sem_validade)
                             if st.button("Salvar alterações", key=f"doc_save_{d.id}"):
-                                if dt_val < dt_ini:
+                                if (not doc_sem_validade) and dt_val < dt_ini:
                                     st.error("Validade não pode ser anterior ao início.")
                                 else:
                                     caminho = d.arquivo
@@ -1225,7 +1316,8 @@ if menu=="Visualizar Fornecedores":
                                         doc_db = db.query(Documento).filter(Documento.id == d.id).first()
                                         doc_db.arquivo = caminho
                                         doc_db.data_inicio = dt_ini
-                                        doc_db.data_validade = dt_val
+                                        doc_db.data_validade = None if doc_sem_validade else dt_val
+                                        doc_db.sem_validade = 1 if doc_sem_validade else 0
                                         doc_db.updated_by = st.session_state.usuario
                                         db.commit()
                                         st.success("Documento atualizado com sucesso!")
@@ -1240,6 +1332,8 @@ if menu=="Visualizar Fornecedores":
                 if aud_exist and isinstance(aud_exist.respostas, dict):
                     prev = aud_exist.respostas.get("checklist_respostas", {}) or {}
                     anexos_prev = aud_exist.respostas.get("anexos", []) or []
+                itens_prev = parse_auditoria_itens(aud_exist)
+                itens_detalhes = {}
 
                 for it in CHECKLIST_ITEMS:
                     opcoes = list(it["opcoes"].keys())
@@ -1257,6 +1351,25 @@ if menu=="Visualizar Fornecedores":
                         horizontal=True
                     )
                     respostas_form[it["chave"]] = it["opcoes"][escolha]
+                    with st.container(border=True):
+                        obs = st.text_area("Observação", value=itens_prev.get(it["chave"], {}).get("observacao", ""), key=f"aud_obs_{sel.id}_{it['chave']}")
+                        reaval_padrao = parse_data_flex(itens_prev.get(it["chave"], {}).get("data_reavaliacao", "")) or date.today()
+                        cda, cup = st.columns([1,1])
+                        data_reavaliacao = cda.date_input("Data de reavaliação (opcional)", value=reaval_padrao, key=f"aud_reav_{sel.id}_{it['chave']}")
+                        sem_reavaliacao = cda.checkbox("Sem data de reavaliação", value=(itens_prev.get(it["chave"], {}).get("data_reavaliacao") in (None, "")), key=f"aud_sem_reav_{sel.id}_{it['chave']}")
+                        up_item = cup.file_uploader("Anexar evidência do item", type=["pdf","jpg","jpeg","png"], key=f"aud_item_up_{sel.id}_{it['chave']}")
+
+                        anexos_item_prev = itens_prev.get(it["chave"], {}).get("anexos", []) or []
+                        novos_anexos = []
+                        if up_item is not None:
+                            novos_anexos.append(salvar_arquivo(up_item, "uploads/auditorias_itens", f"{sel.id}_{it['chave']}"))
+
+                        itens_detalhes[it["chave"]] = {
+                            "status": escolha,
+                            "observacao": obs.strip() or None,
+                            "data_reavaliacao": None if sem_reavaliacao else data_reavaliacao.isoformat(),
+                            "anexos": anexos_item_prev + novos_anexos,
+                        }
 
                 st.markdown("#### Anexar documento da auditoria (opcional)")
                 up_aud = st.file_uploader("Relatório/Check-list (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"aud_up_{sel.id}")
@@ -1277,6 +1390,7 @@ if menu=="Visualizar Fornecedores":
                         "iqa_pct": iqa,
                         "regra_aplicada": regra,
                         "anexos": anexos,
+                        "itens_detalhes": itens_detalhes,
                     }
 
                     with SessionLocal() as db:
@@ -1306,6 +1420,17 @@ if menu=="Visualizar Fornecedores":
                         st.markdown("**Anexos da auditoria:**")
                         for path in r["anexos"]:
                             exibir_preview_arquivo(path, None)
+                    itens = r.get("itens_detalhes", {}) or {}
+                    if itens:
+                        st.markdown("**Detalhamento por item auditado:**")
+                        for item in CHECKLIST_ITEMS:
+                            det = itens.get(item["chave"]) or {}
+                            with st.expander(item["titulo"]):
+                                st.write(f"Status: {det.get('status','-')}")
+                                st.write(f"Observação: {det.get('observacao') or '-'}")
+                                st.write(f"Reavaliação: {det.get('data_reavaliacao') or '-'}")
+                                for arq in det.get("anexos", []) or []:
+                                    exibir_preview_arquivo(arq, None)
             # Planos de Ação
             with tabs[3]:
                 st.subheader("Planos de Ação")
@@ -1434,24 +1559,27 @@ if menu=="Visualizar Fornecedores":
                 if not mtrs_visiveis:
                     st.info("Nenhuma MTR associada ao fornecedor.")
                 else:
-                    head = st.columns([1.2, 1.0, 1.6, 1.1, 0.8])
+                    head = st.columns([1.0, 1.0, 1.4, 1.0, 1.2, 0.8])
                     head[0].markdown("**Número da MTR**")
                     head[1].markdown("**Data**")
                     head[2].markdown("**Tipo de resíduo**")
                     head[3].markdown("**Quantidade (kg)**")
-                    head[4].markdown("**Arquivo**")
+                    head[4].markdown("**Tempo MTR → CDF**")
+                    head[5].markdown("**Arquivo**")
                     for m in mtrs_visiveis:
-                        row = st.columns([1.2, 1.0, 1.6, 1.1, 0.8])
+                        row = st.columns([1.0, 1.0, 1.4, 1.0, 1.2, 0.8])
                         row[0].write(m.numero_mtr or "-")
                         row[1].write(m.destinador_data_recebimento or "-")
                         row[2].write(m.codigo_ibama_denom or "-")
                         row[3].write(f"{m.qtd_kg or 0.0:.1f}")
+                        dias_mtr_cdf = calcular_tempo_mtr_cdf(m)
+                        row[4].write("-" if dias_mtr_cdf is None else f"{dias_mtr_cdf} dias")
                         if m.arquivo and Path(m.arquivo).exists():
                             with open(m.arquivo, "rb") as f:
                                 arquivo_mtr = f.read()
-                            row[4].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_vis_dl_{m.id}")
+                            row[5].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_vis_dl_{m.id}")
                         else:
-                            row[4].caption("-")
+                            row[5].caption("-")
 
 
 # ---- Página Contratos (lista geral) ----
@@ -1510,29 +1638,32 @@ if menu=="MTRs":
     if not mtrs_all:
         st.info("Nenhuma MTR cadastrada ainda.")
     else:
-        head = st.columns([1.0, 1.1, 0.6, 0.8, 0.8, 0.5, 0.5, 0.3])
+        head = st.columns([0.9, 1.0, 0.6, 0.8, 1.0, 0.8, 0.5, 0.5, 0.3])
         head[0].markdown("**MTR nº**")
         head[1].markdown("**Fornecedor**")
         head[2].markdown("**Site**")
         head[3].markdown("**Recebimento**")
         head[4].markdown("**Status CDF**")
-        head[5].markdown("**MTR**")
-        head[6].markdown("**CDF**")
-        head[7].markdown("**Doc**")
+        head[5].markdown("**Tempo MTR → CDF**")
+        head[6].markdown("**MTR**")
+        head[7].markdown("**CDF**")
+        head[8].markdown("**Doc**")
 
         for m in mtrs_all:
-            cols = st.columns([1.0, 1.1, 0.6, 0.8, 0.8, 0.5, 0.5, 0.3])
+            cols = st.columns([0.9, 1.0, 0.6, 0.8, 1.0, 0.8, 0.5, 0.5, 0.3])
             cols[0].write(m.numero_mtr or "-")
             cols[1].write(m.fornecedor.nome if m.fornecedor else "-")
             cols[2].write(m.site.value if m.site else "-")
             cols[3].write(str(m.destinador_data_recebimento or "-"))
             cols[4].write("Com CDF" if (m.cdf_count or 0) > 0 else "Sem CDF")
+            dias_mtr_cdf = calcular_tempo_mtr_cdf(m)
+            cols[5].write("-" if dias_mtr_cdf is None else f"{dias_mtr_cdf} dias")
             if m.arquivo and Path(m.arquivo).exists():
                 with open(m.arquivo, "rb") as f:
                     arquivo_mtr = f.read()
-                cols[5].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_geral_dl_{m.id}")
+                cols[6].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_geral_dl_{m.id}")
             else:
-                cols[5].caption("-")
+                cols[6].caption("-")
 
             primeiro_cdf = m.cdfs[0] if m.cdfs else None
             if primeiro_cdf and primeiro_cdf.arquivo and Path(primeiro_cdf.arquivo).exists():
@@ -1540,11 +1671,11 @@ if menu=="MTRs":
                     arquivo_cdf = f.read()
                 nome_cdf = os.path.basename(primeiro_cdf.arquivo)
                 label_cdf = "Baixar" if (m.cdf_count or 0) <= 1 else f"Baixar 1º/{m.cdf_count}"
-                cols[6].download_button(label_cdf, data=arquivo_cdf, file_name=nome_cdf, key=f"cdf_geral_dl_{m.id}")
+                cols[7].download_button(label_cdf, data=arquivo_cdf, file_name=nome_cdf, key=f"cdf_geral_dl_{m.id}")
             else:
-                cols[6].button("Sem CDF", key=f"cdf_disabled_{m.id}", disabled=True, use_container_width=True)
+                cols[7].button("Sem CDF", key=f"cdf_disabled_{m.id}", disabled=True, use_container_width=True)
 
-            if cols[7].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
+            if cols[8].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
                 st.session_state.mtr_doc_view_id = m.id
 
         mtr_doc_view_id = st.session_state.get("mtr_doc_view_id")
