@@ -45,6 +45,12 @@ st.set_page_config(page_title="Gerenciamento de Fornecedores Ambientais", layout
 st.markdown(
     """
     <style>
+    section[data-testid="stSidebar"] {
+        background-color: #FFB91D !important;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #1f1f1f !important;
+    }
     /* Melhorar contraste visual para calendário desabilitado */
     div[data-testid="stDateInput"]:has(input:disabled) {
         opacity: 0.65;
@@ -761,6 +767,46 @@ def media_tempo_mtr_cdf(mtrs:list[MTR])->float|None:
     return sum(tempos) / len(tempos)
 
 
+TIPOS_DOCUMENTOS_OBRIGATORIOS = [
+    "Licença Ambiental de Operação",
+    "Consulta de Área Contaminada",
+    "Alvará de Funcionamento",
+    "Comprovante de regularidade (CETESB ou órgão estadual)",
+    "Condicionantes ambientais vigentes",
+    "AVCB (Auto de Vistoria do Corpo de Bombeiros)",
+    "CTF - IBAMA",
+]
+
+
+def docs_faltantes_fornecedor(documentos:list[Documento])->list[str]:
+    docs_por_tipo = {d.tipo: d for d in documentos}
+    faltantes = []
+    for tipo in TIPOS_DOCUMENTOS_OBRIGATORIOS:
+        doc = docs_por_tipo.get(tipo)
+        if not doc or not doc.arquivo:
+            faltantes.append(tipo)
+    return faltantes
+
+
+def indicador_tempo_mtr_cdf(mtrs:list[MTR])->str:
+    if not mtrs:
+        return "Sem MTR"
+    com_cdf = [m for m in mtrs if m.cdfs and m.gerador_data_emissao]
+    sem_cdf = [m for m in mtrs if not m.cdfs]
+    media = media_tempo_mtr_cdf(com_cdf)
+    if media is None:
+        return f"Sem CDF ({len(sem_cdf)} pendente{'s' if len(sem_cdf) != 1 else ''})"
+    if media <= 5:
+        base = f"🟢 {media:.1f} dias"
+    elif media <= 10:
+        base = f"🟡 {media:.1f} dias"
+    else:
+        base = f"🔴 {media:.1f} dias"
+    if sem_cdf:
+        base += f" | {len(sem_cdf)} MTR sem CDF"
+    return base
+
+
 def parse_auditoria_itens(auditoria_obj:Auditoria|None)->dict:
     if not auditoria_obj or not isinstance(auditoria_obj.respostas, dict):
         return {}
@@ -1118,24 +1164,24 @@ if menu=="Visão Geral Fornecedores":
     else:
         linhas = []
         for f in fornecedores:
-            total_docs = len(f.documentos)
-            docs_completos = sum(1 for d in f.documentos if d.arquivo)
-            pct_docs = int(round((docs_completos / total_docs) * 100)) if total_docs else 0
-            faltantes = total_docs == 0 or docs_completos < total_docs
+            docs_total_obrigatorios = len(TIPOS_DOCUMENTOS_OBRIGATORIOS)
+            docs_faltantes = docs_faltantes_fornecedor(f.documentos)
+            docs_ok = docs_total_obrigatorios - len(docs_faltantes)
+            pct_docs = int(round((docs_ok / docs_total_obrigatorios) * 100)) if docs_total_obrigatorios else 0
+            faltantes = len(docs_faltantes) > 0
             prox_vencer = any(status_documento(d.data_validade)=="Próximo de vencer" for d in f.documentos if not d.sem_validade)
             vencidos = any(status_documento(d.data_validade)=="Vencido" for d in f.documentos if not d.sem_validade)
             alerta = f"Faltantes:{'✅' if not faltantes else '⚠️'} | Próx:{'✅' if not prox_vencer else '⚠️'} | Vencidos:{'✅' if not vencidos else '🚨'}"
             contrato = f.contratos[0] if f.contratos else None
-            media_mtr_cdf = media_tempo_mtr_cdf(f.mtrs)
             linhas.append({
                 "Fornecedor": f.id,
                 "Nome do fornecedor": f.nome,
                 "Contrato": "Sim" if contrato else "Não",
                 "Status da documentação": f"{pct_docs}%",
+                "Documentos faltantes": docs_faltantes,
                 "Alertas de documentação": alerta,
-                "Score auditoria": f.auditoria.score if f.auditoria else None,
                 "Status auditoria": auditoria_status(f.auditoria.score if f.auditoria else None),
-                "Tempo médio MTR → CDF (dias)": "-" if media_mtr_cdf is None else f"{media_mtr_cdf:.1f}",
+                "Indicador MTR → CDF": indicador_tempo_mtr_cdf(f.mtrs),
             })
 
         st.markdown("#### Lista geral")
@@ -1146,30 +1192,32 @@ if menu=="Visão Geral Fornecedores":
             "Crítico": "#c62828",
             "Sem auditoria": "#616161",
         }
-        for idx, linha in enumerate(linhas):
-            fornecedor = fornecedores[idx]
-            contrato = fornecedor.contratos[0] if fornecedor.contratos else None
-            c1, c2, c3, c4, c5, c6 = st.columns([2.3, 1.0, 1.4, 1.3, 1.2, 1.0])
+        for linha in linhas:
+            fornecedor = next((f for f in fornecedores if f.id == linha["Fornecedor"]), None)
+            contrato = fornecedor.contratos[0] if fornecedor and fornecedor.contratos else None
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([2.0, 0.9, 1.8, 1.3, 1.3, 1.2, 0.9])
             auditoria_txt = linha['Status auditoria']
             auditoria_cor = status_cores.get(auditoria_txt, "#616161")
             contrato_icon = "✅" if linha['Contrato'] == "Sim" else "⚠️"
+            docs_faltantes = linha["Documentos faltantes"]
+            txt_faltantes = "Todos OK" if not docs_faltantes else "• " + "\n• ".join(docs_faltantes)
 
             c1.markdown(f"### {linha['Nome do fornecedor']}")
             c1.caption(f"Documentação: {linha['Status da documentação']}")
             c2.markdown(f"**Contrato**\n\n{contrato_icon} {linha['Contrato']}")
-            c3.markdown(f"**Alertas docs**\n\n{linha['Alertas de documentação']}")
-            c4.markdown(
+            c3.markdown(f"**Documentação**\n\n{txt_faltantes}")
+            c4.markdown(f"**Alertas docs**\n\n{linha['Alertas de documentação']}")
+            c5.markdown(
                 "**Auditoria**\n\n"
                 f"<span style='background:{auditoria_cor};color:#fff;padding:4px 8px;border-radius:999px;font-size:0.85rem;'>"
                 f"{auditoria_txt}</span>",
                 unsafe_allow_html=True,
             )
-            tempo_medio_txt = linha['Tempo médio MTR → CDF (dias)']
-            c5.markdown(f"**Tempo médio MTR → CDF**\n\n{'-' if tempo_medio_txt == '-' else f'{tempo_medio_txt} dias'}")
+            c6.markdown(f"**Indicador MTR → CDF**\n\n{linha['Indicador MTR → CDF']}")
 
             if contrato and contrato.arquivo and Path(contrato.arquivo).exists():
                 with open(contrato.arquivo, "rb") as arq:
-                    c6.download_button(
+                    c7.download_button(
                         "Contrato",
                         data=arq.read(),
                         file_name=os.path.basename(contrato.arquivo),
@@ -1177,7 +1225,7 @@ if menu=="Visão Geral Fornecedores":
                         use_container_width=True,
                     )
             else:
-                c6.caption("Sem arquivo")
+                c7.caption("Sem arquivo")
             st.divider()
 
 
@@ -1250,15 +1298,7 @@ if menu=="Visualizar Fornecedores":
                 st.markdown("#### Documentos do fornecedor")
                 docs_existentes = {d.tipo: d for d in sel.documentos}
                 docs_ordenados = sorted(sel.documentos, key=lambda x: (x.data_validade or date.max, x.tipo or ""))
-                tipos_documentos = [
-                    "Licença Ambiental de Operação",
-                    "Consulta de Área Contaminada",
-                    "Alvará de Funcionamento",
-                    "Comprovante de regularidade (CETESB ou órgão estadual)",
-                    "Condicionantes ambientais vigentes",
-                    "AVCB (Auto de Vistoria do Corpo de Bombeiros)",
-                    "CTF - IBAMA"
-                ]
+                tipos_documentos = TIPOS_DOCUMENTOS_OBRIGATORIOS
 
                 st.markdown("##### Lista de documentos cadastrados")
                 if not docs_ordenados:
