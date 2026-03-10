@@ -743,6 +743,24 @@ def calcular_tempo_mtr_cdf(mtr:MTR)->int|None:
     return (date.today() - base).days
 
 
+def media_tempo_mtr_cdf(mtrs:list[MTR])->float|None:
+    if not mtrs:
+        return None
+    tempos = []
+    for mtr in mtrs:
+        if not mtr or not mtr.gerador_data_emissao:
+            continue
+        if not mtr.cdfs:
+            continue
+        datas_cdf = [c.data_emissao for c in mtr.cdfs if c.data_emissao]
+        if not datas_cdf:
+            continue
+        tempos.append((min(datas_cdf) - mtr.gerador_data_emissao).days)
+    if not tempos:
+        return None
+    return sum(tempos) / len(tempos)
+
+
 def parse_auditoria_itens(auditoria_obj:Auditoria|None)->dict:
     if not auditoria_obj or not isinstance(auditoria_obj.respostas, dict):
         return {}
@@ -1091,7 +1109,8 @@ if menu=="Visão Geral Fornecedores":
         fornecedores = db.query(Fornecedor).options(
             joinedload(Fornecedor.documentos),
             joinedload(Fornecedor.contratos),
-            joinedload(Fornecedor.auditoria)
+            joinedload(Fornecedor.auditoria),
+            joinedload(Fornecedor.mtrs).joinedload(MTR.cdfs)
         ).order_by(Fornecedor.nome.asc()).all()
 
     if not fornecedores:
@@ -1107,6 +1126,7 @@ if menu=="Visão Geral Fornecedores":
             vencidos = any(status_documento(d.data_validade)=="Vencido" for d in f.documentos if not d.sem_validade)
             alerta = f"Faltantes:{'✅' if not faltantes else '⚠️'} | Próx:{'✅' if not prox_vencer else '⚠️'} | Vencidos:{'✅' if not vencidos else '🚨'}"
             contrato = f.contratos[0] if f.contratos else None
+            media_mtr_cdf = media_tempo_mtr_cdf(f.mtrs)
             linhas.append({
                 "Fornecedor": f.id,
                 "Nome do fornecedor": f.nome,
@@ -1115,29 +1135,49 @@ if menu=="Visão Geral Fornecedores":
                 "Alertas de documentação": alerta,
                 "Score auditoria": f.auditoria.score if f.auditoria else None,
                 "Status auditoria": auditoria_status(f.auditoria.score if f.auditoria else None),
+                "Tempo médio MTR → CDF (dias)": "-" if media_mtr_cdf is None else f"{media_mtr_cdf:.1f}",
             })
 
         st.markdown("#### Lista geral")
+        status_cores = {
+            "Excelente": "#1b5e20",
+            "Bom": "#2e7d32",
+            "Condicionado": "#ef6c00",
+            "Crítico": "#c62828",
+            "Sem auditoria": "#616161",
+        }
         for idx, linha in enumerate(linhas):
             fornecedor = fornecedores[idx]
             contrato = fornecedor.contratos[0] if fornecedor.contratos else None
-            c1, c2, c3, c4, c5 = st.columns([2.2, 1.0, 1.4, 1.4, 1.0])
-            c1.markdown(f"**{linha['Nome do fornecedor']}**")
-            c1.caption(f"Status documentação: {linha['Status da documentação']}")
-            c2.write(f"Contrato: {linha['Contrato']}")
-            c3.write(f"Alertas: {linha['Alertas de documentação']}")
-            c4.write(f"Auditoria: {linha['Status auditoria']}")
+            c1, c2, c3, c4, c5, c6 = st.columns([2.3, 1.0, 1.4, 1.3, 1.2, 1.0])
+            auditoria_txt = linha['Status auditoria']
+            auditoria_cor = status_cores.get(auditoria_txt, "#616161")
+            contrato_icon = "✅" if linha['Contrato'] == "Sim" else "⚠️"
+
+            c1.markdown(f"### {linha['Nome do fornecedor']}")
+            c1.caption(f"Documentação: {linha['Status da documentação']}")
+            c2.markdown(f"**Contrato**\n\n{contrato_icon} {linha['Contrato']}")
+            c3.markdown(f"**Alertas docs**\n\n{linha['Alertas de documentação']}")
+            c4.markdown(
+                "**Auditoria**\n\n"
+                f"<span style='background:{auditoria_cor};color:#fff;padding:4px 8px;border-radius:999px;font-size:0.85rem;'>"
+                f"{auditoria_txt}</span>",
+                unsafe_allow_html=True,
+            )
+            tempo_medio_txt = linha['Tempo médio MTR → CDF (dias)']
+            c5.markdown(f"**Tempo médio MTR → CDF**\n\n{'-' if tempo_medio_txt == '-' else f'{tempo_medio_txt} dias'}")
+
             if contrato and contrato.arquivo and Path(contrato.arquivo).exists():
                 with open(contrato.arquivo, "rb") as arq:
-                    c5.download_button(
-                        "Baixar contrato",
+                    c6.download_button(
+                        "Contrato",
                         data=arq.read(),
                         file_name=os.path.basename(contrato.arquivo),
                         key=f"overview_contr_dl_{contrato.id}",
                         use_container_width=True,
                     )
             else:
-                c5.caption("Sem arquivo")
+                c6.caption("Sem arquivo")
             st.divider()
 
 
@@ -1377,8 +1417,17 @@ if menu=="Visualizar Fornecedores":
                         obs = st.text_area("Observação", value=itens_prev.get(it["chave"], {}).get("observacao", ""), key=f"aud_obs_{sel.id}_{it['chave']}")
                         reaval_padrao = parse_data_flex(itens_prev.get(it["chave"], {}).get("data_reavaliacao", "")) or date.today()
                         cda, cup = st.columns([1,1])
-                        data_reavaliacao = cda.date_input("Data de reavaliação (opcional)", value=reaval_padrao, key=f"aud_reav_{sel.id}_{it['chave']}")
-                        sem_reavaliacao = cda.checkbox("Sem data de reavaliação", value=(itens_prev.get(it["chave"], {}).get("data_reavaliacao") in (None, "")), key=f"aud_sem_reav_{sel.id}_{it['chave']}")
+                        sem_reavaliacao = cda.checkbox(
+                            "Sem data de reavaliação",
+                            value=(itens_prev.get(it["chave"], {}).get("data_reavaliacao") in (None, "")),
+                            key=f"aud_sem_reav_{sel.id}_{it['chave']}"
+                        )
+                        data_reavaliacao = cda.date_input(
+                            "Data de reavaliação (opcional)",
+                            value=reaval_padrao,
+                            key=f"aud_reav_{sel.id}_{it['chave']}",
+                            disabled=sem_reavaliacao
+                        )
                         up_item = cup.file_uploader("Anexar evidência do item", type=["pdf","jpg","jpeg","png"], key=f"aud_item_up_{sel.id}_{it['chave']}")
 
                         anexos_item_prev = itens_prev.get(it["chave"], {}).get("anexos", []) or []
