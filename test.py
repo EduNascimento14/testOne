@@ -42,6 +42,17 @@ except Exception:
 #       CONFIG GERAL
 # =========================
 st.set_page_config(page_title="Gerenciamento de Fornecedores Ambientais", layout="wide")
+st.markdown(
+    """
+    <style>
+    /* Melhorar contraste visual para calendário desabilitado */
+    div[data-testid="stDateInput"]:has(input:disabled) {
+        opacity: 0.65;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///fornecedores.db")
 CONNECT_ARGS = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=CONNECT_ARGS, pool_pre_ping=True)
@@ -1106,17 +1117,28 @@ if menu=="Visão Geral Fornecedores":
                 "Status auditoria": auditoria_status(f.auditoria.score if f.auditoria else None),
             })
 
-        st.dataframe(linhas, use_container_width=True)
-        st.markdown("#### Downloads de contratos")
-        for f in fornecedores:
-            if not f.contratos:
-                continue
-            c = f.contratos[0]
-            c1, c2 = st.columns([2,1])
-            c1.write(f"{f.nome} — validade: {c.data_validade or '-'}")
-            if c.arquivo and Path(c.arquivo).exists():
-                with open(c.arquivo, "rb") as arq:
-                    c2.download_button("Baixar contrato", data=arq.read(), file_name=os.path.basename(c.arquivo), key=f"overview_contr_dl_{c.id}")
+        st.markdown("#### Lista geral")
+        for idx, linha in enumerate(linhas):
+            fornecedor = fornecedores[idx]
+            contrato = fornecedor.contratos[0] if fornecedor.contratos else None
+            c1, c2, c3, c4, c5 = st.columns([2.2, 1.0, 1.4, 1.4, 1.0])
+            c1.markdown(f"**{linha['Nome do fornecedor']}**")
+            c1.caption(f"Status documentação: {linha['Status da documentação']}")
+            c2.write(f"Contrato: {linha['Contrato']}")
+            c3.write(f"Alertas: {linha['Alertas de documentação']}")
+            c4.write(f"Auditoria: {linha['Status auditoria']}")
+            if contrato and contrato.arquivo and Path(contrato.arquivo).exists():
+                with open(contrato.arquivo, "rb") as arq:
+                    c5.download_button(
+                        "Baixar contrato",
+                        data=arq.read(),
+                        file_name=os.path.basename(contrato.arquivo),
+                        key=f"overview_contr_dl_{contrato.id}",
+                        use_container_width=True,
+                    )
+            else:
+                c5.caption("Sem arquivo")
+            st.divider()
 
 
 # ---- Cadastrar Fornecedor ----
@@ -1366,7 +1388,7 @@ if menu=="Visualizar Fornecedores":
 
                         itens_detalhes[it["chave"]] = {
                             "status": escolha,
-                            "observacao": obs.strip() or None,
+                            "observacao": (obs or "").strip() or None,
                             "data_reavaliacao": None if sem_reavaliacao else data_reavaliacao.isoformat(),
                             "anexos": anexos_item_prev + novos_anexos,
                         }
