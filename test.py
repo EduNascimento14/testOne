@@ -912,6 +912,17 @@ def indicador_tempo_mtr_cdf(mtrs:list[MTR])->str:
     return base
 
 
+def indicador_mtr_cdf_fornecedor(mtrs:list[MTR])->str:
+    if not mtrs:
+        return "Sem MTR"
+    tempos = [calcular_tempo_mtr_cdf(m) for m in mtrs]
+    tempos_validos = [t for t in tempos if t is not None]
+    if not tempos_validos:
+        return "Sem data de emissão"
+    media_dias = sum(tempos_validos) / len(tempos_validos)
+    return f"{media_dias:.1f} dias"
+
+
 def parse_auditoria_itens(auditoria_obj:Auditoria|None)->dict:
     if not auditoria_obj or not isinstance(auditoria_obj.respostas, dict):
         return {}
@@ -1258,7 +1269,7 @@ if menu=="Visão Geral Fornecedores":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito.")
         st.stop()
-    render_page_header("Visão Geral de Fornecedores", "Panorama executivo com saúde documental, auditorias e desempenho de MTRs.")
+    render_page_header("Visão Geral de Fornecedores", "Panorama executivo com foco documental, auditoria e indicadores operacionais de MTR/CDF.")
     with SessionLocal() as db:
         fornecedores = db.query(Fornecedor).options(
             joinedload(Fornecedor.documentos),
@@ -1271,70 +1282,57 @@ if menu=="Visão Geral Fornecedores":
         st.info("Nenhum fornecedor cadastrado.")
     else:
         linhas = []
+        total_faltantes = total_proximo = total_vencidos = 0
         for f in fornecedores:
-            docs_total_obrigatorios = len(TIPOS_DOCUMENTOS_OBRIGATORIOS)
             docs_faltantes = docs_faltantes_fornecedor(f.documentos)
-            docs_ok = docs_total_obrigatorios - len(docs_faltantes)
-            pct_docs = int(round((docs_ok / docs_total_obrigatorios) * 100)) if docs_total_obrigatorios else 0
-            faltantes = len(docs_faltantes) > 0
-            prox_vencer = any(status_documento(d.data_validade)=="Próximo de vencer" for d in f.documentos if not d.sem_validade)
-            vencidos = any(status_documento(d.data_validade)=="Vencido" for d in f.documentos if not d.sem_validade)
-            alerta = f"Faltantes:{'✅' if not faltantes else '⚠️'} | Próx:{'✅' if not prox_vencer else '⚠️'} | Vencidos:{'✅' if not vencidos else '🚨'}"
-            contrato = f.contratos[0] if f.contratos else None
+            docs_validade = [d for d in f.documentos if not d.sem_validade]
+            docs_prox_vencer = sum(1 for d in docs_validade if status_documento(d.data_validade)=="Próximo de vencer")
+            docs_vencidos = sum(1 for d in docs_validade if status_documento(d.data_validade)=="Vencido")
+            total_faltantes += len(docs_faltantes)
+            total_proximo += docs_prox_vencer
+            total_vencidos += docs_vencidos
+
+            score = f.auditoria.score if f.auditoria else None
+            status_auditoria = auditoria_status(score)
+            score_txt = "-" if score is None else f"{score}"
+            kg_total = sum((m.qtd_kg or 0.0) for m in f.mtrs)
+            docs_txt = "Todos os obrigatórios enviados" if not docs_faltantes else " • ".join(docs_faltantes)
+            alerta_txt = (
+                f"🔴 Faltantes: {len(docs_faltantes)} | "
+                f"🟡 Próx. do vencimento: {docs_prox_vencer} | "
+                f"🚨 Vencidos: {docs_vencidos}"
+            )
+
             linhas.append({
-                "Fornecedor": f.id,
-                "Nome do fornecedor": f.nome,
-                "Contrato": "Sim" if contrato else "Não",
-                "Status da documentação": f"{pct_docs}%",
-                "Documentos faltantes": docs_faltantes,
-                "Alertas de documentação": alerta,
-                "Status auditoria": auditoria_status(f.auditoria.score if f.auditoria else None),
-                "Indicador MTR → CDF": indicador_tempo_mtr_cdf(f.mtrs),
+                "Fornecedor": f.nome,
+                "Documentação (faltantes)": docs_txt,
+                "Alerta de documentação": alerta_txt,
+                "Auditoria": f"{status_auditoria} | Score: {score_txt}",
+                "Indicador MTR → CDF": indicador_mtr_cdf_fornecedor(f.mtrs),
+                "Resíduos enviados (kg)": round(kg_total, 2),
             })
 
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            render_kpi_card("Documentos obrigatórios faltantes", str(total_faltantes))
+        with c2:
+            render_kpi_card("Documentos próximos do vencimento", str(total_proximo))
+        with c3:
+            render_kpi_card("Documentos vencidos", str(total_vencidos))
+
         st.markdown("#### Lista geral")
-        status_cores = {
-            "Excelente": "#1b5e20",
-            "Bom": "#2e7d32",
-            "Condicionado": "#ef6c00",
-            "Crítico": "#c62828",
-            "Sem auditoria": "#616161",
-        }
-        for linha in linhas:
-            fornecedor = next((f for f in fornecedores if f.id == linha["Fornecedor"]), None)
-            contrato = fornecedor.contratos[0] if fornecedor and fornecedor.contratos else None
-            c1, c2, c3, c4, c5, c6, c7 = st.columns([2.0, 0.9, 1.8, 1.3, 1.3, 1.2, 0.9])
-            auditoria_txt = linha['Status auditoria']
-            auditoria_cor = status_cores.get(auditoria_txt, "#616161")
-            contrato_icon = "✅" if linha['Contrato'] == "Sim" else "⚠️"
-            docs_faltantes = linha["Documentos faltantes"]
-            txt_faltantes = "Todos OK" if not docs_faltantes else "• " + "\n• ".join(docs_faltantes)
-
-            c1.markdown(f"### {linha['Nome do fornecedor']}")
-            c1.caption(f"Documentação: {linha['Status da documentação']}")
-            c2.markdown(f"**Contrato**\n\n{contrato_icon} {linha['Contrato']}")
-            c3.markdown(f"**Documentação**\n\n{txt_faltantes}")
-            c4.markdown(f"**Alertas docs**\n\n{linha['Alertas de documentação']}")
-            c5.markdown(
-                "**Auditoria**\n\n"
-                f"<span style='background:{auditoria_cor};color:#fff;padding:4px 8px;border-radius:999px;font-size:0.85rem;'>"
-                f"{auditoria_txt}</span>",
-                unsafe_allow_html=True,
-            )
-            c6.markdown(f"**Indicador MTR → CDF**\n\n{linha['Indicador MTR → CDF']}")
-
-            if contrato and contrato.arquivo and Path(contrato.arquivo).exists():
-                with open(contrato.arquivo, "rb") as arq:
-                    c7.download_button(
-                        "Contrato",
-                        data=arq.read(),
-                        file_name=os.path.basename(contrato.arquivo),
-                        key=f"overview_contr_dl_{contrato.id}",
-                        use_container_width=True,
-                    )
-            else:
-                c7.caption("Sem arquivo")
-            st.divider()
+        if HAVE_PANDAS:
+            df_visao = pd.DataFrame(linhas)
+            st.dataframe(df_visao, use_container_width=True, hide_index=True)
+        else:
+            for linha in linhas:
+                with st.container(border=True):
+                    st.markdown(f"### {linha['Fornecedor']}")
+                    st.markdown(f"**Documentação (faltantes):** {linha['Documentação (faltantes)']}")
+                    st.markdown(f"**Alerta de documentação:** {linha['Alerta de documentação']}")
+                    st.markdown(f"**Auditoria:** {linha['Auditoria']}")
+                    st.markdown(f"**Indicador MTR → CDF:** {linha['Indicador MTR → CDF']}")
+                    st.markdown(f"**Resíduos enviados (kg):** {linha['Resíduos enviados (kg)']}")
 
 
 # ---- Cadastrar Fornecedor ----
@@ -1655,7 +1653,6 @@ if menu=="Visualizar Fornecedores":
             # Planos de Ação
             with tabs[3]:
                 st.subheader("Planos de Ação")
-                st.caption("Funcionalidade simplificada: registrar ação e editar ação existente.")
 
                 with st.form(f"form_plano_{sel.id}"):
                     descricao = st.text_area("Descrição da ação")
@@ -1859,32 +1856,30 @@ if menu=="MTRs":
     if not mtrs_all:
         st.info("Nenhuma MTR cadastrada ainda.")
     else:
-        head = st.columns([0.9, 1.0, 0.6, 0.8, 1.0, 0.8, 0.5, 0.5, 0.3])
+        head = st.columns([0.9, 1.2, 0.6, 1.0, 0.9, 0.6, 0.6, 0.3])
         head[0].markdown("**MTR nº**")
         head[1].markdown("**Fornecedor**")
         head[2].markdown("**Site**")
-        head[3].markdown("**Recebimento**")
-        head[4].markdown("**Status CDF**")
-        head[5].markdown("**Tempo MTR → CDF**")
-        head[6].markdown("**MTR**")
-        head[7].markdown("**CDF**")
-        head[8].markdown("**Doc**")
+        head[3].markdown("**Status CDF**")
+        head[4].markdown("**Tempo MTR → CDF**")
+        head[5].markdown("**MTR**")
+        head[6].markdown("**CDF**")
+        head[7].markdown("**Doc**")
 
         for m in mtrs_all:
-            cols = st.columns([0.9, 1.0, 0.6, 0.8, 1.0, 0.8, 0.5, 0.5, 0.3])
+            cols = st.columns([0.9, 1.2, 0.6, 1.0, 0.9, 0.6, 0.6, 0.3])
             cols[0].write(m.numero_mtr or "-")
             cols[1].write(m.fornecedor.nome if m.fornecedor else "-")
             cols[2].write(m.site.value if m.site else "-")
-            cols[3].write(str(m.destinador_data_recebimento or "-"))
-            cols[4].markdown(status_badge("Aprovado" if (m.cdf_count or 0) > 0 else "Pendente"), unsafe_allow_html=True)
+            cols[3].markdown(status_badge("Aprovado" if (m.cdf_count or 0) > 0 else "Pendente"), unsafe_allow_html=True)
             dias_mtr_cdf = calcular_tempo_mtr_cdf(m)
-            cols[5].write("-" if dias_mtr_cdf is None else f"{dias_mtr_cdf} dias")
+            cols[4].write("-" if dias_mtr_cdf is None else f"{dias_mtr_cdf} dias")
             if m.arquivo and Path(m.arquivo).exists():
                 with open(m.arquivo, "rb") as f:
                     arquivo_mtr = f.read()
-                cols[6].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_geral_dl_{m.id}")
+                cols[5].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_geral_dl_{m.id}")
             else:
-                cols[6].caption("-")
+                cols[5].caption("-")
 
             primeiro_cdf = m.cdfs[0] if m.cdfs else None
             if primeiro_cdf and primeiro_cdf.arquivo and Path(primeiro_cdf.arquivo).exists():
@@ -1892,11 +1887,11 @@ if menu=="MTRs":
                     arquivo_cdf = f.read()
                 nome_cdf = os.path.basename(primeiro_cdf.arquivo)
                 label_cdf = "Baixar" if (m.cdf_count or 0) <= 1 else f"Baixar 1º/{m.cdf_count}"
-                cols[7].download_button(label_cdf, data=arquivo_cdf, file_name=nome_cdf, key=f"cdf_geral_dl_{m.id}")
+                cols[6].download_button(label_cdf, data=arquivo_cdf, file_name=nome_cdf, key=f"cdf_geral_dl_{m.id}")
             else:
-                cols[7].button("Sem CDF", key=f"cdf_disabled_{m.id}", disabled=True, use_container_width=True)
+                cols[6].button("Sem CDF", key=f"cdf_disabled_{m.id}", disabled=True, use_container_width=True)
 
-            if cols[8].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
+            if cols[7].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
                 st.session_state.mtr_doc_view_id = m.id
 
         mtr_doc_view_id = st.session_state.get("mtr_doc_view_id")
@@ -1918,7 +1913,7 @@ if menu=="MTRs":
     forn_map={f"{f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}":f.id for f in fornecedores}
 
     if st.session_state.mtr_action == "cadastro":
-        st.markdown("### Cadastro de MTR (metodologia atual)")
+        st.markdown("### Cadastro de MTR")
         if not HAVE_PDFPLUMBER:
             st.error("pdfplumber não está instalado. Adicione ao requirements.")
             st.stop()
