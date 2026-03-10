@@ -45,13 +45,79 @@ st.set_page_config(page_title="Gerenciamento de Fornecedores Ambientais", layout
 st.markdown(
     """
     <style>
+    :root {
+        --brand-bg: #f6f8fb;
+        --card-bg: #ffffff;
+        --muted: #5f6b7a;
+        --border: #e7ebf3;
+        --title: #12263f;
+        --accent: #1f4bb8;
+    }
+    .stApp {
+        background: var(--brand-bg);
+    }
     section[data-testid="stSidebar"] {
-        background-color: #FFB91D !important;
+        background: linear-gradient(180deg, #ffcd61 0%, #ffb91d 100%) !important;
+        border-right: 1px solid rgba(18, 38, 63, 0.12);
     }
     section[data-testid="stSidebar"] * {
         color: #1f1f1f !important;
     }
-    /* Melhorar contraste visual para calendário desabilitado */
+    .page-header {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 1rem 1.2rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 4px 16px rgba(18, 38, 63, 0.05);
+    }
+    .page-header h1 {
+        margin: 0;
+        font-size: 1.55rem;
+        color: var(--title);
+    }
+    .page-header p {
+        margin: 0.35rem 0 0;
+        color: var(--muted);
+        font-size: 0.94rem;
+    }
+    .section-title {
+        margin: 1.1rem 0 0.55rem;
+        color: var(--title);
+        font-size: 1.08rem;
+        font-weight: 600;
+    }
+    .kpi-card {
+        border: 1px solid var(--border);
+        background: var(--card-bg);
+        border-radius: 12px;
+        padding: 0.8rem 0.95rem;
+        box-shadow: 0 2px 8px rgba(18, 38, 63, 0.04);
+    }
+    .kpi-label {
+        color: var(--muted);
+        font-size: 0.8rem;
+        margin-bottom: 0.15rem;
+    }
+    .kpi-value {
+        color: var(--title);
+        font-size: 1.35rem;
+        font-weight: 700;
+    }
+    .status-badge {
+        border-radius: 999px;
+        font-size: 0.78rem;
+        padding: 0.22rem 0.56rem;
+        display: inline-block;
+        font-weight: 600;
+    }
+    .block-shell {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        margin-bottom: 0.9rem;
+    }
     div[data-testid="stDateInput"]:has(input:disabled) {
         opacity: 0.65;
     }
@@ -68,6 +134,45 @@ Base = declarative_base()
 # =========================
 #       UTILITÁRIOS
 # =========================
+
+
+def render_page_header(title:str, subtitle:str|None=None):
+    subtitle_html = f"<p>{subtitle}</p>" if subtitle else ""
+    st.markdown(
+        f"<div class='page-header'><h1>{title}</h1>{subtitle_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_title(title:str):
+    st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
+
+
+def render_kpi_card(label:str, value:str):
+    st.markdown(
+        f"<div class='kpi-card'><div class='kpi-label'>{label}</div><div class='kpi-value'>{value}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def status_badge(status:str)->str:
+    s=(status or '').lower()
+    palette={
+        'vencido': ('#7f1d1d','#fee2e2'),
+        'próximo do vencimento': ('#92400e','#fef3c7'),
+        'próximo de vencer': ('#92400e','#fef3c7'),
+        'vigente': ('#065f46','#d1fae5'),
+        'sem validade': ('#334155','#e2e8f0'),
+        'excelente': ('#065f46','#d1fae5'),
+        'bom': ('#166534','#dcfce7'),
+        'condicionado': ('#92400e','#fef3c7'),
+        'crítico': ('#7f1d1d','#fee2e2'),
+        'pendente': ('#92400e','#fef3c7'),
+        'aprovado': ('#065f46','#d1fae5'),
+        'reprovado': ('#7f1d1d','#fee2e2'),
+    }
+    fg,bg=palette.get(s, ('#1e293b','#e2e8f0'))
+    return f"<span class='status-badge' style='color:{fg};background:{bg};'>{status}</span>"
 def _safe_rerun():
     try: st.rerun()
     except Exception:
@@ -645,7 +750,7 @@ if "sel_forn_id" not in st.session_state:
 #         LOGIN
 # =========================
 def pagina_login():
-    st.title("Sistema de Gerenciamento de Fornecedores - Login")
+    render_page_header("Sistema de Gerenciamento de Fornecedores", "Acesse com suas credenciais corporativas para continuar.")
     with st.form("form_login"):
         usuario = st.text_input("Usuário").strip()
         senha = st.text_input("Senha", type="password").strip()
@@ -849,7 +954,8 @@ def kpis_gerais(db:Session, site:str, acesso_total:bool)->dict:
 
 # ---- Overview ----
 if menu=="Overview":
-    st.header("📊 Overview — Conformidade & Riscos de Fornecedores")
+    render_page_header("Overview de Conformidade e Riscos", "Monitoramento consolidado de contratos, documentos e indicadores operacionais dos fornecedores.")
+    render_section_title("Parâmetros de visualização")
     # ====== Parâmetros de visão ======
     colp1, colp2, colp3 = st.columns([0.35, 0.35, 0.3])
     with colp1:
@@ -862,6 +968,7 @@ if menu=="Overview":
     hoje = date.today()
     limite = hoje + timedelta(days=janela_dias)
 
+    render_section_title("Indicadores consolidados")
     # ====== KPIs tradicionais (mantidos) ======
     with SessionLocal() as db:
         k = kpis_gerais(db, site_logado, acesso_corporativo)
@@ -983,6 +1090,7 @@ if menu=="Overview":
             fig_top = px.bar(top, x="Fornecedor", y="Pendências", title="TOP fornecedores com pendências vencidas")
             st.plotly_chart(fig_top, use_container_width=True)
 
+    render_section_title("Tabelas operacionais")
     # ====== Tabelas operacionais ======
     def _table_docs(rows, titulo, critico=False):
         st.markdown(f"### {titulo}")
@@ -1150,7 +1258,7 @@ if menu=="Visão Geral Fornecedores":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito.")
         st.stop()
-    st.header("Visão Geral de Fornecedores")
+    render_page_header("Visão Geral de Fornecedores", "Panorama executivo com saúde documental, auditorias e desempenho de MTRs.")
     with SessionLocal() as db:
         fornecedores = db.query(Fornecedor).options(
             joinedload(Fornecedor.documentos),
@@ -1233,7 +1341,8 @@ if menu=="Visão Geral Fornecedores":
 if menu=="Cadastrar Fornecedor":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Você não tem permissão para cadastrar fornecedores."); st.stop()
-    st.header("Cadastrar novo fornecedor")
+    render_page_header("Cadastro de Fornecedor", "Registre um novo fornecedor preservando os dados cadastrais obrigatórios.")
+    render_section_title("Dados cadastrais")
     with st.form("form_cadastro"):
         nome=st.text_input("Nome do fornecedor")
         cpf_cnpj=st.text_input("CPF ou CNPJ")
@@ -1257,7 +1366,8 @@ if menu=="Cadastrar Fornecedor":
 if menu=="Visualizar Fornecedores":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito. Seu perfil é Leitor e possui acesso apenas ao Overview."); st.stop()
-    st.header("Fornecedores")
+    render_page_header("Gestão de Fornecedores", "Consulte, atualize documentos, auditorias, planos de ação, contratos e MTRs.")
+    render_section_title("Busca e seleção")
     termo=st.text_input("Buscar por nome", key="busca_forn")
     with SessionLocal() as db:
         fornecedores=db.query(Fornecedor).options(
@@ -1273,19 +1383,19 @@ if menu=="Visualizar Fornecedores":
 
     col_left, col_right = st.columns([0.35,0.65])
     with col_left:
-        st.subheader("Lista")
+        render_section_title("Lista de fornecedores")
         for f in fornecedores:
             is_selected=(st.session_state.sel_forn_id==f.id)
             style = "background:#e8f5e9;border:1px solid #2e7d32;" if is_selected else "background:#f6f6f6;border:1px solid #ddd;"
             if st.button(f"📁 {f.nome} — {formatar_cpf_cnpj(f.cpf_cnpj)}", key=f"btn_f_{f.id}"):
                 st.session_state.sel_forn_id=f.id
-            st.markdown(f"<div style='height:6px;{style}'></div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='height:6px;border-radius:0 0 8px 8px;{style}'></div>", unsafe_allow_html=True)
 
     with col_right:
         sel = next((f for f in fornecedores if f.id==st.session_state.sel_forn_id), None)
         if sel is None: st.info("Selecione um fornecedor na lista ao lado para visualizar/editar.")
         else:
-            st.subheader(f"Detalhes — {sel.nome}")
+            render_section_title(f"Detalhes do fornecedor — {sel.nome}")
             tabs=st.tabs(["Informações","Documentos","Auditoria","Planos de Ação","Contratos","MTRs"])
 
             # Informações
@@ -1315,7 +1425,7 @@ if menu=="Visualizar Fornecedores":
                         row[0].write(d.tipo)
                         row[1].write(str(d.data_inicio or "-"))
                         row[2].write("Sem validade" if d.sem_validade else str(d.data_validade or "-"))
-                        row[3].write("Vigente" if d.sem_validade else status_documento(d.data_validade))
+                        row[3].markdown(status_badge("Vigente" if d.sem_validade else status_documento(d.data_validade)), unsafe_allow_html=True)
                         if d.arquivo and Path(d.arquivo).exists():
                             with open(d.arquivo, "rb") as f:
                                 data_atual = f.read()
@@ -1698,7 +1808,7 @@ if menu=="Contratos":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito.")
         st.stop()
-    st.header("Gestão de Contratos")
+    render_page_header("Gestão de Contratos", "Acompanhe vigências, vencimentos e arquivos contratuais dos fornecedores.")
     with SessionLocal() as db:
         q = db.query(Contrato, Fornecedor).join(Fornecedor, Contrato.fornecedor_id == Fornecedor.id)
         contratos = q.order_by(Contrato.data_validade.asc()).all()
@@ -1719,7 +1829,7 @@ if menu=="Contratos":
             row[0].write(f.nome)
             row[1].write(c.data_assinatura or "-")
             row[2].write(c.data_validade or "-")
-            row[3].write(status_contrato(c.data_validade))
+            row[3].markdown(status_badge(status_contrato(c.data_validade)), unsafe_allow_html=True)
             if c.arquivo and Path(c.arquivo).exists():
                 with open(c.arquivo, "rb") as arq:
                     row[4].download_button("Baixar", data=arq.read(), file_name=os.path.basename(c.arquivo), key=f"contr_geral_dl_{c.id}")
@@ -1730,7 +1840,7 @@ if menu=="Contratos":
 if menu=="MTRs":
     if st.session_state.role not in ("Admin","Auditor"):
         st.error("Acesso restrito."); st.stop()
-    st.header("Controle de MTRs por Fornecedor")
+    render_page_header("Controle de MTRs por Fornecedor", "Gerencie importações de MTR, associação de CDF e performance operacional por site.")
 
     if "mtr_pending" not in st.session_state:
         st.session_state.mtr_pending = []
@@ -1766,7 +1876,7 @@ if menu=="MTRs":
             cols[1].write(m.fornecedor.nome if m.fornecedor else "-")
             cols[2].write(m.site.value if m.site else "-")
             cols[3].write(str(m.destinador_data_recebimento or "-"))
-            cols[4].write("Com CDF" if (m.cdf_count or 0) > 0 else "Sem CDF")
+            cols[4].markdown(status_badge("Aprovado" if (m.cdf_count or 0) > 0 else "Pendente"), unsafe_allow_html=True)
             dias_mtr_cdf = calcular_tempo_mtr_cdf(m)
             cols[5].write("-" if dias_mtr_cdf is None else f"{dias_mtr_cdf} dias")
             if m.arquivo and Path(m.arquivo).exists():
@@ -2026,11 +2136,11 @@ if menu=="MTRs":
 if menu=="Admin (Usuários)":
     if st.session_state.role!="Admin":
         st.error("Apenas Admin pode acessar esta página."); st.stop()
-    st.header("Administração")
+    render_page_header("Administração", "Gerencie usuários e exportações de dados da plataforma.")
     with SessionLocal() as db: usuarios=db.query(User).all()
-    st.subheader("Usuários")
+    render_section_title("Usuários")
     for u in usuarios: st.write(f"- **{u.username}** — {u.role.value} — site {u.site.value}")
-    st.subheader("Criar novo usuário")
+    render_section_title("Criar novo usuário")
     with st.form("form_user"):
         username=st.text_input("Usuário").strip()
         password=st.text_input("Senha", type="password").strip()
@@ -2045,7 +2155,7 @@ if menu=="Admin (Usuários)":
                 else:
                     create_user(db, username, password, RoleEnum(role), SiteEnum(site)); st.success("Usuário criado com sucesso!"); _safe_rerun()
 
-    st.subheader("Exportar dados (Excel)")
+    render_section_title("Exportar dados (Excel)")
     if not HAVE_PANDAS:
         st.info("Para exportar, instale: pandas e openpyxl.")
     else:
