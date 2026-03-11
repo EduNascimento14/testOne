@@ -775,17 +775,40 @@ if not st.session_state.logado:
 # =========================
 #          MENU
 # =========================
-if st.session_state.role=="Leitor":
-    menu = st.sidebar.selectbox("Menu", ["Overview","Sair"])
-else:
-    menu = st.sidebar.selectbox(
-        "Menu",
-        ["Overview","Visão Geral Fornecedores","Cadastrar Fornecedor","Visualizar Fornecedores","MTRs","Contratos","Admin (Usuários)","Sair"]
-    )
 st.sidebar.title(f"Usuário: {st.session_state.usuario} ({st.session_state.role})")
 site_logado = st.session_state.site
 acesso_corporativo = site_logado == SiteEnum.LAG.value
 st.sidebar.caption(f"Site: {site_logado}")
+
+if st.session_state.role=="Leitor":
+    nivel = st.sidebar.radio("Nível de navegação", ["Executivo", "Sessão"], index=0)
+    if nivel == "Executivo":
+        menu = st.sidebar.selectbox(
+            "Menu",
+            ["Overview", "Visão Geral Fornecedores", "Central de Pendências", "Sair"]
+        )
+    else:
+        menu = st.sidebar.selectbox("Menu", ["Sair"])
+else:
+    nivel = st.sidebar.radio("Nível de navegação", ["Executivo", "Operacional", "Administrativo"], index=0)
+    if nivel == "Executivo":
+        st.sidebar.caption("Visão estratégica, indicadores e pendências críticas")
+        menu = st.sidebar.selectbox(
+            "Menu",
+            ["Overview", "Visão Geral Fornecedores", "Central de Pendências", "Sair"]
+        )
+    elif nivel == "Operacional":
+        st.sidebar.caption("Execução diária: documentos, auditorias, contratos e MTR/CDF")
+        menu = st.sidebar.selectbox(
+            "Menu",
+            ["Visualizar Fornecedores", "MTRs", "Contratos", "Central de Pendências", "Sair"]
+        )
+    else:
+        st.sidebar.caption("Cadastros e administração")
+        menu = st.sidebar.selectbox(
+            "Menu",
+            ["Cadastrar Fornecedor", "Admin (Usuários)", "Sair"]
+        )
 
 # =========================
 #        KPIs / HELPERS
@@ -927,6 +950,137 @@ def parse_auditoria_itens(auditoria_obj:Auditoria|None)->dict:
     if not auditoria_obj or not isinstance(auditoria_obj.respostas, dict):
         return {}
     return auditoria_obj.respostas.get("itens_detalhes", {}) or {}
+
+
+def criticidade_rank(status:str)->int:
+    s = (status or "").lower()
+    if any(x in s for x in ["vencido", "crítico", "atrasado", "não conforme"]):
+        return 3
+    if any(x in s for x in ["próximo", "condicionado", "pendente"]):
+        return 2
+    if any(x in s for x in ["sem auditoria", "sem cdf"]):
+        return 2
+    return 1
+
+
+def criticidade_label(rank:int)->str:
+    return {3: "Alta", 2: "Média", 1: "Baixa"}.get(rank, "Baixa")
+
+
+def build_pendencias(db:Session, site:str, acesso_total:bool)->list[dict]:
+    hoje = date.today()
+    limite = hoje + timedelta(days=30)
+    pendencias = []
+    fornecedores = db.query(Fornecedor).options(
+        joinedload(Fornecedor.documentos),
+        joinedload(Fornecedor.contratos),
+        joinedload(Fornecedor.auditoria),
+        joinedload(Fornecedor.planos_acao),
+        joinedload(Fornecedor.mtrs).joinedload(MTR.cdfs),
+    ).all()
+    for f in fornecedores:
+        faltantes = docs_faltantes_fornecedor(f.documentos)
+        for tipo_doc in faltantes:
+            pendencias.append({"Fornecedor": f.nome, "Site": site, "Tipo": "Documento faltante", "Item": tipo_doc, "Criticidade": "Alta", "Prioridade": 3, "Origem": "Fornecedor"})
+
+        for d in f.documentos:
+            if d.sem_validade or not d.data_validade:
+                continue
+            if d.data_validade < hoje:
+                pendencias.append({"Fornecedor": f.nome, "Site": site, "Tipo": "Documento vencido", "Item": d.tipo, "Criticidade": "Alta", "Prioridade": 3, "Origem": "Documentos"})
+            elif d.data_validade <= limite:
+                pendencias.append({"Fornecedor": f.nome, "Site": site, "Tipo": "Documento próximo do vencimento", "Item": d.tipo, "Criticidade": "Média", "Prioridade": 2, "Origem": "Documentos"})
+
+        contrato = sorted(f.contratos, key=lambda c: c.data_validade or date.max)[0] if f.contratos else None
+        if contrato:
+            if contrato.data_validade < hoje:
+                pendencias.append({"Fornecedor": f.nome, "Site": site, "Tipo": "Contrato vencido", "Item": "Contrato", "Criticidade": "Alta", "Prioridade": 3, "Origem": "Contratos"})
+            elif contrato.data_validade <= limite:
+                pendencias.append({"Fornecedor": f.nome, "Site": site, "Tipo": "Contrato próximo do vencimento", "Item": "Contrato", "Criticidade": "Média", "Prioridade": 2, "Origem": "Contratos"})
+
+        aud = f.auditoria
+        if not aud:
+            pendencias.append({"Fornecedor": f.nome, "Site": site, "Tipo": "Fornecedor sem auditoria", "Item": "Sem auditoria", "Criticidade": "Alta", "Prioridade": 3, "Origem": "Auditorias"})
+        elif (aud.score or 0) < 51:
+            pendencias.append({"Fornecedor": f.nome, "Site": site, "Tipo": "Auditoria com score baixo", "Item": f"Score {aud.score or 0}", "Criticidade": "Alta", "Prioridade": 3, "Origem": "Auditorias"})
+
+        for p in f.planos_acao:
+            if p.status != PlanoStatusEnum.concluido and p.data_fim and p.data_fim < hoje:
+                pendencias.append({"Fornecedor": f.nome, "Site": site, "Tipo": "Plano de ação em atraso", "Item": p.descricao[:60], "Criticidade": "Alta", "Prioridade": 3, "Origem": "Planos de Ação"})
+
+        mtrs = f.mtrs
+        if not acesso_total:
+            mtrs = [m for m in mtrs if m.site and m.site.value == site]
+        for m in mtrs:
+            tempo = calcular_tempo_mtr_cdf(m)
+            if not m.cdfs:
+                pendencias.append({"Fornecedor": f.nome, "Site": m.site.value if m.site else site, "Tipo": "MTR sem CDF", "Item": m.numero_mtr or "MTR sem número", "Criticidade": "Média", "Prioridade": 2, "Origem": "MTRs"})
+            if tempo is not None and tempo > 10:
+                pendencias.append({"Fornecedor": f.nome, "Site": m.site.value if m.site else site, "Tipo": "Tempo MTR → CDF acima do limite", "Item": f"{m.numero_mtr or '-'} ({tempo} dias)", "Criticidade": "Média", "Prioridade": 2, "Origem": "MTRs"})
+    return pendencias
+
+
+def resumo_fornecedor_dict(f:Fornecedor, site:str, acesso_total:bool)->dict:
+    mtrs = f.mtrs if acesso_total else [m for m in f.mtrs if m.site and m.site.value == site]
+    docs_total = len(TIPOS_DOCUMENTOS_OBRIGATORIOS)
+    docs_falt = len(docs_faltantes_fornecedor(f.documentos))
+    docs_pct = int(round(((docs_total - docs_falt) / docs_total) * 100)) if docs_total else 0
+    score = f.auditoria.score if f.auditoria else None
+    mtr_sem_cdf = sum(1 for m in mtrs if not m.cdfs)
+    media_mtr_cdf = media_tempo_mtr_cdf(mtrs)
+    contrato_atual = sorted(f.contratos, key=lambda c: c.data_validade or date.max)[0] if f.contratos else None
+    pendencias_prioritarias = 0
+    for p in f.planos_acao:
+        if p.status != PlanoStatusEnum.concluido and p.data_fim and p.data_fim < date.today():
+            pendencias_prioritarias += 1
+    pendencias_prioritarias += docs_falt
+    pendencias_prioritarias += sum(1 for d in f.documentos if d.data_validade and d.data_validade < date.today())
+    return {
+        "status_geral": auditoria_status(score),
+        "score_auditoria": "-" if score is None else str(score),
+        "documentacao_pct": docs_pct,
+        "status_contrato": status_contrato(contrato_atual.data_validade) if contrato_atual else "Sem contrato",
+        "mtrs_total": len(mtrs),
+        "mtrs_sem_cdf": mtr_sem_cdf,
+        "tempo_medio_mtr_cdf": "-" if media_mtr_cdf is None else f"{media_mtr_cdf:.1f} dias",
+        "pendencias_prioritarias": pendencias_prioritarias,
+    }
+
+
+def gerar_relatorio_fornecedor_html(f:Fornecedor, resumo:dict, site:str, acesso_total:bool)->str:
+    mtrs = f.mtrs if acesso_total else [m for m in f.mtrs if m.site and m.site.value == site]
+    docs_linhas = "".join(
+        f"<li>{d.tipo}: {status_documento(d.data_validade) if not d.sem_validade else 'Sem validade'}</li>" for d in f.documentos
+    ) or "<li>Sem documentos cadastrados.</li>"
+    planos_linhas = "".join(
+        f"<li>{p.descricao} — {p.status.value} (prazo: {p.data_fim})</li>" for p in f.planos_acao
+    ) or "<li>Sem planos de ação.</li>"
+    contratos_linhas = "".join(
+        f"<li>Assinatura: {c.data_assinatura} | Vencimento: {c.data_validade} | {status_contrato(c.data_validade)}</li>" for c in f.contratos
+    ) or "<li>Sem contratos cadastrados.</li>"
+    return f"""
+    <html><head><meta charset='utf-8'><title>Relatório do Fornecedor</title></head><body>
+    <h1>Relatório consolidado do fornecedor</h1>
+    <h2>{f.nome}</h2>
+    <p><b>CPF/CNPJ:</b> {formatar_cpf_cnpj(f.cpf_cnpj)} | <b>Telefone:</b> {f.telefone or '-'} | <b>Endereço:</b> {f.endereco or '-'}</p>
+    <h3>Resumo executivo-operacional</h3>
+    <ul>
+      <li>Status geral: {resumo['status_geral']}</li>
+      <li>Score da auditoria: {resumo['score_auditoria']}</li>
+      <li>Documentação completa: {resumo['documentacao_pct']}%</li>
+      <li>Status do contrato: {resumo['status_contrato']}</li>
+      <li>MTRs vinculadas: {resumo['mtrs_total']}</li>
+      <li>MTRs sem CDF: {resumo['mtrs_sem_cdf']}</li>
+      <li>Tempo médio MTR → CDF: {resumo['tempo_medio_mtr_cdf']}</li>
+      <li>Pendências prioritárias: {resumo['pendencias_prioritarias']}</li>
+    </ul>
+    <h3>Situação documental</h3><ul>{docs_linhas}</ul>
+    <h3>Situação contratual</h3><ul>{contratos_linhas}</ul>
+    <h3>Resultado de auditoria</h3><p>{f.auditoria.classificado if f.auditoria else 'Sem auditoria'} (score: {f.auditoria.score if f.auditoria else '-'})</p>
+    <h3>Planos de ação</h3><ul>{planos_linhas}</ul>
+    <h3>Resumo MTR/CDF</h3><p>Total de MTRs: {len(mtrs)}</p>
+    </body></html>
+    """
 
 def kpis_gerais(db:Session, site:str, acesso_total:bool)->dict:
     total_fornecedores=db.query(Fornecedor).count()
@@ -1393,8 +1547,32 @@ if menu=="Visualizar Fornecedores":
         sel = next((f for f in fornecedores if f.id==st.session_state.sel_forn_id), None)
         if sel is None: st.info("Selecione um fornecedor na lista ao lado para visualizar/editar.")
         else:
-            render_section_title(f"Detalhes do fornecedor — {sel.nome}")
-            tabs=st.tabs(["Informações","Documentos","Auditoria","Planos de Ação","Contratos","MTRs"])
+            render_section_title(f"Dossiê do fornecedor — {sel.nome}")
+            resumo = resumo_fornecedor_dict(sel, site_logado, acesso_corporativo)
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                render_kpi_card("Status geral", resumo["status_geral"])
+                render_kpi_card("Score da auditoria", resumo["score_auditoria"])
+            with c2:
+                render_kpi_card("Documentação completa", f"{resumo['documentacao_pct']}%")
+                render_kpi_card("Status do contrato", resumo["status_contrato"])
+            with c3:
+                render_kpi_card("MTRs vinculadas", str(resumo["mtrs_total"]))
+                render_kpi_card("MTRs sem CDF", str(resumo["mtrs_sem_cdf"]))
+            with c4:
+                render_kpi_card("Tempo médio MTR → CDF", resumo["tempo_medio_mtr_cdf"])
+                render_kpi_card("Pendências prioritárias", str(resumo["pendencias_prioritarias"]))
+
+            rel_html = gerar_relatorio_fornecedor_html(sel, resumo, site_logado, acesso_corporativo)
+            st.download_button(
+                "📄 Gerar relatório consolidado (HTML)",
+                data=rel_html.encode("utf-8"),
+                file_name=f"relatorio_fornecedor_{sel.id}.html",
+                mime="text/html",
+                key=f"rep_forn_{sel.id}",
+            )
+
+            tabs=st.tabs(["Dados gerais","Documentos","Auditorias","Planos de ação","Contratos","MTRs / CDFs","Pendências / histórico"])
 
             # Informações
             with tabs[0]:
@@ -1534,7 +1712,8 @@ if menu=="Visualizar Fornecedores":
                                         _safe_rerun()
             # Auditoria
             with tabs[2]:
-                st.subheader("Auditoria — Checklist IQA")
+                st.subheader("Auditorias — Checklist IQA")
+                st.caption("Checklist organizado por seções para reduzir fadiga e destacar riscos críticos.")
                 respostas_form = {}
                 aud_exist = sel.auditoria
                 prev = {}
@@ -1545,7 +1724,8 @@ if menu=="Visualizar Fornecedores":
                 itens_prev = parse_auditoria_itens(aud_exist)
                 itens_detalhes = {}
 
-                for it in CHECKLIST_ITEMS:
+                for idx_item, it in enumerate(CHECKLIST_ITEMS, start=1):
+                    st.markdown(f"##### Bloco {idx_item}: {it['titulo']}")
                     opcoes = list(it["opcoes"].keys())
                     valores = list(it["opcoes"].values())
                     default_val = prev.get(it["chave"], None)
@@ -1561,6 +1741,8 @@ if menu=="Visualizar Fornecedores":
                         horizontal=True
                     )
                     respostas_form[it["chave"]] = it["opcoes"][escolha]
+                    if escolha == "Não Conforme":
+                        st.error("Item crítico identificado: requer plano de ação e acompanhamento.")
                     with st.container(border=True):
                         obs = st.text_area("Observação", value=itens_prev.get(it["chave"], {}).get("observacao", ""), key=f"aud_obs_{sel.id}_{it['chave']}")
                         reaval_padrao = parse_data_flex(itens_prev.get(it["chave"], {}).get("data_reavaliacao", "")) or date.today()
@@ -1589,6 +1771,11 @@ if menu=="Visualizar Fornecedores":
                             "data_reavaliacao": None if sem_reavaliacao else data_reavaliacao.isoformat(),
                             "anexos": anexos_item_prev + novos_anexos,
                         }
+
+                total_itens = len(CHECKLIST_ITEMS)
+                respondidos = len([v for v in respostas_form.values() if v is not None])
+                progresso = int((respondidos / total_itens) * 100) if total_itens else 0
+                st.progress(progresso, text=f"Progresso da auditoria: {progresso}%")
 
                 st.markdown("#### Anexar documento da auditoria (opcional)")
                 up_aud = st.file_uploader("Relatório/Check-list (PDF/JPG/PNG)", type=["pdf","jpg","jpeg","png"], key=f"aud_up_{sel.id}")
@@ -1622,7 +1809,15 @@ if menu=="Visualizar Fornecedores":
                         a.classificado = "Conforme/Adequado" if regra["status_conformidade"] == "Conforme" else "Não Conforme/Inadequado"
                         a.updated_by = st.session_state.usuario
                         db.commit()
+                    criticos = [k for k, v in itens_detalhes.items() if v.get("status") == "Não Conforme"]
+                    fortes = [k for k, v in itens_detalhes.items() if v.get("status") == "Conforme"]
                     st.success(f"IQA: {iqa:.1f}% — {regra['classe']} | Reavaliação: {regra['reavaliacao']} | Ação: {regra['acao']}")
+                    st.markdown("#### Resumo da auditoria")
+                    st.markdown(f"- **Pontos fortes:** {len(fortes)} itens conformes")
+                    st.markdown(f"- **Pontos frágeis:** {len(criticos)} itens não conformes")
+                    st.markdown(f"- **Itens críticos:** {', '.join(criticos) if criticos else 'Nenhum'}")
+                    st.markdown(f"- **Exigem plano de ação:** {'Sim' if criticos else 'Não'}")
+                    st.markdown(f"- **Recomendação de reavaliação:** {regra['reavaliacao']}")
                     _safe_rerun()
 
                 with SessionLocal() as db:
@@ -1800,6 +1995,21 @@ if menu=="Visualizar Fornecedores":
                             row[5].caption("-")
 
 
+            with tabs[6]:
+                st.subheader("Pendências e histórico operacional")
+                with SessionLocal() as db:
+                    pendencias = [p for p in build_pendencias(db, site_logado, acesso_corporativo) if p["Fornecedor"] == sel.nome]
+                if not pendencias:
+                    st.success("Fornecedor sem pendências prioritárias no momento.")
+                else:
+                    if HAVE_PANDAS:
+                        df_p = pd.DataFrame(pendencias).sort_values(["Prioridade", "Tipo"], ascending=[False, True])
+                        st.dataframe(df_p[["Tipo", "Item", "Criticidade", "Origem"]], use_container_width=True, hide_index=True)
+                    else:
+                        for p_item in sorted(pendencias, key=lambda x: x["Prioridade"], reverse=True):
+                            st.markdown(f"- **{p_item['Tipo']}** | {p_item['Item']} | {p_item['Criticidade']}")
+
+
 # ---- Página Contratos (lista geral) ----
 if menu=="Contratos":
     if st.session_state.role not in ("Admin","Auditor"):
@@ -1808,30 +2018,48 @@ if menu=="Contratos":
     render_page_header("Gestão de Contratos", "Acompanhe vigências, vencimentos e arquivos contratuais dos fornecedores.")
     with SessionLocal() as db:
         q = db.query(Contrato, Fornecedor).join(Fornecedor, Contrato.fornecedor_id == Fornecedor.id)
-        contratos = q.order_by(Contrato.data_validade.asc()).all()
+        contratos = q.all()
 
     st.markdown("### Lista geral de contratos cadastrados")
     if not contratos:
         st.info("Nenhum contrato cadastrado.")
     else:
-        head = st.columns([1.6, 1.0, 1.0, 1.1, 0.8])
+        fornecedores_opts = ["Todos"] + sorted({f.nome for _, f in contratos})
+        status_opts = ["Todos", "Vencido", "Próximo do vencimento", "Vigente"]
+        fc1, fc2 = st.columns(2)
+        filtro_fornecedor = fc1.selectbox("Filtro por fornecedor", fornecedores_opts, key="ctr_forn")
+        filtro_status = fc2.selectbox("Filtro por status", status_opts, key="ctr_status")
+
+        rows = []
+        for c, f in contratos:
+            st_status = status_contrato(c.data_validade)
+            if filtro_fornecedor != "Todos" and f.nome != filtro_fornecedor:
+                continue
+            if filtro_status != "Todos" and st_status != filtro_status:
+                continue
+            rows.append((c, f, st_status, criticidade_rank(st_status)))
+        rows = sorted(rows, key=lambda x: (-x[3], x[0].data_validade or date.max))
+
+        head = st.columns([1.5, 1.0, 1.0, 1.0, 1.1, 0.7])
         head[0].markdown("**Fornecedor**")
         head[1].markdown("**Data de início**")
         head[2].markdown("**Data de vencimento**")
-        head[3].markdown("**Status**")
-        head[4].markdown("**Arquivo**")
+        head[3].markdown("**Última atualização**")
+        head[4].markdown("**Status / criticidade**")
+        head[5].markdown("**Ação**")
 
-        for c, f in contratos:
-            row = st.columns([1.6, 1.0, 1.0, 1.1, 0.8])
+        for c, f, st_status, rank in rows:
+            row = st.columns([1.5, 1.0, 1.0, 1.0, 1.1, 0.7])
             row[0].write(f.nome)
             row[1].write(c.data_assinatura or "-")
             row[2].write(c.data_validade or "-")
-            row[3].markdown(status_badge(status_contrato(c.data_validade)), unsafe_allow_html=True)
+            row[3].write(c.updated_at or "-")
+            row[4].markdown(status_badge(f"{st_status} ({criticidade_label(rank)})"), unsafe_allow_html=True)
             if c.arquivo and Path(c.arquivo).exists():
                 with open(c.arquivo, "rb") as arq:
-                    row[4].download_button("Baixar", data=arq.read(), file_name=os.path.basename(c.arquivo), key=f"contr_geral_dl_{c.id}")
+                    row[5].download_button("Ver detalhes", data=arq.read(), file_name=os.path.basename(c.arquivo), key=f"contr_geral_dl_{c.id}")
             else:
-                row[4].caption("-")
+                row[5].caption("-")
 
 # ---- Página MTRs (importação com revisão e confirmação) ----
 if menu=="MTRs":
@@ -1856,30 +2084,55 @@ if menu=="MTRs":
     if not mtrs_all:
         st.info("Nenhuma MTR cadastrada ainda.")
     else:
-        head = st.columns([0.9, 1.2, 0.6, 1.0, 0.9, 0.6, 0.6, 0.3])
+        f_fornecedor = ["Todos"] + sorted({(m.fornecedor.nome if m.fornecedor else "-") for m in mtrs_all})
+        f_site = ["Todos"] + sorted({(m.site.value if m.site else "-") for m in mtrs_all})
+        f_status = ["Todos", "Aprovado", "Pendente"]
+        mf1, mf2, mf3 = st.columns(3)
+        filtro_fornecedor = mf1.selectbox("Filtro por fornecedor", f_fornecedor, key="mtr_f_forn")
+        filtro_site = mf2.selectbox("Filtro por site", f_site, key="mtr_f_site")
+        filtro_status = mf3.selectbox("Filtro por status", f_status, key="mtr_f_status")
+
+        filtradas = []
+        for m in mtrs_all:
+            nome_f = m.fornecedor.nome if m.fornecedor else "-"
+            site_m = m.site.value if m.site else "-"
+            st_m = "Aprovado" if (m.cdf_count or 0) > 0 else "Pendente"
+            rank = 3 if st_m == "Pendente" else 1
+            if filtro_fornecedor != "Todos" and nome_f != filtro_fornecedor:
+                continue
+            if filtro_site != "Todos" and site_m != filtro_site:
+                continue
+            if filtro_status != "Todos" and st_m != filtro_status:
+                continue
+            filtradas.append((m, st_m, rank))
+        filtradas = sorted(filtradas, key=lambda x: (-x[2], -(calcular_tempo_mtr_cdf(x[0]) or -1)))
+
+        head = st.columns([0.9, 1.2, 0.6, 1.0, 0.9, 0.8, 0.6, 0.6, 0.4])
         head[0].markdown("**MTR nº**")
         head[1].markdown("**Fornecedor**")
         head[2].markdown("**Site**")
         head[3].markdown("**Status CDF**")
         head[4].markdown("**Tempo MTR → CDF**")
-        head[5].markdown("**MTR**")
-        head[6].markdown("**CDF**")
-        head[7].markdown("**Doc**")
+        head[5].markdown("**Última atualização**")
+        head[6].markdown("**MTR**")
+        head[7].markdown("**CDF**")
+        head[8].markdown("**Ação**")
 
-        for m in mtrs_all:
-            cols = st.columns([0.9, 1.2, 0.6, 1.0, 0.9, 0.6, 0.6, 0.3])
+        for m, st_m, rank in filtradas:
+            cols = st.columns([0.9, 1.2, 0.6, 1.0, 0.9, 0.8, 0.6, 0.6, 0.4])
             cols[0].write(m.numero_mtr or "-")
             cols[1].write(m.fornecedor.nome if m.fornecedor else "-")
             cols[2].write(m.site.value if m.site else "-")
-            cols[3].markdown(status_badge("Aprovado" if (m.cdf_count or 0) > 0 else "Pendente"), unsafe_allow_html=True)
+            cols[3].markdown(status_badge(f"{st_m} ({criticidade_label(rank)})"), unsafe_allow_html=True)
             dias_mtr_cdf = calcular_tempo_mtr_cdf(m)
             cols[4].write("-" if dias_mtr_cdf is None else f"{dias_mtr_cdf} dias")
+            cols[5].write(m.updated_at or "-")
             if m.arquivo and Path(m.arquivo).exists():
                 with open(m.arquivo, "rb") as f:
                     arquivo_mtr = f.read()
-                cols[5].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_geral_dl_{m.id}")
+                cols[6].download_button("Baixar", data=arquivo_mtr, file_name=os.path.basename(m.arquivo), key=f"mtr_geral_dl_{m.id}")
             else:
-                cols[5].caption("-")
+                cols[6].caption("-")
 
             primeiro_cdf = m.cdfs[0] if m.cdfs else None
             if primeiro_cdf and primeiro_cdf.arquivo and Path(primeiro_cdf.arquivo).exists():
@@ -1887,11 +2140,11 @@ if menu=="MTRs":
                     arquivo_cdf = f.read()
                 nome_cdf = os.path.basename(primeiro_cdf.arquivo)
                 label_cdf = "Baixar" if (m.cdf_count or 0) <= 1 else f"Baixar 1º/{m.cdf_count}"
-                cols[6].download_button(label_cdf, data=arquivo_cdf, file_name=nome_cdf, key=f"cdf_geral_dl_{m.id}")
+                cols[7].download_button(label_cdf, data=arquivo_cdf, file_name=nome_cdf, key=f"cdf_geral_dl_{m.id}")
             else:
-                cols[6].button("Sem CDF", key=f"cdf_disabled_{m.id}", disabled=True, use_container_width=True)
+                cols[7].button("Sem CDF", key=f"cdf_disabled_{m.id}", disabled=True, use_container_width=True)
 
-            if cols[7].button("📎", key=f"view_mtr_{m.id}", help="Visualizar documento da MTR"):
+            if cols[8].button("Ver detalhes", key=f"view_mtr_{m.id}"):
                 st.session_state.mtr_doc_view_id = m.id
 
         mtr_doc_view_id = st.session_state.get("mtr_doc_view_id")
@@ -2126,6 +2379,53 @@ if menu=="MTRs":
             else:
                 st.caption("Esta MTR ainda não possui CDF para edição.")
 
+
+# ---- Central de Pendências ----
+if menu=="Central de Pendências":
+    if st.session_state.role not in ("Admin", "Auditor", "Leitor"):
+        st.error("Acesso restrito.")
+        st.stop()
+    render_page_header("Central de Pendências", "Página operacional única para priorização e tratativa diária.")
+    with SessionLocal() as db:
+        pendencias = build_pendencias(db, site_logado, acesso_corporativo)
+
+    if not pendencias:
+        st.success("Nenhuma pendência encontrada para os filtros atuais.")
+    else:
+        if HAVE_PANDAS:
+            df = pd.DataFrame(pendencias)
+            f1, f2, f3, f4 = st.columns(4)
+            op_site = ["Todos"] + sorted(df["Site"].dropna().astype(str).unique().tolist())
+            op_forn = ["Todos"] + sorted(df["Fornecedor"].dropna().astype(str).unique().tolist())
+            op_tipo = ["Todos"] + sorted(df["Tipo"].dropna().astype(str).unique().tolist())
+            op_crit = ["Todos", "Alta", "Média", "Baixa"]
+            v_site = f1.selectbox("Filtro por site", op_site)
+            v_forn = f2.selectbox("Filtro por fornecedor", op_forn)
+            v_tipo = f3.selectbox("Filtro por tipo de pendência", op_tipo)
+            v_crit = f4.selectbox("Filtro por criticidade", op_crit)
+
+            if v_site != "Todos":
+                df = df[df["Site"] == v_site]
+            if v_forn != "Todos":
+                df = df[df["Fornecedor"] == v_forn]
+            if v_tipo != "Todos":
+                df = df[df["Tipo"] == v_tipo]
+            if v_crit != "Todos":
+                df = df[df["Criticidade"] == v_crit]
+
+            df = df.sort_values(["Prioridade", "Tipo"], ascending=[False, True])
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Pendências totais", int(len(df)))
+            c2.metric("Críticas", int((df["Criticidade"] == "Alta").sum()))
+            c3.metric("Médias", int((df["Criticidade"] == "Média").sum()))
+            c4.metric("Baixas", int((df["Criticidade"] == "Baixa").sum()))
+
+            st.dataframe(df[["Fornecedor", "Site", "Tipo", "Item", "Criticidade", "Origem"]], use_container_width=True, hide_index=True)
+        else:
+            st.warning("Pandas indisponível para visualização tabular avançada.")
+            for p_item in pendencias:
+                st.markdown(f"- **{p_item['Fornecedor']}** | {p_item['Tipo']} | {p_item['Criticidade']}")
 
 # ---- Admin (Usuários) ----
 if menu=="Admin (Usuários)":
