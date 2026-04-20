@@ -352,6 +352,41 @@ class Documento(Base):
     updated_by = Column(String(150))
     fornecedor = relationship("Fornecedor", back_populates="documentos")
 
+
+class SolicitacaoDocumentoTipoEnum(str, enum.Enum):
+    novo_documento = "Novo documento"
+    substituicao_documento = "Substituição de documento existente"
+
+
+class SolicitacaoDocumentoStatusEnum(str, enum.Enum):
+    pendente = "Pendente"
+    aprovada = "Aprovada"
+    rejeitada = "Rejeitada"
+
+
+class SolicitacaoDocumento(Base):
+    __tablename__ = "solicitacoes_documentos"
+    id = Column(Integer, primary_key=True)
+    fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
+    documento_atual_id = Column(Integer, ForeignKey('documentos.id', ondelete="SET NULL"), nullable=True)
+    tipo_documento = Column(String, nullable=False)
+    arquivo_novo = Column(String, nullable=False)
+    data_inicio_novo = Column(Date, nullable=False)
+    data_validade_novo = Column(Date, nullable=True)
+    sem_validade_novo = Column(Integer, nullable=False, default=0)
+    tipo_solicitacao = Column(Enum(SolicitacaoDocumentoTipoEnum), nullable=False)
+    status = Column(Enum(SolicitacaoDocumentoStatusEnum), nullable=False, default=SolicitacaoDocumentoStatusEnum.pendente)
+    solicitado_por = Column(String(150), nullable=False)
+    data_solicitacao = Column(Date, server_default=func.current_date(), nullable=False)
+    analisado_por = Column(String(150))
+    data_analise = Column(Date, nullable=True)
+    observacao_admin = Column(String)
+    arquivo_anterior = Column(String)
+    created_at = Column(Date, server_default=func.current_date())
+    updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
+    fornecedor = relationship("Fornecedor")
+    documento_atual = relationship("Documento")
+
 class Auditoria(Base):
     __tablename__="auditorias"
     id = Column(Integer, primary_key=True)
@@ -819,7 +854,7 @@ else:
         st.sidebar.caption("Cadastros e administração")
         menu = st.sidebar.selectbox(
             "Menu",
-            ["Cadastrar Fornecedor", "Admin (Usuários)", "Sair"]
+            ["Cadastrar Fornecedor", "Aprovação de Documentos", "Admin (Usuários)", "Sair"]
         )
 
 # =========================
@@ -917,6 +952,12 @@ TIPOS_DOCUMENTOS_OBRIGATORIOS = [
     "CTF - IBAMA",
 ]
 
+TIPOS_DOCUMENTOS_OPCIONAIS = [
+    "CADRI",
+]
+
+TIPOS_DOCUMENTOS_DISPONIVEIS = TIPOS_DOCUMENTOS_OBRIGATORIOS + TIPOS_DOCUMENTOS_OPCIONAIS
+
 
 def docs_faltantes_fornecedor(documentos:list[Documento])->list[str]:
     docs_por_tipo = {d.tipo: d for d in documentos}
@@ -926,6 +967,79 @@ def docs_faltantes_fornecedor(documentos:list[Documento])->list[str]:
         if not doc or not doc.arquivo:
             faltantes.append(tipo)
     return faltantes
+
+
+def criar_solicitacao_documento(
+    db: Session,
+    fornecedor_id: int,
+    tipo_documento: str,
+    arquivo_novo: str,
+    data_inicio_novo: date,
+    data_validade_novo: date | None,
+    sem_validade_novo: bool,
+    solicitado_por: str,
+    tipo_solicitacao: SolicitacaoDocumentoTipoEnum,
+    documento_atual_id: int | None = None,
+    arquivo_anterior: str | None = None,
+) -> SolicitacaoDocumento:
+    solicitacao = SolicitacaoDocumento(
+        fornecedor_id=fornecedor_id,
+        documento_atual_id=documento_atual_id,
+        tipo_documento=tipo_documento,
+        arquivo_novo=arquivo_novo,
+        data_inicio_novo=data_inicio_novo,
+        data_validade_novo=data_validade_novo,
+        sem_validade_novo=1 if sem_validade_novo else 0,
+        tipo_solicitacao=tipo_solicitacao,
+        status=SolicitacaoDocumentoStatusEnum.pendente,
+        solicitado_por=solicitado_por,
+        arquivo_anterior=arquivo_anterior,
+    )
+    db.add(solicitacao)
+    db.commit()
+    db.refresh(solicitacao)
+    return solicitacao
+
+
+def efetivar_solicitacao_documento_aprovada(db: Session, solicitacao: SolicitacaoDocumento, analisado_por: str, observacao: str):
+    if solicitacao.status != SolicitacaoDocumentoStatusEnum.pendente:
+        raise ValueError("Solicitação já analisada.")
+
+    if solicitacao.tipo_solicitacao == SolicitacaoDocumentoTipoEnum.novo_documento:
+        db.add(Documento(
+            fornecedor_id=solicitacao.fornecedor_id,
+            tipo=solicitacao.tipo_documento,
+            arquivo=solicitacao.arquivo_novo,
+            data_inicio=solicitacao.data_inicio_novo,
+            data_validade=solicitacao.data_validade_novo,
+            sem_validade=1 if solicitacao.sem_validade_novo else 0,
+            updated_by=analisado_por,
+        ))
+    else:
+        doc = db.query(Documento).filter(Documento.id == solicitacao.documento_atual_id).first()
+        if not doc:
+            raise ValueError("Documento oficial não encontrado para substituição.")
+        doc.arquivo = solicitacao.arquivo_novo
+        doc.data_inicio = solicitacao.data_inicio_novo
+        doc.data_validade = solicitacao.data_validade_novo
+        doc.sem_validade = 1 if solicitacao.sem_validade_novo else 0
+        doc.updated_by = analisado_por
+
+    solicitacao.status = SolicitacaoDocumentoStatusEnum.aprovada
+    solicitacao.analisado_por = analisado_por
+    solicitacao.data_analise = date.today()
+    solicitacao.observacao_admin = observacao
+    db.commit()
+
+
+def rejeitar_solicitacao_documento(db: Session, solicitacao: SolicitacaoDocumento, analisado_por: str, observacao: str):
+    if solicitacao.status != SolicitacaoDocumentoStatusEnum.pendente:
+        raise ValueError("Solicitação já analisada.")
+    solicitacao.status = SolicitacaoDocumentoStatusEnum.rejeitada
+    solicitacao.analisado_por = analisado_por
+    solicitacao.data_analise = date.today()
+    solicitacao.observacao_admin = observacao
+    db.commit()
 
 
 def indicador_tempo_mtr_cdf(mtrs:list[MTR])->str:
@@ -1596,7 +1710,7 @@ if menu=="Visualizar Fornecedores":
                 st.markdown("#### Documentos do fornecedor")
                 docs_existentes = {d.tipo: d for d in sel.documentos}
                 docs_ordenados = sorted(sel.documentos, key=lambda x: (x.data_validade or date.max, x.tipo or ""))
-                tipos_documentos = TIPOS_DOCUMENTOS_OBRIGATORIOS
+                tipos_documentos = TIPOS_DOCUMENTOS_DISPONIVEIS
 
                 st.markdown("##### Lista de documentos cadastrados")
                 if not docs_ordenados:
@@ -2516,14 +2630,14 @@ if menu=="Meu Portal":
 
     st.markdown("#### Enviar novo documento")
     tipos_existentes = {d.tipo for d in sel.documentos}
-    tipos_disponiveis = [t for t in TIPOS_DOCUMENTOS_OBRIGATORIOS if t not in tipos_existentes]
+    tipos_disponiveis = [t for t in TIPOS_DOCUMENTOS_DISPONIVEIS if t not in tipos_existentes]
     with st.form("forn_novo_doc"):
-        tipo_novo = st.selectbox("Tipo", tipos_disponiveis if tipos_disponiveis else TIPOS_DOCUMENTOS_OBRIGATORIOS)
+        tipo_novo = st.selectbox("Tipo", tipos_disponiveis if tipos_disponiveis else TIPOS_DOCUMENTOS_DISPONIVEIS)
         novo_up = st.file_uploader("Arquivo", type=["pdf", "jpg", "png", "jpeg"])
         novo_ini = st.date_input("Início de vigência", value=date.today())
         novo_sem_validade = st.checkbox("Documento sem data de validade")
         novo_val = st.date_input("Validade", value=date.today(), disabled=novo_sem_validade)
-        enviar_novo = st.form_submit_button("Salvar novo documento")
+        enviar_novo = st.form_submit_button("Solicitar novo documento")
     if enviar_novo:
         if not novo_up:
             st.error("Envie um arquivo para cadastrar o documento.")
@@ -2534,17 +2648,18 @@ if menu=="Meu Portal":
         else:
             caminho = salvar_arquivo(novo_up, "uploads/documentos", f"{sel.id}_{tipo_novo}")
             with SessionLocal() as db:
-                db.add(Documento(
+                criar_solicitacao_documento(
+                    db=db,
                     fornecedor_id=sel.id,
-                    tipo=tipo_novo,
-                    arquivo=caminho,
-                    data_inicio=novo_ini,
-                    data_validade=None if novo_sem_validade else novo_val,
-                    sem_validade=1 if novo_sem_validade else 0,
-                    updated_by=st.session_state.usuario
-                ))
-                db.commit()
-            st.success("Documento enviado com sucesso!")
+                    tipo_documento=tipo_novo,
+                    arquivo_novo=caminho,
+                    data_inicio_novo=novo_ini,
+                    data_validade_novo=None if novo_sem_validade else novo_val,
+                    sem_validade_novo=novo_sem_validade,
+                    solicitado_por=st.session_state.usuario,
+                    tipo_solicitacao=SolicitacaoDocumentoTipoEnum.novo_documento,
+                )
+            st.success("Solicitação enviada com sucesso! O documento só será oficial após aprovação do administrador.")
             _safe_rerun()
 
     st.markdown("#### Atualizar documento existente (nova versão)")
@@ -2555,10 +2670,15 @@ if menu=="Meu Portal":
             doc_opts = [f"{d.id} — {d.tipo}" for d in docs_ordenados]
             doc_sel = st.selectbox("Documento", doc_opts)
             up_replace = st.file_uploader("Nova versão do arquivo", type=["pdf", "jpg", "png", "jpeg"])
-            enviar_replace = st.form_submit_button("Substituir versão")
+            replace_ini = st.date_input("Novo início de vigência", value=date.today())
+            replace_sem_validade = st.checkbox("Novo documento sem data de validade")
+            replace_val = st.date_input("Nova validade", value=date.today(), disabled=replace_sem_validade)
+            enviar_replace = st.form_submit_button("Solicitar substituição")
         if enviar_replace:
             if up_replace is None:
                 st.error("Envie o novo arquivo para substituir a versão atual.")
+            elif (not replace_sem_validade) and replace_val < replace_ini:
+                st.error("Validade não pode ser anterior ao início.")
             else:
                 doc_id = int(doc_sel.split(" — ", 1)[0])
                 caminho = salvar_arquivo(up_replace, "uploads/documentos", f"{sel.id}_{doc_id}_v2")
@@ -2567,11 +2687,144 @@ if menu=="Meu Portal":
                     if not doc_db:
                         st.error("Documento não encontrado.")
                     else:
-                        doc_db.arquivo = caminho
-                        doc_db.updated_by = st.session_state.usuario
-                        db.commit()
-                        st.success("Versão do documento atualizada com sucesso!")
+                        criar_solicitacao_documento(
+                            db=db,
+                            fornecedor_id=sel.id,
+                            tipo_documento=doc_db.tipo,
+                            arquivo_novo=caminho,
+                            data_inicio_novo=replace_ini,
+                            data_validade_novo=None if replace_sem_validade else replace_val,
+                            sem_validade_novo=replace_sem_validade,
+                            solicitado_por=st.session_state.usuario,
+                            tipo_solicitacao=SolicitacaoDocumentoTipoEnum.substituicao_documento,
+                            documento_atual_id=doc_db.id,
+                            arquivo_anterior=doc_db.arquivo,
+                        )
+                        st.success("Solicitação de substituição enviada! O documento oficial será alterado somente após aprovação.")
                         _safe_rerun()
+
+    st.divider()
+    st.markdown("#### Minhas solicitações de documentos")
+    with SessionLocal() as db:
+        solicitacoes = db.query(SolicitacaoDocumento).filter(
+            SolicitacaoDocumento.fornecedor_id == sel.id
+        ).order_by(SolicitacaoDocumento.id.desc()).all()
+    if not solicitacoes:
+        st.caption("Nenhuma solicitação registrada até o momento.")
+    else:
+        for s in solicitacoes:
+            with st.container(border=True):
+                st.markdown(
+                    f"**#{s.id} · {s.tipo_documento}**  \n"
+                    f"Tipo: {s.tipo_solicitacao.value} · Status: {s.status.value}  \n"
+                    f"Solicitado por: {s.solicitado_por} em {s.data_solicitacao}"
+                )
+                if s.documento_atual_id:
+                    st.caption(f"Documento oficial afetado: ID {s.documento_atual_id}")
+                st.caption(f"Arquivo enviado: {os.path.basename(s.arquivo_novo)}")
+                if s.analisado_por:
+                    st.caption(f"Analisado por {s.analisado_por} em {s.data_analise}")
+                if s.observacao_admin:
+                    st.caption(f"Observação do administrador: {s.observacao_admin}")
+
+# ---- Aprovação de documentos ----
+if menu=="Aprovação de Documentos":
+    if st.session_state.role!="Admin":
+        st.error("Apenas Admin pode acessar esta página."); st.stop()
+    render_page_header("Aprovação de Documentos", "Analise solicitações pendentes antes de efetivar mudanças na base oficial.")
+    with SessionLocal() as db:
+        fornecedores_opts = db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
+    filtros = st.columns([1.3, 1.0, 1.0])
+    fornecedor_labels = ["Todos"] + [f"{f.id} — {f.nome}" for f in fornecedores_opts]
+    filtro_forn = filtros[0].selectbox("Fornecedor", fornecedor_labels, index=0)
+    filtro_tipo = filtros[1].selectbox("Tipo", ["Todos"] + TIPOS_DOCUMENTOS_DISPONIVEIS, index=0)
+    filtro_status = filtros[2].selectbox(
+        "Status",
+        ["Pendente", "Aprovada", "Rejeitada"],
+        index=0,
+    )
+    status_map = {
+        "Pendente": SolicitacaoDocumentoStatusEnum.pendente,
+        "Aprovada": SolicitacaoDocumentoStatusEnum.aprovada,
+        "Rejeitada": SolicitacaoDocumentoStatusEnum.rejeitada,
+    }
+    with SessionLocal() as db:
+        q = db.query(SolicitacaoDocumento).options(
+            selectinload(SolicitacaoDocumento.fornecedor),
+            selectinload(SolicitacaoDocumento.documento_atual),
+        )
+        if filtro_forn != "Todos":
+            q = q.filter(SolicitacaoDocumento.fornecedor_id == int(filtro_forn.split(" — ", 1)[0]))
+        if filtro_tipo != "Todos":
+            q = q.filter(SolicitacaoDocumento.tipo_documento == filtro_tipo)
+        q = q.filter(SolicitacaoDocumento.status == status_map[filtro_status])
+        solicitacoes = q.order_by(SolicitacaoDocumento.id.desc()).all()
+    if not solicitacoes:
+        st.info("Nenhuma solicitação encontrada para os filtros selecionados.")
+    else:
+        for s in solicitacoes:
+            with st.container(border=True):
+                st.markdown(
+                    f"**Solicitação #{s.id} · {s.fornecedor.nome if s.fornecedor else '-'}**  \n"
+                    f"Tipo: {s.tipo_solicitacao.value} · Documento: {s.tipo_documento} · Status: {s.status.value}  \n"
+                    f"Solicitado por: {s.solicitado_por} em {s.data_solicitacao}"
+                )
+                st.caption(
+                    f"Documento oficial afetado: "
+                    f"{s.documento_atual.tipo if s.documento_atual else 'Novo documento (sem base anterior)'}"
+                )
+                st.caption(
+                    f"Arquivo atual: {os.path.basename(s.arquivo_anterior) if s.arquivo_anterior else '-'} | "
+                    f"Arquivo novo: {os.path.basename(s.arquivo_novo)}"
+                )
+                cdl1, cdl2 = st.columns([0.5, 0.5])
+                if Path(s.arquivo_novo).exists():
+                    with open(s.arquivo_novo, "rb") as f:
+                        cdl1.download_button(
+                            "Baixar arquivo enviado",
+                            data=f.read(),
+                            file_name=os.path.basename(s.arquivo_novo),
+                            key=f"sol_doc_new_{s.id}",
+                        )
+                if s.arquivo_anterior and Path(s.arquivo_anterior).exists():
+                    with open(s.arquivo_anterior, "rb") as f:
+                        cdl2.download_button(
+                            "Baixar arquivo oficial atual",
+                            data=f.read(),
+                            file_name=os.path.basename(s.arquivo_anterior),
+                            key=f"sol_doc_old_{s.id}",
+                        )
+                st.caption(
+                    f"Vigência nova proposta: início {s.data_inicio_novo} · "
+                    f"validade {'Sem validade' if s.sem_validade_novo else s.data_validade_novo}"
+                )
+                if s.analisado_por:
+                    st.caption(f"Analisado por {s.analisado_por} em {s.data_analise}")
+                if s.observacao_admin:
+                    st.caption(f"Observação: {s.observacao_admin}")
+                if s.status == SolicitacaoDocumentoStatusEnum.pendente:
+                    obs = st.text_area("Observação do administrador", key=f"obs_sol_{s.id}")
+                    ca, cr = st.columns([0.4, 0.4])
+                    if ca.button("Aprovar", key=f"aprovar_sol_{s.id}"):
+                        with SessionLocal() as db:
+                            sol_db = db.query(SolicitacaoDocumento).filter(SolicitacaoDocumento.id == s.id).first()
+                            try:
+                                efetivar_solicitacao_documento_aprovada(db, sol_db, st.session_state.usuario, obs.strip())
+                                st.success("Solicitação aprovada e efetivada com sucesso.")
+                                _safe_rerun()
+                            except Exception as e:
+                                db.rollback()
+                                st.error(f"Erro ao aprovar solicitação: {e}")
+                    if cr.button("Rejeitar", key=f"reprovar_sol_{s.id}"):
+                        with SessionLocal() as db:
+                            sol_db = db.query(SolicitacaoDocumento).filter(SolicitacaoDocumento.id == s.id).first()
+                            try:
+                                rejeitar_solicitacao_documento(db, sol_db, st.session_state.usuario, obs.strip())
+                                st.success("Solicitação rejeitada com sucesso.")
+                                _safe_rerun()
+                            except Exception as e:
+                                db.rollback()
+                                st.error(f"Erro ao rejeitar solicitação: {e}")
 
 # ---- Admin (Usuários) ----
 if menu=="Admin (Usuários)":
