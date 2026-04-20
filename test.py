@@ -289,7 +289,7 @@ def _make_json_safe(obj):
 #          MODELOS
 # =========================
 class RoleEnum(str, enum.Enum):
-    admin="Admin"; auditor="Auditor"; leitor="Leitor"
+    admin="Admin"; auditor="Auditor"; leitor="Leitor"; fornecedor="Fornecedor"
 
 class SiteEnum(str, enum.Enum):
     CAC = "CAC"
@@ -317,7 +317,9 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(Enum(RoleEnum), nullable=False, default=RoleEnum.auditor)
     site = Column(Enum(SiteEnum), nullable=False, default=SiteEnum.CAC)
+    fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="SET NULL"), nullable=True)
     created_at = Column(Date, server_default=func.current_date())
+    fornecedor = relationship("Fornecedor")
 
 class Fornecedor(Base):
     __tablename__="fornecedores"
@@ -442,8 +444,8 @@ def verify_password(p:str,h:str)->bool:
 def get_user_by_username(db:Session, username:str)->User|None:
     return db.query(User).filter(User.username==username).first()
 
-def create_user(db:Session, username:str, password:str, role:RoleEnum, site:SiteEnum)->User:
-    u=User(username=username, password_hash=hash_password(password), role=role, site=site)
+def create_user(db:Session, username:str, password:str, role:RoleEnum, site:SiteEnum, fornecedor_id:int|None=None)->User:
+    u=User(username=username, password_hash=hash_password(password), role=role, site=site, fornecedor_id=fornecedor_id)
     db.add(u); db.commit(); db.refresh(u); return u
 
 # =========================
@@ -458,6 +460,8 @@ def run_light_migrations():
                 conn.execute(text("ALTER TABLE users ADD COLUMN site VARCHAR(3) DEFAULT 'CAC' NOT NULL"))
                 conn.execute(text("UPDATE users SET site='LAG' WHERE username='Eduardo'"))
                 conn.execute(text("UPDATE users SET site='CAC' WHERE site IS NULL OR site=''"))
+            if "fornecedor_id" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN fornecedor_id INTEGER"))
         except Exception:
             pass
         try:
@@ -742,7 +746,7 @@ run_light_migrations()
 seed_users()
 
 if "logado" not in st.session_state:
-    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None; st.session_state.site=None
+    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None; st.session_state.site=None; st.session_state.fornecedor_id=None
 if "sel_forn_id" not in st.session_state:
     st.session_state.sel_forn_id=None
 
@@ -763,6 +767,7 @@ def pagina_login():
                 st.session_state.usuario=u.username
                 st.session_state.role=u.role.value
                 st.session_state.site=u.site.value
+                st.session_state.fornecedor_id=u.fornecedor_id
                 st.success(f"Bem-vindo, {u.username}!")
                 _safe_rerun()
             else:
@@ -789,6 +794,13 @@ if st.session_state.role=="Leitor":
         )
     else:
         menu = st.sidebar.selectbox("Menu", ["Sair"])
+elif st.session_state.role=="Fornecedor":
+    nivel = "Fornecedor"
+    st.sidebar.caption("Acesso restrito ao próprio cadastro, auditoria e documentos")
+    menu = st.sidebar.selectbox(
+        "Menu",
+        ["Meu Portal", "Sair"]
+    )
 else:
     nivel = st.sidebar.radio("Nível de navegação", ["Executivo", "Operacional", "Administrativo"], index=0)
     if nivel == "Executivo":
@@ -2428,19 +2440,159 @@ if menu=="Central de Pendências":
                 st.markdown(f"- **{p_item['Fornecedor']}** | {p_item['Tipo']} | {p_item['Criticidade']}")
 
 # ---- Admin (Usuários) ----
+if menu=="Meu Portal":
+    if st.session_state.role!="Fornecedor":
+        st.error("Acesso restrito ao perfil Fornecedor."); st.stop()
+    fornecedor_id = st.session_state.fornecedor_id
+    if not fornecedor_id:
+        st.error("Seu usuário não está vinculado a um fornecedor. Contate o administrador."); st.stop()
+
+    with SessionLocal() as db:
+        sel = db.query(Fornecedor).options(
+            joinedload(Fornecedor.documentos),
+            joinedload(Fornecedor.auditoria),
+        ).filter(Fornecedor.id == fornecedor_id).first()
+    if not sel:
+        st.error("Fornecedor vinculado não encontrado."); st.stop()
+
+    render_page_header("Portal do Fornecedor", "Acompanhe sua situação de compliance e mantenha seus documentos atualizados.")
+    render_section_title("Minha auditoria")
+    score = sel.auditoria.score if sel.auditoria else None
+    c1, c2 = st.columns(2)
+    with c1:
+        render_kpi_card("Score de auditoria", str(score if score is not None else "Sem auditoria"))
+    with c2:
+        render_kpi_card("Status da auditoria", auditoria_status(score))
+
+    if sel.auditoria and isinstance(sel.auditoria.respostas, dict):
+        respostas = sel.auditoria.respostas
+        regra = respostas.get("regra_aplicada", {}) or {}
+        st.markdown(
+            f"**Classificação:** {regra.get('classe','-')}  \n"
+            f"**Condição:** {regra.get('condicionamento','-')}  \n"
+            f"**Reavaliação:** {regra.get('reavaliacao','-')}"
+        )
+        if respostas.get("itens_detalhes"):
+            with st.expander("Ver resultados detalhados da auditoria"):
+                for item in CHECKLIST_ITEMS:
+                    det = respostas["itens_detalhes"].get(item["chave"]) or {}
+                    st.markdown(f"**{item['titulo']}**")
+                    st.caption(
+                        f"Status: {det.get('status','-')} | "
+                        f"Reavaliação: {det.get('data_reavaliacao') or '-'} | "
+                        f"Observação: {det.get('observacao') or '-'}"
+                    )
+
+    st.divider()
+    render_section_title("Meus dados cadastrais")
+    st.write(f"**Nome:** {sel.nome}")
+    st.write(f"**CPF/CNPJ:** {formatar_cpf_cnpj(sel.cpf_cnpj)}")
+    st.write(f"**Endereço:** {sel.endereco or '-'}")
+    st.write(f"**Telefone:** {sel.telefone or '-'}")
+
+    st.divider()
+    render_section_title("Meus documentos")
+    docs_ordenados = sorted(sel.documentos, key=lambda x: (x.tipo or "", x.data_validade or date.max))
+    if not docs_ordenados:
+        st.info("Nenhum documento cadastrado para seu fornecedor.")
+    else:
+        head = st.columns([1.8, 1.0, 1.0, 1.0, 0.8])
+        head[0].markdown("**Documento**")
+        head[1].markdown("**Início**")
+        head[2].markdown("**Validade**")
+        head[3].markdown("**Status**")
+        head[4].markdown("**Arquivo**")
+        for d in docs_ordenados:
+            row = st.columns([1.8, 1.0, 1.0, 1.0, 0.8])
+            row[0].write(d.tipo)
+            row[1].write(str(d.data_inicio or "-"))
+            row[2].write("Sem validade" if d.sem_validade else str(d.data_validade or "-"))
+            row[3].markdown(status_badge("Vigente" if d.sem_validade else status_documento(d.data_validade)), unsafe_allow_html=True)
+            if d.arquivo and Path(d.arquivo).exists():
+                with open(d.arquivo, "rb") as f:
+                    row[4].download_button("Baixar", data=f.read(), file_name=os.path.basename(d.arquivo), key=f"forn_doc_dl_{d.id}")
+            else:
+                row[4].caption("-")
+
+    st.markdown("#### Enviar novo documento")
+    tipos_existentes = {d.tipo for d in sel.documentos}
+    tipos_disponiveis = [t for t in TIPOS_DOCUMENTOS_OBRIGATORIOS if t not in tipos_existentes]
+    with st.form("forn_novo_doc"):
+        tipo_novo = st.selectbox("Tipo", tipos_disponiveis if tipos_disponiveis else TIPOS_DOCUMENTOS_OBRIGATORIOS)
+        novo_up = st.file_uploader("Arquivo", type=["pdf", "jpg", "png", "jpeg"])
+        novo_ini = st.date_input("Início de vigência", value=date.today())
+        novo_sem_validade = st.checkbox("Documento sem data de validade")
+        novo_val = st.date_input("Validade", value=date.today(), disabled=novo_sem_validade)
+        enviar_novo = st.form_submit_button("Salvar novo documento")
+    if enviar_novo:
+        if not novo_up:
+            st.error("Envie um arquivo para cadastrar o documento.")
+        elif tipo_novo in tipos_existentes:
+            st.error("Esse tipo já existe. Use a opção de substituição de versão abaixo.")
+        elif (not novo_sem_validade) and novo_val < novo_ini:
+            st.error("Validade não pode ser anterior ao início.")
+        else:
+            caminho = salvar_arquivo(novo_up, "uploads/documentos", f"{sel.id}_{tipo_novo}")
+            with SessionLocal() as db:
+                db.add(Documento(
+                    fornecedor_id=sel.id,
+                    tipo=tipo_novo,
+                    arquivo=caminho,
+                    data_inicio=novo_ini,
+                    data_validade=None if novo_sem_validade else novo_val,
+                    sem_validade=1 if novo_sem_validade else 0,
+                    updated_by=st.session_state.usuario
+                ))
+                db.commit()
+            st.success("Documento enviado com sucesso!")
+            _safe_rerun()
+
+    st.markdown("#### Atualizar documento existente (nova versão)")
+    if not docs_ordenados:
+        st.caption("Cadastre ao menos um documento para habilitar a atualização de versão.")
+    else:
+        with st.form("forn_replace_doc"):
+            doc_opts = [f"{d.id} — {d.tipo}" for d in docs_ordenados]
+            doc_sel = st.selectbox("Documento", doc_opts)
+            up_replace = st.file_uploader("Nova versão do arquivo", type=["pdf", "jpg", "png", "jpeg"])
+            enviar_replace = st.form_submit_button("Substituir versão")
+        if enviar_replace:
+            if up_replace is None:
+                st.error("Envie o novo arquivo para substituir a versão atual.")
+            else:
+                doc_id = int(doc_sel.split(" — ", 1)[0])
+                caminho = salvar_arquivo(up_replace, "uploads/documentos", f"{sel.id}_{doc_id}_v2")
+                with SessionLocal() as db:
+                    doc_db = db.query(Documento).filter(Documento.id == doc_id, Documento.fornecedor_id == sel.id).first()
+                    if not doc_db:
+                        st.error("Documento não encontrado.")
+                    else:
+                        doc_db.arquivo = caminho
+                        doc_db.updated_by = st.session_state.usuario
+                        db.commit()
+                        st.success("Versão do documento atualizada com sucesso!")
+                        _safe_rerun()
+
+# ---- Admin (Usuários) ----
 if menu=="Admin (Usuários)":
     if st.session_state.role!="Admin":
         st.error("Apenas Admin pode acessar esta página."); st.stop()
     render_page_header("Administração", "Gerencie usuários e exportações de dados da plataforma.")
     with SessionLocal() as db: usuarios=db.query(User).all()
     render_section_title("Usuários")
-    for u in usuarios: st.write(f"- **{u.username}** — {u.role.value} — site {u.site.value}")
+    for u in usuarios:
+        vinculo = f" — fornecedor_id {u.fornecedor_id}" if u.fornecedor_id else ""
+        st.write(f"- **{u.username}** — {u.role.value} — site {u.site.value}{vinculo}")
     render_section_title("Criar novo usuário")
+    with SessionLocal() as db:
+        fornecedores_opts = db.query(Fornecedor).order_by(Fornecedor.nome.asc()).all()
     with st.form("form_user"):
         username=st.text_input("Usuário").strip()
         password=st.text_input("Senha", type="password").strip()
-        role=st.selectbox("Papel", [RoleEnum.admin.value, RoleEnum.auditor.value, RoleEnum.leitor.value])
+        role=st.selectbox("Papel", [RoleEnum.admin.value, RoleEnum.auditor.value, RoleEnum.leitor.value, RoleEnum.fornecedor.value])
         site=st.selectbox("Site", TODOS_SITES, index=0)
+        fornecedor_labels = ["Nenhum"] + [f"{f.id} — {f.nome}" for f in fornecedores_opts]
+        fornecedor_label = st.selectbox("Fornecedor vinculado (obrigatório para papel Fornecedor)", fornecedor_labels, index=0)
         enviar=st.form_submit_button("Criar")
     if enviar:
         if not username or not password: st.error("Preencha usuário e senha.")
@@ -2448,7 +2600,11 @@ if menu=="Admin (Usuários)":
             with SessionLocal() as db:
                 if get_user_by_username(db, username): st.error("Usuário já existe.")
                 else:
-                    create_user(db, username, password, RoleEnum(role), SiteEnum(site)); st.success("Usuário criado com sucesso!"); _safe_rerun()
+                    fornecedor_id = None if fornecedor_label == "Nenhum" else int(fornecedor_label.split(" — ", 1)[0])
+                    if role == RoleEnum.fornecedor.value and not fornecedor_id:
+                        st.error("Para papel Fornecedor, selecione um fornecedor vinculado.")
+                    else:
+                        create_user(db, username, password, RoleEnum(role), SiteEnum(site), fornecedor_id=fornecedor_id); st.success("Usuário criado com sucesso!"); _safe_rerun()
 
     render_section_title("Exportar dados (Excel)")
     if not HAVE_PANDAS:
@@ -2544,5 +2700,5 @@ if menu=="Admin (Usuários)":
 
 # ---- Sair ----
 if menu=="Sair":
-    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None; st.session_state.site=None
+    st.session_state.logado=False; st.session_state.usuario=None; st.session_state.role=None; st.session_state.site=None; st.session_state.fornecedor_id=None
     st.session_state.sel_forn_id=None; _safe_rerun()
