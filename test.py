@@ -4,7 +4,7 @@
 # - Planos de Ação com painel de status (editar status no cartão)
 # - Restante das features existentes (login, docs com download, auditoria, CDF, KPIs, export Excel)
 
-import os, re, uuid, json, traceback
+import os, re, uuid, json, traceback, time, logging
 from io import BytesIO
 from pathlib import Path
 from datetime import date, timedelta, datetime
@@ -13,11 +13,12 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import bcrypt
+import requests
 from statistics import mean
 from decimal import Decimal
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, Date, ForeignKey, Enum,
+    create_engine, Column, Integer, String, Float, Date, DateTime, Boolean, Text, ForeignKey, Enum,
     UniqueConstraint, JSON, func, text
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload, Session
@@ -130,6 +131,28 @@ CONNECT_ARGS = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite")
 engine = create_engine(DATABASE_URL, connect_args=CONNECT_ARGS, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
+logger = logging.getLogger("sigor_integration")
+
+# =========================
+#    CONFIG SIGOR-MTR
+# =========================
+SIGOR_ENV = os.getenv("SIGOR_ENV", "homologation").strip().lower()
+SIGOR_BASE_URL = os.getenv(
+    "SIGOR_BASE_URL",
+    "https://mtrr-hom.cetesb.sp.gov.br/apiws/rest" if SIGOR_ENV == "homologation" else "https://mtrr.cetesb.sp.gov.br/apiws/rest",
+).rstrip("/")
+SIGOR_CPF_CNPJ = os.getenv("SIGOR_CPF_CNPJ", "").strip()
+SIGOR_PASSWORD = os.getenv("SIGOR_PASSWORD", "").strip()
+SIGOR_UNIDADE = os.getenv("SIGOR_UNIDADE", "").strip()
+SIGOR_TIMEOUT_SECONDS = int(os.getenv("SIGOR_TIMEOUT_SECONDS", "30") or "30")
+SIGOR_ENABLE_INTEGRATION = os.getenv("SIGOR_ENABLE_INTEGRATION", "false").strip().lower() in ("1", "true", "yes", "on")
+SIGOR_STORAGE_DIR = os.getenv("SIGOR_STORAGE_DIR", "storage/mtrs").strip()
+
+
+class SigorAuthenticationError(Exception): pass
+class SigorValidationError(Exception): pass
+class SigorAPIError(Exception): pass
+class SigorPDFDownloadError(Exception): pass
 
 # =========================
 #       UTILITÁRIOS
@@ -285,6 +308,34 @@ def _make_json_safe(obj):
     except Exception:
         return str(obj)
 
+
+def _mask_document(value:str|None)->str|None:
+    if not value:
+        return value
+    d = so_digitos(value)
+    if len(d) <= 4:
+        return "*" * len(d)
+    return f"{d[:2]}***{d[-2:]}"
+
+
+def _redact_sensitive(obj):
+    sensitive_keys = {"senha", "password", "token", "authorization", "cpfcnpj"}
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            key = (k or "").lower()
+            if key in sensitive_keys:
+                if key == "cpfcnpj":
+                    out[k] = _mask_document(str(v))
+                else:
+                    out[k] = "***REDACTED***"
+            else:
+                out[k] = _redact_sensitive(v)
+        return out
+    if isinstance(obj, list):
+        return [_redact_sensitive(v) for v in obj]
+    return obj
+
 # =========================
 #          MODELOS
 # =========================
@@ -436,6 +487,20 @@ class MTR(Base):
     fornecedor_id = Column(Integer, ForeignKey('fornecedores.id', ondelete="CASCADE"), nullable=False)
     arquivo = Column(String, nullable=False)
     numero_mtr = Column(String)
+    seu_codigo = Column(String(30), unique=True, index=True)
+    sigor_man_numero = Column(String(40), index=True)
+    sigor_manifesto_numero_nacional = Column(String(40))
+    status = Column(String(60), default="Rascunho")
+    data_expedicao = Column(Date, nullable=True)
+    nome_responsavel = Column(String(150), nullable=True)
+    nome_motorista = Column(String(150), nullable=True)
+    placa_veiculo = Column(String(10), nullable=True)
+    observacoes = Column(String, nullable=True)
+    payload_enviado = Column(JSON, nullable=True)
+    retorno_sigor = Column(JSON, nullable=True)
+    pdf_path = Column(String, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancel_reason = Column(String, nullable=True)
     gerador_razao = Column(String); gerador_cnpj = Column(String)
     gerador_municipio = Column(String); gerador_uf = Column(String)
     gerador_data_emissao = Column(Date, nullable=True)
@@ -467,6 +532,55 @@ class CDF(Base):
     updated_at = Column(Date, server_default=func.current_date(), onupdate=func.current_date())
     updated_by = Column(String(150))
     mtr = relationship("MTR", back_populates="cdfs")
+
+
+class SigorAPILog(Base):
+    __tablename__ = "sigor_api_logs"
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    site_id = Column(String(10), nullable=True)
+    action = Column(String(80), nullable=False)
+    endpoint = Column(String(180), nullable=False)
+    request_payload_redacted = Column(JSON, nullable=True)
+    response_summary = Column(Text, nullable=True)
+    http_status = Column(Integer, nullable=True)
+    success = Column(Boolean, default=False, nullable=False)
+    error_message = Column(Text, nullable=True)
+    related_mtr_id = Column(Integer, ForeignKey("mtrs.id", ondelete="SET NULL"), nullable=True)
+    seu_codigo = Column(String(30), nullable=True, index=True)
+    man_numero = Column(String(40), nullable=True, index=True)
+
+
+class SigorReferenceData(Base):
+    __tablename__ = "sigor_reference_data"
+    __table_args__ = (UniqueConstraint("ref_type", "ref_code", name="uq_sigor_ref"),)
+    id = Column(Integer, primary_key=True)
+    ref_type = Column(String(64), nullable=False, index=True)
+    ref_code = Column(String(80), nullable=False)
+    ref_description = Column(String(255), nullable=True)
+    raw_json = Column(JSON, nullable=True)
+    active = Column(Boolean, default=True, nullable=False)
+    last_synced_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MTRResiduo(Base):
+    __tablename__ = "mtr_residuos"
+    id = Column(Integer, primary_key=True)
+    mtr_id = Column(Integer, ForeignKey("mtrs.id", ondelete="CASCADE"), nullable=False, index=True)
+    mar_quantidade = Column(Float, nullable=False)
+    res_codigo_ibama = Column(String(20), nullable=False)
+    uni_codigo = Column(String(20), nullable=False)
+    tra_codigo = Column(String(20), nullable=False)
+    tie_codigo = Column(String(20), nullable=False)
+    tia_codigo = Column(String(20), nullable=False)
+    cla_codigo = Column(String(20), nullable=False)
+    mar_densidade = Column(Float, nullable=True)
+    mar_numero_onu = Column(String(40), nullable=True)
+    mar_classe_risco = Column(String(40), nullable=True)
+    mar_nome_embarque = Column(String(255), nullable=True)
+    gre_codigo = Column(String(40), nullable=True)
+    raw_json = Column(JSON, nullable=True)
 
 # =========================
 #     SEGURANÇA / USUÁRIO
@@ -520,6 +634,30 @@ def run_light_migrations():
             if "site" not in cols:
                 conn.execute(text("ALTER TABLE mtrs ADD COLUMN site VARCHAR(3) DEFAULT 'CAC' NOT NULL"))
                 conn.execute(text("UPDATE mtrs SET site='CAC' WHERE site IS NULL OR site=''"))
+            mtr_alters = {
+                "seu_codigo": "ALTER TABLE mtrs ADD COLUMN seu_codigo VARCHAR(30)",
+                "sigor_man_numero": "ALTER TABLE mtrs ADD COLUMN sigor_man_numero VARCHAR(40)",
+                "sigor_manifesto_numero_nacional": "ALTER TABLE mtrs ADD COLUMN sigor_manifesto_numero_nacional VARCHAR(40)",
+                "status": "ALTER TABLE mtrs ADD COLUMN status VARCHAR(60) DEFAULT 'Rascunho'",
+                "data_expedicao": "ALTER TABLE mtrs ADD COLUMN data_expedicao DATE",
+                "nome_responsavel": "ALTER TABLE mtrs ADD COLUMN nome_responsavel VARCHAR(150)",
+                "nome_motorista": "ALTER TABLE mtrs ADD COLUMN nome_motorista VARCHAR(150)",
+                "placa_veiculo": "ALTER TABLE mtrs ADD COLUMN placa_veiculo VARCHAR(10)",
+                "observacoes": "ALTER TABLE mtrs ADD COLUMN observacoes VARCHAR",
+                "payload_enviado": "ALTER TABLE mtrs ADD COLUMN payload_enviado JSON",
+                "retorno_sigor": "ALTER TABLE mtrs ADD COLUMN retorno_sigor JSON",
+                "pdf_path": "ALTER TABLE mtrs ADD COLUMN pdf_path VARCHAR",
+                "cancelled_at": "ALTER TABLE mtrs ADD COLUMN cancelled_at DATETIME",
+                "cancel_reason": "ALTER TABLE mtrs ADD COLUMN cancel_reason VARCHAR",
+            }
+            for col, stmt in mtr_alters.items():
+                if col not in cols:
+                    conn.execute(text(stmt))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_mtrs_seu_codigo ON mtrs(seu_codigo)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_mtrs_sigor_man_numero ON mtrs(sigor_man_numero)"))
         except Exception:
             pass
 
@@ -527,6 +665,214 @@ def seed_users():
     with SessionLocal() as db:
         if not get_user_by_username(db, "Eduardo"):
             create_user(db, "Eduardo", "Capitu", RoleEnum.admin, SiteEnum.LAG)
+
+
+def gerar_seu_codigo(site_code:str)->str:
+    base = re.sub(r"[^A-Z0-9]", "", (site_code or "GEN").upper())[:6] or "GEN"
+    code = f"MTR-{base}-{uuid.uuid4().hex[:12].upper()}"
+    return code[:30]
+
+
+def validar_placa(placa:str|None)->str:
+    if not placa:
+        return ""
+    v = re.sub(r"[^A-Za-z0-9]", "", placa).upper()
+    if len(v) > 7:
+        raise SigorValidationError("Placa do veículo deve ter no máximo 7 caracteres sem hífen.")
+    return v
+
+
+class SigorMTRClient:
+    def __init__(self, base_url:str|None=None, cpf_cnpj:str|None=None, password:str|None=None, unidade:str|None=None, timeout:int|None=None):
+        self.base_url = (base_url or SIGOR_BASE_URL).rstrip("/")
+        self.cpf_cnpj = cpf_cnpj or SIGOR_CPF_CNPJ
+        self.password = password or SIGOR_PASSWORD
+        self.unidade = unidade or SIGOR_UNIDADE
+        self.timeout = int(timeout or SIGOR_TIMEOUT_SECONDS)
+        self._token = None
+
+    def get_headers(self):
+        headers = {"Content-Type": "application/json"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    def request(self, method:str, endpoint:str, payload=None, expect_pdf:bool=False, retries:int=2):
+        if not SIGOR_ENABLE_INTEGRATION:
+            raise SigorValidationError("Integração SIGOR está desabilitada por configuração.")
+        url = f"{self.base_url}{endpoint}"
+        last_err = None
+        for attempt in range(retries + 1):
+            try:
+                resp = requests.request(
+                    method=method.upper(),
+                    url=url,
+                    json=payload if payload is not None else None,
+                    headers=self.get_headers(),
+                    timeout=self.timeout,
+                )
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                if expect_pdf:
+                    if "application/pdf" in ctype or resp.content.startswith(b"%PDF"):
+                        return resp.content
+                    try:
+                        err_payload = resp.json()
+                    except Exception:
+                        err_payload = {"raw": resp.text[:500]}
+                    raise SigorPDFDownloadError(f"Resposta inválida para PDF ({resp.status_code}): {err_payload}")
+                if resp.status_code == 401:
+                    raise SigorAuthenticationError("Falha de autenticação no SIGOR (401).")
+                if resp.status_code >= 400:
+                    try:
+                        detail = resp.json()
+                    except Exception:
+                        detail = {"raw": resp.text[:500]}
+                    raise SigorAPIError(f"Erro SIGOR {resp.status_code}: {detail}")
+                if "application/json" in ctype or resp.text.strip().startswith("{") or resp.text.strip().startswith("["):
+                    return resp.json()
+                return {"raw": resp.text}
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_err = exc
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                raise SigorAPIError(f"Falha de comunicação com SIGOR: {exc}") from exc
+        raise SigorAPIError(f"Falha SIGOR: {last_err}")
+
+    def get_token(self):
+        payload = {"cpfCnpj": self.cpf_cnpj, "senha": self.password, "unidade": self.unidade}
+        data = self.request("POST", "/gettoken", payload=payload)
+        token = (data or {}).get("objetoResposta") or (data or {}).get("token")
+        if not token:
+            raise SigorAuthenticationError("Não foi possível obter token SIGOR. Verifique credenciais e unidade.")
+        self._token = token
+        return token
+
+    def _post_lista(self, endpoint:str):
+        if not self._token:
+            self.get_token()
+        return self.request("POST", endpoint, payload={})
+
+    def retorna_lista_classe(self): return self._post_lista("/retornaListaClasse")
+    def retorna_lista_unidade(self): return self._post_lista("/retornaListaUnidade")
+    def retorna_lista_tratamento(self): return self._post_lista("/retornaListaTratamento")
+    def retorna_lista_estado_fisico(self): return self._post_lista("/retornaListaEstadoFisico")
+    def retorna_lista_acondicionamento(self): return self._post_lista("/retornaListaAcondicionamento")
+    def retorna_lista_residuo(self): return self._post_lista("/retornaListaResiduo")
+    def retorna_lista_classe_por_residuo(self, res_codigo_ibama): return self._post_lista(f"/retornaListaClassePorResiduo/{res_codigo_ibama}")
+    def retorna_lista_acondicionamento_por_estado_fisico(self, tie_codigo): return self._post_lista(f"/retornaListaAcondicionamentoPorEstadoFisico/{tie_codigo}")
+    def salvar_manifesto_lote(self, payload): return self.request("POST", "/salvarManifestoLote", payload=payload)
+    def retorna_manifesto(self, man_numero): return self.request("GET", f"/retornaManifesto/{man_numero}")
+    def download_manifesto(self, man_numero): return self.request("POST", f"/downloadManifesto/{man_numero}", payload={}, expect_pdf=True)
+    def cancelar_manifesto(self, man_numero, justificativa): return self.request("POST", "/cancelarManifesto", payload={"manNumero": man_numero, "justificativa": justificativa})
+    def consultar_mtr_por_seu_codigo(self, seu_codigo): return self.request("GET", f"/retornaManifestoPorSeuCodigo/{seu_codigo}")
+
+
+def _log_sigor(db:Session, action:str, endpoint:str, success:bool, user_id:int|None=None, site_id:str|None=None, request_payload=None, response_summary:str|None=None, http_status:int|None=None, error_message:str|None=None, related_mtr_id:int|None=None, seu_codigo:str|None=None, man_numero:str|None=None):
+    db.add(
+        SigorAPILog(
+            action=action,
+            endpoint=endpoint,
+            success=success,
+            user_id=user_id,
+            site_id=site_id,
+            request_payload_redacted=_redact_sensitive(_make_json_safe(request_payload)),
+            response_summary=(response_summary or "")[:4000],
+            http_status=http_status,
+            error_message=(error_message or "")[:2000] if error_message else None,
+            related_mtr_id=related_mtr_id,
+            seu_codigo=seu_codigo,
+            man_numero=man_numero,
+        )
+    )
+
+
+def _extract_reference_list(api_data)->list[dict]:
+    if isinstance(api_data, list):
+        return api_data
+    if isinstance(api_data, dict):
+        for key in ("objetoResposta", "lista", "dados"):
+            val = api_data.get(key)
+            if isinstance(val, list):
+                return val
+    return []
+
+
+def sync_sigor_reference_data(db:Session, client:SigorMTRClient):
+    mapping = {
+        "classe": client.retorna_lista_classe,
+        "unidade": client.retorna_lista_unidade,
+        "tratamento": client.retorna_lista_tratamento,
+        "estado_fisico": client.retorna_lista_estado_fisico,
+        "acondicionamento": client.retorna_lista_acondicionamento,
+        "residuo": client.retorna_lista_residuo,
+    }
+    summary = []
+    for ref_type, fn in mapping.items():
+        data = fn()
+        items = _extract_reference_list(data)
+        db.query(SigorReferenceData).filter(SigorReferenceData.ref_type == ref_type).update({"active": False}, synchronize_session=False)
+        now = datetime.utcnow()
+        for item in items:
+            code = str(item.get("codigo") or item.get("id") or item.get("resCodigoIbama") or item.get("tieCodigo") or item.get("tiaCodigo") or "")
+            desc = str(item.get("descricao") or item.get("nome") or item.get("resDescricao") or "")
+            if not code:
+                continue
+            existing = db.query(SigorReferenceData).filter_by(ref_type=ref_type, ref_code=code).first()
+            if existing:
+                existing.ref_description = desc
+                existing.raw_json = _make_json_safe(item)
+                existing.active = True
+                existing.last_synced_at = now
+            else:
+                db.add(SigorReferenceData(ref_type=ref_type, ref_code=code, ref_description=desc, raw_json=_make_json_safe(item), active=True, last_synced_at=now))
+        summary.append((ref_type, len(items)))
+    db.commit()
+    return summary
+
+
+def validar_mtr_payload(payload_item:dict):
+    erros = []
+    if not payload_item.get("nomeResponsavel"): erros.append("Nome do responsável é obrigatório.")
+    if not payload_item.get("seuCodigo"): erros.append("seuCodigo é obrigatório.")
+    if payload_item.get("dataExpedicao") is None: erros.append("Data de expedição é obrigatória.")
+    if payload_item.get("transportador", {}).get("cpfCnpj", "") == "": erros.append("Transportador com CNPJ/CPF obrigatório.")
+    if payload_item.get("destinador", {}).get("cpfCnpj", "") == "": erros.append("Destinador com CNPJ/CPF obrigatório.")
+    lista = payload_item.get("listaManifestoResiduos") or []
+    if not lista:
+        erros.append("Lista de resíduos não pode ser vazia.")
+    for i, r in enumerate(lista):
+        if float(r.get("marQuantidade") or 0) <= 0:
+            erros.append(f"Resíduo #{i+1}: quantidade deve ser maior que zero.")
+        unidade = str(r.get("uniCodigo") or "")
+        if unidade in ("2", "3", "L", "M3") and not r.get("marDensidade"):
+            erros.append(f"Resíduo #{i+1}: densidade é obrigatória para unidade em litro/m³.")
+    if erros:
+        raise SigorValidationError(" | ".join(erros))
+
+
+def build_manifesto_payload(form_data:dict, site_code:str)->dict:
+    expedicao = form_data.get("data_expedicao") or date.today()
+    if expedicao < date.today():
+        raise SigorValidationError("Data de expedição não pode ser anterior à data atual.")
+    placa = validar_placa(form_data.get("placa_veiculo"))
+    transportador_unidade = form_data.get("transportador_unidade")
+    destinador_unidade = form_data.get("destinador_unidade")
+    item = {
+        "nomeResponsavel": form_data.get("nome_responsavel"),
+        "seuCodigo": form_data.get("seu_codigo") or gerar_seu_codigo(site_code),
+        "dataExpedicao": int(datetime.combine(expedicao, datetime.min.time()).timestamp() * 1000),
+        "nomeMotorista": form_data.get("nome_motorista"),
+        "placaVeiculo": placa,
+        "observacoes": form_data.get("observacoes"),
+        "transportador": {"unidade": int(transportador_unidade) if transportador_unidade not in (None, "") else "", "cpfCnpj": so_digitos(form_data.get("transportador_cnpj"))},
+        "destinador": {"unidade": int(destinador_unidade) if destinador_unidade not in (None, "") else "", "cpfCnpj": so_digitos(form_data.get("destinador_cnpj"))},
+        "listaManifestoResiduos": form_data.get("residuos") or [],
+    }
+    if form_data.get("armazenador_unidade") and form_data.get("armazenador_cnpj"):
+        item["armazenadorTemporario"] = {"unidade": int(form_data.get("armazenador_unidade")), "cpfCnpj": so_digitos(form_data.get("armazenador_cnpj"))}
+    validar_mtr_payload(item)
+    return item
 
 # =========================
 #   PARSER DA MTR (PDF)
@@ -825,7 +1171,7 @@ if st.session_state.role=="Leitor":
     if nivel == "Executivo":
         menu = st.sidebar.selectbox(
             "Menu",
-            ["Overview", "Visão Geral Fornecedores", "Central de Pendências", "Sair"]
+            ["Overview", "Visão Geral Fornecedores", "Central de Pendências", "Integração SIGOR-MTR", "MTR SIGOR - Emitir", "MTR SIGOR - Emitidos", "Sair"]
         )
     else:
         menu = st.sidebar.selectbox("Menu", ["Sair"])
@@ -848,7 +1194,7 @@ else:
         st.sidebar.caption("Execução diária: documentos, auditorias, contratos e MTR/CDF")
         menu = st.sidebar.selectbox(
             "Menu",
-            ["Visualizar Fornecedores", "MTRs", "Contratos", "Central de Pendências", "Sair"]
+            ["Visualizar Fornecedores", "MTRs", "Contratos", "Central de Pendências", "Integração SIGOR-MTR", "MTR SIGOR - Emitir", "MTR SIGOR - Emitidos", "Sair"]
         )
     else:
         st.sidebar.caption("Cadastros e administração")
@@ -2950,6 +3296,186 @@ if menu=="Admin (Usuários)":
             st.download_button("Baixar Excel", data=output.read(),
                                file_name="fornecedores_export.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+if menu == "Integração SIGOR-MTR":
+    render_page_header("Integração SIGOR-MTR", "Administração da conexão oficial com web service CETESB.")
+    st.write(f"**Status integração:** {'🟢 habilitada' if SIGOR_ENABLE_INTEGRATION else '🔴 desabilitada'}")
+    st.write(f"**Ambiente:** `{SIGOR_ENV}`")
+    st.write(f"**Base URL:** `{SIGOR_BASE_URL}`")
+    c1, c2 = st.columns(2)
+    if c1.button("Testar autenticação"):
+        with SessionLocal() as db:
+            try:
+                cli = SigorMTRClient()
+                token = cli.get_token()
+                _log_sigor(db, "get_token", "/gettoken", True, response_summary="Token recebido", user_id=None, site_id=site_logado)
+                db.commit()
+                st.success(f"Autenticação OK. Token em memória ({len(token)} chars).")
+            except Exception as e:
+                _log_sigor(db, "get_token", "/gettoken", False, response_summary="Erro", error_message=str(e), user_id=None, site_id=site_logado)
+                db.commit()
+                st.error(f"Falha de autenticação: {e}")
+    if c2.button("Sincronizar listas oficiais"):
+        with SessionLocal() as db:
+            try:
+                cli = SigorMTRClient()
+                cli.get_token()
+                summary = sync_sigor_reference_data(db, cli)
+                _log_sigor(db, "sync_references", "/listas", True, response_summary=str(summary), site_id=site_logado)
+                db.commit()
+                st.success(f"Sincronização concluída: {summary}")
+            except Exception as e:
+                _log_sigor(db, "sync_references", "/listas", False, response_summary="Erro", error_message=str(e), site_id=site_logado)
+                db.commit()
+                st.error(f"Erro ao sincronizar listas: {e}")
+    with SessionLocal() as db:
+        rows = db.query(
+            SigorReferenceData.ref_type,
+            func.max(SigorReferenceData.last_synced_at).label("last_sync"),
+            func.count(SigorReferenceData.id).label("total"),
+        ).group_by(SigorReferenceData.ref_type).all()
+    if rows:
+        st.dataframe([{"Tipo": r.ref_type, "Última sincronização": r.last_sync, "Itens ativos": r.total} for r in rows], use_container_width=True, hide_index=True)
+
+if menu == "MTR SIGOR - Emitir":
+    render_page_header("Emitir MTR no SIGOR", "Emissão oficial via API REST, com validações e trilha de auditoria.")
+    if not SIGOR_ENABLE_INTEGRATION:
+        st.warning("Integração desabilitada por variável de ambiente SIGOR_ENABLE_INTEGRATION.")
+    with st.form("sigor_emit_form"):
+        site_sel = st.selectbox("Site gerador", SITES_PRODUTIVOS, index=0)
+        nome_responsavel = st.text_input("Nome responsável")
+        data_expedicao = st.date_input("Data de expedição", value=date.today())
+        nome_motorista = st.text_input("Nome motorista")
+        placa_veiculo = st.text_input("Placa veículo")
+        observacoes = st.text_area("Observações")
+        transportador_cnpj = st.text_input("CNPJ transportador")
+        transportador_unidade = st.text_input("Unidade SIGOR transportador")
+        destinador_cnpj = st.text_input("CNPJ destinador")
+        destinador_unidade = st.text_input("Unidade SIGOR destinador")
+        res_codigo_ibama = st.text_input("Resíduo código IBAMA")
+        mar_quantidade = st.number_input("Quantidade", min_value=0.0, value=0.0, step=1.0)
+        uni_codigo = st.text_input("Uni código")
+        tra_codigo = st.text_input("Tratamento código")
+        tie_codigo = st.text_input("Estado físico código")
+        tia_codigo = st.text_input("Acondicionamento código")
+        cla_codigo = st.text_input("Classe código")
+        mar_densidade = st.number_input("Densidade", min_value=0.0, value=0.0, step=0.1)
+        mar_numero_onu = st.text_input("ONU")
+        mar_classe_risco = st.text_input("Classe de risco")
+        mar_nome_embarque = st.text_input("Nome de embarque")
+        gre_codigo = st.text_input("Grupo embalagem")
+        submit_validar = st.form_submit_button("Validar dados")
+        submit_emitir = st.form_submit_button("Emitir MTR no SIGOR")
+    form_data = {
+        "nome_responsavel": nome_responsavel, "data_expedicao": data_expedicao, "nome_motorista": nome_motorista, "placa_veiculo": placa_veiculo,
+        "observacoes": observacoes, "transportador_cnpj": transportador_cnpj, "transportador_unidade": transportador_unidade,
+        "destinador_cnpj": destinador_cnpj, "destinador_unidade": destinador_unidade,
+        "residuos": [{
+            "marQuantidade": mar_quantidade, "resCodigoIbama": res_codigo_ibama, "uniCodigo": uni_codigo, "traCodigo": tra_codigo,
+            "tieCodigo": tie_codigo, "tiaCodigo": tia_codigo, "claCodigo": cla_codigo, "marDensidade": mar_densidade or None,
+            "marNumeroONU": mar_numero_onu or None, "marClasseRisco": mar_classe_risco or None, "marNomeEmbarque": mar_nome_embarque or None, "greCodigo": gre_codigo or None,
+        }],
+    }
+    if submit_validar or submit_emitir:
+        try:
+            payload_item = build_manifesto_payload(form_data, site_sel)
+            st.success("Validação concluída com sucesso.")
+            st.json(payload_item)
+            if submit_emitir:
+                if SIGOR_ENV == "production":
+                    st.error("Produção exige confirmação explícita adicional. Execute a emissão primeiro em homologação.")
+                else:
+                    with SessionLocal() as db:
+                        fornecedor_base = db.query(Fornecedor).order_by(Fornecedor.id.asc()).first()
+                        if not fornecedor_base:
+                            raise SigorValidationError("Cadastre ao menos um fornecedor antes da emissão SIGOR.")
+                        cli = SigorMTRClient()
+                        cli.get_token()
+                        response = cli.salvar_manifesto_lote([payload_item])
+                        m = MTR(
+                            fornecedor_id=fornecedor_base.id,
+                            arquivo="-",
+                            numero_mtr=str((response or {}).get("manNumero") or ""),
+                            seu_codigo=payload_item["seuCodigo"],
+                            sigor_man_numero=str((response or {}).get("manNumero") or ""),
+                            sigor_manifesto_numero_nacional=str((response or {}).get("numeroNacional") or ""),
+                            status="Emitido",
+                            data_expedicao=form_data["data_expedicao"],
+                            nome_responsavel=form_data["nome_responsavel"],
+                            nome_motorista=form_data["nome_motorista"],
+                            placa_veiculo=validar_placa(form_data["placa_veiculo"]),
+                            observacoes=form_data["observacoes"],
+                            payload_enviado=_make_json_safe([payload_item]),
+                            retorno_sigor=_make_json_safe(response),
+                            site=SiteEnum(site_sel),
+                        )
+                        db.add(m); db.flush()
+                        man_numero = m.sigor_man_numero or m.numero_mtr
+                        if man_numero:
+                            try:
+                                pdf = cli.download_manifesto(man_numero)
+                                year = str(date.today().year)
+                                out_dir = Path(SIGOR_STORAGE_DIR) / site_sel / year
+                                out_dir.mkdir(parents=True, exist_ok=True)
+                                pdf_file = out_dir / f"{man_numero}.pdf"
+                                pdf_file.write_bytes(pdf)
+                                m.pdf_path = str(pdf_file)
+                            except Exception as e:
+                                logger.warning("Falha no download automático do PDF: %s", e)
+                        _log_sigor(db, "salvar_manifesto_lote", "/salvarManifestoLote", True, request_payload=[payload_item], response_summary=str(response), related_mtr_id=m.id, site_id=site_sel, seu_codigo=m.seu_codigo, man_numero=m.sigor_man_numero)
+                        db.commit()
+                        st.success(f"MTR emitido com sucesso. Número: {m.sigor_man_numero or '-'}")
+        except Exception as e:
+            st.error(f"Validação/Emissão falhou: {e}")
+
+if menu == "MTR SIGOR - Emitidos":
+    render_page_header("MTRs Emitidos (SIGOR)", "Consulta, atualização, download e cancelamento com controle de perfil.")
+    with SessionLocal() as db:
+        items = mtr_query_por_site(db).order_by(MTR.id.desc()).limit(200).all()
+        st.dataframe([{
+            "ID": m.id, "Site": m.site.value if m.site else "-", "seuCodigo": m.seu_codigo, "manNumero": m.sigor_man_numero,
+            "Status": m.status, "Data expedição": m.data_expedicao, "PDF": m.pdf_path or "-"
+        } for m in items], use_container_width=True, hide_index=True)
+        sel = st.selectbox("Selecionar MTR por ID", [m.id for m in items] if items else [])
+        if sel:
+            m = db.query(MTR).filter(MTR.id == sel).first()
+            c1, c2, c3 = st.columns(3)
+            if c1.button("Consultar status no SIGOR"):
+                try:
+                    cli = SigorMTRClient(); cli.get_token()
+                    r = cli.retorna_manifesto(m.sigor_man_numero or m.numero_mtr)
+                    m.retorno_sigor = _make_json_safe(r)
+                    m.status = str((r or {}).get("status") or m.status)
+                    _log_sigor(db, "retorna_manifesto", f"/retornaManifesto/{m.sigor_man_numero}", True, response_summary=str(r), related_mtr_id=m.id, man_numero=m.sigor_man_numero)
+                    db.commit()
+                    st.success("Status atualizado.")
+                except Exception as e:
+                    st.error(str(e))
+            if c2.button("Baixar PDF"):
+                if m.pdf_path and Path(m.pdf_path).exists():
+                    st.download_button("Download PDF", data=Path(m.pdf_path).read_bytes(), file_name=Path(m.pdf_path).name)
+                else:
+                    st.warning("PDF não disponível localmente.")
+            justificativa = c3.text_input("Justificativa cancelamento", key=f"j_{m.id}")
+            if c3.button("Cancelar MTR"):
+                if st.session_state.role not in ("Admin",):
+                    st.error("Somente administradores podem cancelar MTR.")
+                elif not justificativa.strip():
+                    st.error("Justificativa é obrigatória.")
+                else:
+                    try:
+                        cli = SigorMTRClient(); cli.get_token()
+                        resp = cli.cancelar_manifesto(m.sigor_man_numero or m.numero_mtr, justificativa.strip())
+                        m.status = "Cancelado"
+                        m.cancelled_at = datetime.utcnow()
+                        m.cancel_reason = justificativa.strip()
+                        m.retorno_sigor = _make_json_safe(resp)
+                        _log_sigor(db, "cancelar_manifesto", "/cancelarManifesto", True, request_payload={"manNumero": m.sigor_man_numero, "justificativa": justificativa}, response_summary=str(resp), related_mtr_id=m.id, man_numero=m.sigor_man_numero)
+                        db.commit()
+                        st.success("MTR cancelado com sucesso.")
+                    except Exception as e:
+                        st.error(f"Falha no cancelamento: {e}")
 
 # ---- Sair ----
 if menu=="Sair":
