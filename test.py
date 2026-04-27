@@ -351,21 +351,50 @@ def build_summary(prepared: pd.DataFrame) -> dict:
     }
 
 
-def table_data_from_df(df: pd.DataFrame, columns: list[str], max_rows: int = 25) -> list[list[str]]:
-    data = [columns]
+def _pdf_table_cell(value, is_header: bool = False):
+    """Create wrapped ReportLab paragraphs for table cells, preventing text overflow/misalignment."""
+    text = clean_text(value)
+    if text == "":
+        text = "-"
+    text = html.escape(str(text))
+
+    if is_header:
+        style = ParagraphStyle(
+            name="PdfTableHeaderCell",
+            fontName="Helvetica-Bold",
+            fontSize=7.4,
+            leading=8.6,
+            textColor=colors.white,
+            alignment=TA_CENTER,
+        )
+    else:
+        style = ParagraphStyle(
+            name="PdfTableBodyCell",
+            fontName="Helvetica",
+            fontSize=6.8,
+            leading=8.2,
+            textColor=colors.HexColor("#1E293B"),
+            alignment=TA_LEFT,
+        )
+
+    return Paragraph(text, style)
+
+
+def table_data_from_df(df: pd.DataFrame, columns: list[str], max_rows: int = 25) -> list[list]:
+    data = [[_pdf_table_cell(col, is_header=True) for col in columns]]
     if df.empty:
-        return [columns, ["Sem registros"] + [""] * (len(columns) - 1)]
+        return data + [[_pdf_table_cell("Sem registros")] + [_pdf_table_cell("")] * (len(columns) - 1)]
 
     for _, row in df.head(max_rows).iterrows():
         line = []
         for col in columns:
             value = row.get(col, "")
             if isinstance(value, (pd.Timestamp, datetime, date)):
-                line.append(format_date(value))
+                line.append(_pdf_table_cell(format_date(value)))
             elif col in {"expiration", "renewal_required", "issued", "renewal_submitted"}:
-                line.append(format_date(value))
+                line.append(_pdf_table_cell(format_date(value)))
             else:
-                line.append(str(value))
+                line.append(_pdf_table_cell(value))
         data.append(line)
 
     return data
@@ -553,32 +582,6 @@ def build_pdf(prepared: pd.DataFrame, original_filename: str) -> bytes:
 
     elements.append(PageBreak())
 
-    priority = prepared.sort_values(["risk_score", "days_to_expire"], ascending=[False, True]).copy()
-    priority["Vencimento"] = priority["expiration"].map(format_date)
-    priority["Renovação até"] = priority["renewal_required"].map(format_date)
-    priority["Dias"] = priority["days_to_expire"].fillna("").astype(str).str.replace(".0", "", regex=False)
-
-    priority_cols = ["site", "division", "media", "permit_name", "Vencimento", "Dias", "status", "renewal_status"]
-    priority_labels = ["Site", "Divisão", "Categoria", "Licença", "Vencimento", "Dias", "Status", "Renovação"]
-    priority_df = priority[priority_cols].rename(columns=dict(zip(priority_cols, priority_labels)))
-
-    elements.append(Paragraph("Lista priorizada para ação", styles["SectionTitle"]))
-    elements.append(
-        Paragraph(
-            "A tabela abaixo prioriza licenças vencidas, próximas do vencimento, com renovação atrasada ou tarefas pendentes. "
-            "Use esta seção como base para acionar os responsáveis por site/divisão.",
-            styles["SmallText"],
-        )
-    )
-    elements.append(Spacer(1, 0.15 * cm))
-
-    priority_data = table_data_from_df(priority_df, priority_labels, max_rows=30)
-    priority_table = Table(priority_data, repeatRows=1, colWidths=[2.6 * cm, 3.1 * cm, 2.5 * cm, 6.5 * cm, 2.2 * cm, 1.2 * cm, 3.2 * cm, 3.4 * cm])
-    priority_table.setStyle(get_pdf_table_style())
-    elements.append(priority_table)
-
-    elements.append(PageBreak())
-
     site_summary = (
         prepared.groupby("site")
         .agg(
@@ -640,6 +643,32 @@ def build_pdf(prepared: pd.DataFrame, original_filename: str) -> bytes:
 
     elements.append(PageBreak())
 
+    priority = prepared.sort_values(["risk_score", "days_to_expire"], ascending=[False, True]).copy()
+    priority["Vencimento"] = priority["expiration"].map(format_date)
+    priority["Renovação até"] = priority["renewal_required"].map(format_date)
+    priority["Dias"] = priority["days_to_expire"].fillna("").astype(str).str.replace(".0", "", regex=False)
+
+    priority_cols = ["site", "division", "media", "permit_name", "Vencimento", "Dias", "status", "renewal_status"]
+    priority_labels = ["Site", "Divisão", "Categoria", "Licença", "Vencimento", "Dias", "Status", "Renovação"]
+    priority_df = priority[priority_cols].rename(columns=dict(zip(priority_cols, priority_labels)))
+
+    elements.append(Paragraph("Lista priorizada para ação", styles["SectionTitle"]))
+    elements.append(
+        Paragraph(
+            "A tabela abaixo prioriza licenças vencidas, próximas do vencimento, com renovação atrasada ou tarefas pendentes. "
+            "Use esta seção como base para acionar os responsáveis por site/divisão.",
+            styles["SmallText"],
+        )
+    )
+    elements.append(Spacer(1, 0.15 * cm))
+
+    priority_data = table_data_from_df(priority_df, priority_labels, max_rows=30)
+    priority_table = Table(priority_data, repeatRows=1, colWidths=[2.6 * cm, 3.1 * cm, 2.5 * cm, 6.5 * cm, 2.2 * cm, 1.2 * cm, 3.2 * cm, 3.4 * cm])
+    priority_table.setStyle(get_pdf_table_style())
+    elements.append(priority_table)
+
+    elements.append(PageBreak())
+
     missing_exp = prepared[prepared["expiration"].isna()].copy()
     missing_exp["Vencimento"] = missing_exp["expiration"].map(format_date)
     missing_exp_df = missing_exp[["site", "division", "media", "permit_name", "external_number"]].rename(
@@ -667,16 +696,6 @@ def build_pdf(prepared: pd.DataFrame, original_filename: str) -> bytes:
     missing_table.setStyle(get_pdf_table_style())
     elements.append(missing_table)
 
-    elements.append(Spacer(1, 0.35 * cm))
-    elements.append(Paragraph("Recomendação de uso", styles["SectionTitle"]))
-    elements.append(
-        Paragraph(
-            "Envie este PDF aos responsáveis por site e divisão com foco nas licenças vencidas, próximas de vencimento, "
-            "com renovação atrasada ou sem validade informada. Para governança, recomenda-se registrar responsável, evidência de renovação, "
-            "prazo-alvo e status de cada ação em uma base controlada.",
-            styles["Note"],
-        )
-    )
 
     doc.build(elements, onFirstPage=add_page_number, onLaterPages=add_page_number)
     buffer.seek(0)
@@ -695,9 +714,10 @@ def get_pdf_table_style():
             ("TEXTCOLOR", (0, 1), (-1, -1), colors.HexColor("#1E293B")),
             ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#CBD5E1")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
             ("TOPPADDING", (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]
@@ -916,7 +936,6 @@ if st.button("Gerar PDF executivo", type="primary"):
         mime="application/pdf",
     )
 
-    st.caption("Sugestão: envie o PDF aos responsáveis por site/divisão com foco nas ações priorizadas.")
 
 
 with st.expander("Colunas detectadas no arquivo"):
