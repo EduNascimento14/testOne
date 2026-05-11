@@ -27,4 +27,5 @@ def sidebar_user(session: Session) -> Usuario | None:
         st.sidebar.warning("Nenhum usuário cadastrado.")
         return None
     selected = st.sidebar.selectbox("Usuário MVP", users, format_func=lambda u: f"{u.nome} — {u.perfil}")
+    st.sidebar.caption("Autenticação simples por seleção. Ponto preparado para futura integração SSO/Azure AD.")
     return selected

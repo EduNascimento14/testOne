@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from ehs_audit.auth import can_edit_achado, can_edit_admin, can_edit_auditoria
 from ehs_audit.calculations import achados_df, dashboard_kpis, pontuacao_por, respostas_df, resumo_auditoria
-from ehs_audit.config import APP_ENV
+from ehs_audit.config import APP_ENV, DATA_DIR
 from ehs_audit.constants import CRITICIDADES, PRIORIDADES, STATUS_ACHADO, STATUS_CONFORMIDADE, TIPOS_ACHADO
-from ehs_audit.checklist_seed import ensure_seed_data, validate_checklist_seed
 from ehs_audit.db import get_session, init_db
 from ehs_audit.exporters import export_checklist_excel, export_plano_acao_excel, export_relatorio_pdf
+from ehs_audit.importer import import_matrix
 from ehs_audit.models import Achado, Auditoria, Diretiva, Requisito, Site, Usuario
 from ehs_audit.services import criar_auditoria, salvar_respostas, salvar_upload
 from ehs_audit.ui import apply_theme, header, sidebar_user
@@ -39,7 +39,7 @@ def page_dashboard(session):
     df = respostas_df(session)
     ach = achados_df(session)
     if df.empty:
-        st.info("Crie uma auditoria para habilitar os gráficos.")
+        st.info("Importe requisitos e crie uma auditoria para habilitar os gráficos.")
         return
     c1, c2 = st.columns(2)
     site_score = pontuacao_por(df, "site")
@@ -109,7 +109,7 @@ def page_checklist(session, user):
     editable = can_edit_auditoria(user, auditoria)
     df = respostas_df(session, auditoria.id)
     if df.empty:
-        st.warning("Checklist vazio. Verifique se há requisitos ativos cadastrados na base.")
+        st.warning("Checklist vazio. Verifique se há requisitos ativos importados.")
         return
     c1, c2, c3 = st.columns(3)
     gdt = c1.multiselect("Filtrar por GdT", sorted(df["diretiva"].unique()))
@@ -206,43 +206,31 @@ def page_relatorios(session):
 
 
 def page_admin(session, user):
-    header("Base do Checklist", "Consulte as GdTs e requisitos incorporados ao sistema.")
+    header("Administração", "Importe a matriz oficial, mantenha diretivas/requisitos e cadastros básicos.")
     if not can_edit_admin(user):
         st.warning("Apenas Admin_LAG pode alterar dados administrativos neste MVP.")
-
-    validacao = validate_checklist_seed(session)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("GdTs cadastradas", validacao["diretivas"])
-    c2.metric("Requisitos cadastrados", validacao["requisitos"])
-    c3.metric("Requisitos ativos", session.query(Requisito).filter_by(ativo=True).count())
-    c4.metric("Base validada", "Sim" if validacao["valido"] else "Não")
-    if not validacao["valido"]:
-        st.error("A base do checklist está inconsistente. Reexecute o seed da base.")
-
-    tab1, tab2, tab3 = st.tabs(["GdTs e requisitos", "Usuários", "Sites"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Importar matriz", "Diretivas e requisitos", "Usuários", "Sites"])
     with tab1:
-        if st.button("Reexecutar seed da base", disabled=not can_edit_admin(user)):
-            result = ensure_seed_data(session)
-            st.success(f"Seed reexecutado. GdTs: {result['diretivas']} | Requisitos: {result['requisitos']} | Base validada: {'Sim' if result['valido'] else 'Não'}")
-            st.rerun()
+        file = st.file_uploader("EHS Directives Gap Assessment_7-20-23.xlsx", type=["xlsx"])
+        if file and st.button("Importar matriz", disabled=not can_edit_admin(user)):
+            temp = DATA_DIR / f"upload_{datetime.utcnow().timestamp()}.xlsx"
+            temp.write_bytes(file.getbuffer())
+            result = import_matrix(session, temp)
+            st.success(f"Diretivas importadas: {result['diretivas_importadas']} | Requisitos importados: {result['requisitos_importados']}")
+            st.code("\n".join(result["log"]))
+        st.caption("Abas vazias são registradas como lacuna da base de referência; o sistema não inventa requisitos.")
+    with tab2:
         dirs = session.query(Diretiva).order_by(Diretiva.codigo).all()
-        st.subheader("GdTs cadastradas")
-        st.dataframe(pd.DataFrame([{"id": d.id, "codigo": d.codigo, "titulo": d.titulo, "ativa": d.ativa, "observacao": d.observacao or ""} for d in dirs]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame([{"id": d.id, "codigo": d.codigo, "titulo": d.titulo, "ativa": d.ativa, "observacao": d.observacao} for d in dirs]), use_container_width=True, hide_index=True)
         reqs = session.query(Requisito).join(Diretiva).order_by(Diretiva.codigo, Requisito.codigo_requisito).all()
-        st.subheader("Requisitos cadastrados")
         if reqs:
             rdf = pd.DataFrame([{"id": r.id, "diretiva": r.diretiva.codigo, "codigo_requisito": r.codigo_requisito, "pergunta": r.pergunta, "criticidade": r.criticidade, "ativo": r.ativo} for r in reqs])
             edited = st.data_editor(rdf, use_container_width=True, hide_index=True, disabled=["id", "diretiva", "codigo_requisito", "pergunta"], column_config={"criticidade": st.column_config.SelectboxColumn(options=CRITICIDADES)})
             if st.button("Salvar criticidade/ativo", disabled=not can_edit_admin(user)):
                 for row in edited.to_dict("records"):
-                    req = session.get(Requisito, int(row["id"]))
-                    req.criticidade = row["criticidade"]
-                    req.ativo = bool(row["ativo"])
-                session.commit()
-                st.success("Requisitos atualizados.")
-        else:
-            st.info("Nenhum requisito cadastrado.")
-    with tab2:
+                    req = session.get(Requisito, int(row["id"])); req.criticidade = row["criticidade"]; req.ativo = bool(row["ativo"])
+                session.commit(); st.success("Requisitos atualizados.")
+    with tab3:
         sites = get_options(session, Site, active_only=False)
         with st.form("novo_usuario"):
             nome = st.text_input("Nome")
@@ -250,18 +238,14 @@ def page_admin(session, user):
             perfil = st.selectbox("Perfil", ["Admin_LAG", "EHS_Local", "Auditor", "Visualizador", "Responsavel_Acao"])
             site = st.selectbox("Site", [None] + sites, format_func=lambda s: "-" if s is None else s.codigo)
             if st.form_submit_button("Cadastrar usuário", disabled=not can_edit_admin(user)) and nome and email:
-                session.add(Usuario(nome=nome, email=email, perfil=perfil, site_id=site.id if site else None, ativo=True))
-                session.commit()
-                st.success("Usuário cadastrado.")
+                session.add(Usuario(nome=nome, email=email, perfil=perfil, site_id=site.id if site else None, ativo=True)); session.commit(); st.success("Usuário cadastrado.")
         st.dataframe(pd.DataFrame([{"id": u.id, "nome": u.nome, "email": u.email, "perfil": u.perfil, "site": u.site.codigo if u.site else "-", "ativo": u.ativo} for u in session.query(Usuario).all()]), use_container_width=True, hide_index=True)
-    with tab3:
+    with tab4:
         with st.form("novo_site"):
             codigo = st.text_input("Código")
             nome = st.text_input("Nome")
             if st.form_submit_button("Cadastrar site", disabled=not can_edit_admin(user)) and codigo and nome:
-                session.add(Site(codigo=codigo.upper(), nome=nome, ativo=True))
-                session.commit()
-                st.success("Site cadastrado.")
+                session.add(Site(codigo=codigo.upper(), nome=nome, ativo=True)); session.commit(); st.success("Site cadastrado.")
         st.dataframe(pd.DataFrame([{"id": s.id, "codigo": s.codigo, "nome": s.nome, "ativo": s.ativo} for s in session.query(Site).order_by(Site.codigo)]), use_container_width=True, hide_index=True)
     if APP_ENV == "development":
         with st.expander("Zona de desenvolvimento"):
@@ -269,10 +253,8 @@ def page_admin(session, user):
             if st.button("Recriar banco vazio", disabled=not can_edit_admin(user)):
                 from ehs_audit.db import engine
                 from ehs_audit.models import Base
-                Base.metadata.drop_all(engine)
-                init_db()
-                st.success("Banco reinicializado.")
-                st.rerun()
+                Base.metadata.drop_all(engine); init_db(); st.success("Banco reinicializado."); st.rerun()
+
 
 def main():
     with get_session() as session:
@@ -288,6 +270,7 @@ def main():
         elif page == "Relatórios": page_relatorios(session)
         elif page == "Administração": page_admin(session, user)
         st.sidebar.markdown("---")
+        st.sidebar.caption("Próximas evoluções recomendadas: SSO/Azure AD, trilha de auditoria, anexos em storage corporativo, aprovações eletrônicas e SQL Server gerenciado.")
 
 
 if __name__ == "__main__":
