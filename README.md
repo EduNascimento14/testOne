@@ -1,127 +1,91 @@
-# Auditoria Cruzada de Conformidade — GdTs / EHS Directives
+# NR-12 Manager — Sustentação da Conformidade
 
-Aplicativo web em Python/Streamlit para planejar, executar, registrar e acompanhar auditorias cruzadas de conformidade com GdTs / EHS Directives entre as unidades **SJC, DIA, CAC, JAC, JUN e PER**.
+Aplicativo MVP em Python/Streamlit para gestão de sustentação da conformidade NR-12 em máquinas e equipamentos industriais.
 
-## Arquitetura adotada
+## Funcionalidades
 
-A solução foi organizada como um MVP corporativo simples e modular:
-
-```text
-app.py                    # Entrada Streamlit e navegação principal
-.env.example              # Variáveis de ambiente locais
-ehs_audit/
-  auth.py                 # Regras simples de perfil e autorização MVP
-  calculations.py         # KPIs, conformidade, maturidade e classificação
-  config.py               # Configuração, dotenv e paths
-  constants.py            # Domínios controlados e diretivas de referência
-  db.py                   # Engine SQLAlchemy, sessão, init e seeds
-  exporters.py            # Exportação PDF e Excel
-  importer.py             # Importador robusto da matriz Excel
-  models.py               # Modelos SQLAlchemy
-  services.py             # Casos de uso: criar auditoria, salvar checklist, uploads
-  ui.py                   # Componentes visuais comuns
-uploads/                  # Evidências anexadas localmente
-data/                     # SQLite local padrão
-tests/                    # Testes básicos pytest
-```
-
-A aplicação usa SQLAlchemy para manter compatibilidade com migração futura para SQL Server via `mssql+pyodbc`, mas inicia por padrão com SQLite local.
+- Login simples com perfis: Admin Corporativo, EHS Site, Manutenção, Produção / Operação e Visualizador.
+- Inventário completo de máquinas por site, área, status e criticidade.
+- Controle documental NR-12 com cálculo automático de vencido/próximo do vencimento em 60 dias.
+- Auditorias e inspeções com checklist padrão de sustentação NR-12, cálculo de pontuação e geração de planos de ação.
+- Planos de ação com classificação, prazo, evidência e validação EHS.
+- Gestão de mudanças/intervenções com alertas para mudanças críticas sem aprovação.
+- Dashboard corporativo com KPIs e gráficos Plotly.
+- Exportações Excel para inventário, documentos, auditorias e plano de ação; PDF por máquina.
+- Banco SQLite local com preparo para SQL Server via variável `DATABASE_URL`.
 
 ## Instalação
-
-Requer Python 3.11+.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-```
-
-## Configuração
-
-Por padrão, o banco é criado automaticamente em:
-
-```text
-data/ehs_audit.db
-```
-
-Variáveis relevantes:
-
-```env
-DATABASE_URL=sqlite:///data/ehs_audit.db
-APP_ENV=development
 ```
 
 ## Execução
 
 ```bash
-streamlit run app.py
+streamlit run nr12_manager.py
 ```
 
-Na primeira execução, o sistema cria as tabelas e popula:
+Na primeira execução o banco `nr12_app.db` é criado automaticamente com dados iniciais.
 
-- Sites padrão: SJC, DIA, CAC, JAC, JUN, PER;
-- Usuário `Admin LAG`;
-- Usuários EHS locais por site.
+## Usuários iniciais
 
-## Fluxo básico de uso
+| Usuário | Perfil | Senha |
+| --- | --- | --- |
+| Eduardo | Admin Corporativo | `admin123` |
+| Capitu | Admin Corporativo | `admin123` |
 
-1. Abra o app com `streamlit run app.py`.
-2. Na sidebar, selecione o usuário **Admin LAG**.
-3. Acesse **Administração > Importar matriz**.
-4. Faça upload do arquivo `EHS Directives Gap Assessment_7-20-23.xlsx`.
-5. Confira diretivas e requisitos importados.
-6. Acesse **Planejamento** e crie uma auditoria para SJC, DIA, CAC, JAC, JUN ou PER.
-7. O checklist completo é gerado automaticamente com todos os requisitos ativos.
-8. Acesse **Checklist**, filtre por GdT/status/criticidade e preencha respostas.
-9. Para desvios, revise a sugestão e crie achados/CAPA manualmente.
-10. Acesse **Achados / CAPA** para atualizar plano de ação e eficácia.
-11. Acesse **Dashboard** para visão consolidada.
-12. Acesse **Relatórios** para exportar PDF, checklist Excel e plano de ação Excel.
+## Dados iniciais
 
-## Importação da matriz Excel
+- Sites: SJC, DIA, CAC, JAC, JUN e PER.
+- Duas máquinas fictícias para teste.
+- Checklist padrão de 15 itens de sustentação NR-12.
+- Documentos, auditoria e ação crítica fictícios para validar dashboard e regras.
 
-O importador:
+## Regras de negócio implementadas
 
-- percorre abas cujo nome contenha `4.12.xx`;
-- extrai código e título da diretiva;
-- tenta detectar colunas por nomes como requirement, requisito, question, pergunta, guidance, orientação e evidence;
-- se não encontrar cabeçalho, aplica heurística por conteúdo textual;
-- ignora linhas vazias;
-- evita duplicidade pelo par `diretiva_id + codigo_requisito`;
-- registra abas sem requisitos como **lacuna da base de referência**;
-- não inventa requisitos para abas vazias.
+- Documento com validade vencida vira `Vencido`; documento com validade em até 60 dias vira `Próximo do vencimento`.
+- Documentos obrigatórios essenciais: Laudo NR-12, ART e Apreciação de risco.
+- Pontuação da auditoria = itens conformes / itens aplicáveis.
+- Auditoria fica `Não conforme` quando houver item crítico não conforme ou pontuação menor que 70%.
+- Auditoria fica `Conforme com ressalvas` entre 70% e 89%.
+- Auditoria fica `Conforme` com 90% ou mais e sem item crítico não conforme.
+- Itens não conformes marcados no checklist geram planos de ação automaticamente.
+- Ação crítica aberta/vencida, documentação essencial ausente/vencida, última auditoria não conforme e mudança crítica sem validação bloqueiam status `Conforme`.
+- Mudanças em sistemas de segurança exigem MOC, aprovação EHS e manutenção ou engenharia.
+- Ação concluída exige evidência e validação EHS.
 
-## Regras implementadas
+## Estrutura principal
 
-- Site auditado não pode ser igual ao site auditor líder.
-- Auditoria criada gera respostas de checklist para todos os requisitos ativos.
-- Status de conformidade segue a regra: Conforme 100%, Parcialmente Conforme 50%, Não Conforme 0%, Não Aplicável fora do denominador e Não Verificado fora do atendimento.
-- Maturidade média considera apenas requisitos aplicáveis e verificados.
-- Não conformidade crítica aberta bloqueia classificação `Referência / Maduro`.
-- Achados não são criados automaticamente: o app apenas sugere criação quando há desvio.
+```text
+nr12_manager.py
+database.py
+models.py
+auth.py
+pages/
+  01_dashboard.py
+  02_inventario_maquinas.py
+  03_documentos_nr12.py
+  04_auditorias_inspecoes.py
+  05_planos_acao.py
+  06_gestao_mudancas.py
+  07_relatorios.py
+  08_admin.py
+utils/
+  calculations.py
+  exports.py
+  validations.py
+  seed_data.py
+```
 
 ## Migração futura para SQL Server
 
-1. Instale driver ODBC do SQL Server e `pyodbc`.
-2. Ajuste `requirements.txt` adicionando `pyodbc`.
-3. Configure `DATABASE_URL` no `.env`, por exemplo:
+Configure a variável de ambiente `DATABASE_URL` com a string SQLAlchemy do SQL Server, por exemplo:
 
-```env
-DATABASE_URL=mssql+pyodbc://usuario:senha@servidor/banco?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+```bash
+export DATABASE_URL='mssql+pyodbc://usuario:senha@servidor/base?driver=ODBC+Driver+18+for+SQL+Server'
 ```
 
-4. Execute o app; o SQLAlchemy criará as tabelas se o usuário tiver permissão.
-5. Em produção, recomenda-se substituir `Base.metadata.create_all` por Alembic migrations.
-
-## Próximas evoluções recomendadas
-
-- Integração SSO/Azure AD e grupos corporativos.
-- Trilha de auditoria de alterações por campo.
-- Controle formal de aprovação de CAPA e verificação de eficácia.
-- Armazenamento de evidências em SharePoint, Blob Storage ou storage corporativo.
-- Notificações por e-mail/Teams para ações vencidas.
-- Alembic para versionamento de schema.
-- Perfis por escopo multisite e segregação reforçada em banco.
-- Catálogo editável de criticidade por requisito validado pelo LAG EHS.
+O restante do app usa SQLAlchemy e não depende diretamente do SQLite.
