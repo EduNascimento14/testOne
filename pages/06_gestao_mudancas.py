@@ -16,17 +16,24 @@ init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
 page_header("🔁 Gestão de Mudanças / Intervenções NR-12", "Registro e validação de alterações com potencial impacto em segurança.")
 
-machines = session.query(Machine).order_by(Machine.machine_code).all()
-if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]
+machines_query = session.query(Machine).order_by(Machine.machine_code)
+if user.role != "Admin Corporativo":
+    machines_query = machines_query.filter(Machine.site_id == user.site_id)
+machine_options = [(m.id, m.machine_code, m.name) for m in machines_query.all()]
+machine_labels = {machine_id: f"{code} - {name}" for machine_id, code, name in machine_options}
+if not machine_options:
+    st.warning("Cadastre uma máquina antes de registrar mudanças."); st.stop()
 
 def save_upload(file):
     if not file: return None
-    path = Path("uploads") / f"moc_{date.today().isoformat()}_{file.name}"
+    uploads_dir = Path("uploads")
+    uploads_dir.mkdir(exist_ok=True)
+    path = uploads_dir / f"moc_{date.today().isoformat()}_{file.name}"
     path.write_bytes(file.getbuffer()); return str(path)
 
 with st.form("moc_form"):
     c1, c2, c3 = st.columns(3)
-    machine = c1.selectbox("Máquina", machines, format_func=lambda m: f"{m.machine_code} - {m.name}")
+    machine_id = c1.selectbox("Máquina", [machine_id for machine_id, _, _ in machine_options], format_func=lambda mid: machine_labels[mid])
     change_type = c2.selectbox("Tipo de mudança", CHANGE_TYPES)
     change_date = c3.date_input("Data", value=date.today())
     desc = st.text_area("Descrição da mudança")
@@ -46,6 +53,7 @@ with st.form("moc_form"):
     docs = st.file_uploader("Documentos anexos")
     obs = st.text_area("Observações")
     if st.form_submit_button("Registrar mudança", disabled=not can_edit(user)):
+        machine = session.get(Machine, machine_id)
         if change_type in SAFETY_CHANGE_TYPES:
             impacts_safety = True; requires_moc = True
         cm = ChangeManagement(machine_id=machine.id, site_id=machine.site_id, change_type=change_type, description=desc, requester=requester, requester_area=requester_area, change_date=change_date, impacts_safety=impacts_safety, requires_moc=requires_moc, status=status, ehs_approval=ehs, maintenance_approval=maint, engineering_approval=eng, production_approval=prod, attached_documents=save_upload(docs), needs_post_change_audit=needs_audit, needs_training=needs_training, observations=obs)
