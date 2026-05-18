@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import pandas as pd
-from sqlalchemy.orm import Session
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.orm import Session, selectinload
 from models import ActionPlan, Audit, ChangeManagement, Document, Machine, Site, StatusHistory
 from utils.validations import MANDATORY_DOCUMENTS, SAFETY_CHANGE_TYPES, is_due_soon, is_overdue
 
@@ -31,7 +32,29 @@ def calculate_audit_result(items: list[dict]) -> tuple[float, str, bool]:
     return score, result, critical_nc
 
 
+def _machine_identity(machine: Machine) -> int:
+    identity = sa_inspect(machine).identity
+    if identity:
+        return int(identity[0])
+    return int(machine.id)
+
+
+def _load_machine_for_status(session: Session, machine: Machine) -> Machine:
+    return (
+        session.query(Machine)
+        .options(
+            selectinload(Machine.documents),
+            selectinload(Machine.audits),
+            selectinload(Machine.actions),
+            selectinload(Machine.changes),
+        )
+        .filter(Machine.id == _machine_identity(machine))
+        .one()
+    )
+
+
 def suggest_machine_status(session: Session, machine: Machine) -> tuple[str, list[str]]:
+    machine = _load_machine_for_status(session, machine)
     reasons: list[str] = []
     today = date.today()
     open_actions = [a for a in machine.actions if a.status not in {"Concluída", "Cancelada"}]
@@ -74,6 +97,7 @@ def suggest_machine_status(session: Session, machine: Machine) -> tuple[str, lis
 
 
 def update_machine_suggestion(session: Session, machine: Machine, changed_by: str | None = None) -> str:
+    machine = _load_machine_for_status(session, machine)
     new_status, reasons = suggest_machine_status(session, machine)
     previous = machine.suggested_status or machine.nr12_status
     machine.suggested_status = new_status
