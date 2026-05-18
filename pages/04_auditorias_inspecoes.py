@@ -16,18 +16,25 @@ init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
 page_header("✅ Auditorias e Inspeções de Sustentação NR-12", "Checklists periódicos, pontuação automática e geração de planos de ação.")
 
-machines = session.query(Machine).order_by(Machine.machine_code).all()
-if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]
+machines_query = session.query(Machine).order_by(Machine.machine_code)
+if user.role != "Admin Corporativo":
+    machines_query = machines_query.filter(Machine.site_id == user.site_id)
+machine_options = [(m.id, m.machine_code, m.name) for m in machines_query.all()]
+machine_labels = {machine_id: f"{code} - {name}" for machine_id, code, name in machine_options}
+if not machine_options:
+    st.warning("Cadastre uma máquina antes de registrar auditorias."); st.stop()
 templates = session.query(ChecklistTemplate).filter_by(active=True).order_by(ChecklistTemplate.position).all()
 
 def save_upload(file, prefix):
     if not file: return None
-    path = Path("uploads") / f"{prefix}_{date.today().isoformat()}_{file.name}"
+    uploads_dir = Path("uploads")
+    uploads_dir.mkdir(exist_ok=True)
+    path = uploads_dir / f"{prefix}_{date.today().isoformat()}_{file.name}"
     path.write_bytes(file.getbuffer()); return str(path)
 
 with st.form("audit_form"):
     c1, c2, c3 = st.columns(3)
-    machine = c1.selectbox("Máquina", machines, format_func=lambda m: f"{m.machine_code} - {m.name}")
+    machine_id = c1.selectbox("Máquina", [machine_id for machine_id, _, _ in machine_options], format_func=lambda mid: machine_labels[mid])
     audit_type = c2.selectbox("Tipo de auditoria", AUDIT_TYPES)
     audit_date = c3.date_input("Data", value=date.today())
     auditor = st.text_input("Auditor responsável", value=user.name)
@@ -45,6 +52,7 @@ with st.form("audit_form"):
     evidence = st.file_uploader("Evidências anexas da auditoria")
     submitted = st.form_submit_button("Salvar auditoria/checklist", disabled=not can_edit(user))
 if submitted:
+    machine = session.get(Machine, machine_id)
     score, result, critical_nc = calculate_audit_result(item_payload)
     audit = Audit(machine_id=machine.id, site_id=machine.site_id, audit_type=audit_type, audit_date=audit_date, auditor=auditor, participants=participants, result=result, score=score, general_notes=general_notes, evidence_path=save_upload(evidence, "audit"))
     session.add(audit); session.flush()
