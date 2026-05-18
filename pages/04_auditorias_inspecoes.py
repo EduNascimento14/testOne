@@ -3,16 +3,18 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 import streamlit as st
+from utils.theme import apply_nr12_theme, page_header
 from auth import can_edit, require_login
 from database import get_session, init_db
 from models import ActionPlan, Audit, AuditItem, ChecklistTemplate, Machine
 from utils.calculations import calculate_audit_result, update_machine_suggestion
-from utils.validations import ACTION_CLASSES, AUDIT_TYPES, ITEM_RESULTS, RESPONSIBLE_AREAS
+from utils.validations import AUDIT_TYPES, ITEM_RESULTS
 
 st.set_page_config(page_title="Auditorias", page_icon="✅", layout="wide")
+apply_nr12_theme()
 init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
-st.title("✅ Auditorias e Inspeções de Sustentação NR-12")
+page_header("✅ Auditorias e Inspeções de Sustentação NR-12", "Checklists periódicos, pontuação automática e geração de planos de ação.")
 
 machines = session.query(Machine).order_by(Machine.machine_code).all()
 if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]

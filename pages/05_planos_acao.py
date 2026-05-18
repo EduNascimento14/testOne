@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import streamlit as st
+from utils.theme import apply_nr12_theme, page_header
 from auth import can_edit, require_login
 from database import get_session, init_db
 from models import ActionPlan, Machine
@@ -11,9 +12,10 @@ from utils.exports import export_actions_excel
 from utils.validations import ACTION_CLASSES, ACTION_ORIGINS, ACTION_STATUS, RESPONSIBLE_AREAS
 
 st.set_page_config(page_title="Planos de Ação", page_icon="🧰", layout="wide")
+apply_nr12_theme()
 init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
-st.title("🧰 Planos de Ação e Tratativa de Desvios")
+page_header("🧰 Planos de Ação e Tratativa de Desvios", "Acompanhamento de responsabilidades, prazos, evidências e validação EHS.")
 
 machines = session.query(Machine).order_by(Machine.machine_code).all()
 if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]

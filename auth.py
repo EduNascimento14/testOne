@@ -52,7 +52,7 @@ def require_login(session: Session) -> User | None:
                     st.rerun()
             return user
     st.title("🔐 NR-12 Manager")
-    st.caption("Login inicial: Eduardo / admin123 ou Capitu / admin123")
+    st.caption("Acesse com suas credenciais corporativas.")
     with st.form("login"):
         name = st.text_input("Usuário", value="Eduardo")
         password = st.text_input("Senha", type="password", value="admin123")

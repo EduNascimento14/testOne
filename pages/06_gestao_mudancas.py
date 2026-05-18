@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import streamlit as st
+from utils.theme import apply_nr12_theme, page_header
 from auth import can_edit, require_login
 from database import get_session, init_db
 from models import ChangeManagement, Machine
@@ -10,9 +11,10 @@ from utils.calculations import update_machine_suggestion
 from utils.validations import CHANGE_STATUS, CHANGE_TYPES, RESPONSIBLE_AREAS, SAFETY_CHANGE_TYPES
 
 st.set_page_config(page_title="Gestão de Mudanças", page_icon="🔁", layout="wide")
+apply_nr12_theme()
 init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
-st.title("🔁 Gestão de Mudanças / Intervenções NR-12")
+page_header("🔁 Gestão de Mudanças / Intervenções NR-12", "Registro e validação de alterações com potencial impacto em segurança.")
 
 machines = session.query(Machine).order_by(Machine.machine_code).all()
 if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]

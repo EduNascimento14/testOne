@@ -3,17 +3,19 @@ from __future__ import annotations
 from datetime import date
 import pandas as pd
 import streamlit as st
+from utils.theme import apply_nr12_theme, page_header
 from auth import can_edit, require_login
 from database import get_session, init_db
 from models import Machine, Site
 from utils.calculations import machines_df, update_machine_suggestion
 from utils.exports import export_inventory_excel
-from utils.validations import CRITICALITIES, MACHINE_STATUS, normalize_bool
+from utils.validations import CRITICALITIES, MACHINE_STATUS
 
 st.set_page_config(page_title="Inventário", page_icon="🏭", layout="wide")
+apply_nr12_theme()
 init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
-st.title("🏭 Inventário de Máquinas e Equipamentos")
+page_header("🏭 Inventário de Máquinas e Equipamentos", "Cadastro, consulta, importação e exportação do parque instalado.")
 
 sites = session.query(Site).order_by(Site.code).all(); allowed = sites if user.role == "Admin Corporativo" else [user.site]
 site_map = {s.code: s for s in allowed}

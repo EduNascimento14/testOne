@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import streamlit as st
+from utils.theme import apply_nr12_theme, page_header
 from auth import can_edit, require_login
 from database import get_session, init_db
 from models import Document, Machine
@@ -11,9 +12,10 @@ from utils.exports import export_documents_excel
 from utils.validations import DOCUMENT_STATUS, DOCUMENT_TYPES
 
 st.set_page_config(page_title="Documentos NR-12", page_icon="📄", layout="wide")
+apply_nr12_theme()
 init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
-st.title("📄 Documentação Legal e Técnica NR-12")
+page_header("📄 Documentação Legal e Técnica NR-12", "Controle de documentos obrigatórios, validade e evidências por máquina.")
 
 machines = session.query(Machine).order_by(Machine.machine_code).all()
 if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]

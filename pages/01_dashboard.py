@@ -3,18 +3,19 @@ from __future__ import annotations
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from sqlalchemy import func
+from utils.theme import apply_nr12_theme, page_header
 from auth import require_login
 from database import get_session, init_db
-from models import ActionPlan, Audit, ChangeManagement, Document, Machine, Site
+from models import ActionPlan, Audit, Document, Machine, Site
 from utils.calculations import dashboard_kpis, document_status, machines_df, update_machine_suggestion
 from utils.validations import CRITICALITIES, MACHINE_STATUS
 
 st.set_page_config(page_title="Dashboard NR-12", page_icon="📊", layout="wide")
+apply_nr12_theme()
 init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
 
-st.title("📊 Dashboard NR-12 Corporativo")
+page_header("📊 Dashboard NR-12 Corporativo", "Indicadores consolidados, alertas críticos e visão por site.")
 for m in session.query(Machine).all():
     update_machine_suggestion(session, m, user.name)
 session.commit()

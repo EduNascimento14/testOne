@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import streamlit as st
+from utils.theme import apply_nr12_theme, page_header
 from auth import require_login
 from database import get_session, init_db
 from models import Machine
 from utils.exports import export_actions_excel, export_audits_excel, export_documents_excel, export_inventory_excel, export_machine_pdf
 
 st.set_page_config(page_title="Relatórios", page_icon="📦", layout="wide")
+apply_nr12_theme()
 init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
-st.title("📦 Relatórios e Exportações")
+page_header("📦 Relatórios e Exportações", "Exportações executivas, operacionais e relatório detalhado por máquina.")
 
 c1, c2 = st.columns(2)
 c1.download_button("Inventário de máquinas Excel", export_inventory_excel(session), "inventario_nr12.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
