@@ -108,7 +108,10 @@ with tab1:
 with tab2:
     machines = session.query(Machine).order_by(Machine.machine_code).all()
     if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]
-    choice = st.selectbox("Editar máquina existente (opcional)", [None] + machines, format_func=lambda m: "Nova máquina" if m is None else f"{m.machine_code} - {m.name}")
+    machine_options = [(m.id, m.machine_code, m.name) for m in machines]
+    machine_labels = {machine_id: f"{code} - {name}" for machine_id, code, name in machine_options}
+    selected_machine_id = st.selectbox("Editar máquina existente (opcional)", [None] + [machine_id for machine_id, _, _ in machine_options], format_func=lambda mid: "Nova máquina" if mid is None else machine_labels[mid])
+    choice = session.get(Machine, selected_machine_id) if selected_machine_id else None
     machine_form(choice)
     if choice and st.button("Excluir máquina", disabled=not can_edit(user)):
         session.delete(choice); session.commit(); st.success("Máquina excluída."); st.rerun()
