@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import streamlit as st
+from sqlalchemy.orm import selectinload
 from utils.theme import apply_nr12_theme, page_header
 from auth import require_login
 from database import get_session, init_db
@@ -20,11 +21,30 @@ c3, c4 = st.columns(2)
 c3.download_button("Documentos NR-12 Excel", export_documents_excel(session), "documentos_nr12.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 c4.download_button("Auditorias Excel", export_audits_excel(session), "auditorias_nr12.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-machines = session.query(Machine).order_by(Machine.machine_code).all()
-if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]
+machines_query = session.query(Machine).order_by(Machine.machine_code)
+if user.role != "Admin Corporativo":
+    machines_query = machines_query.filter(Machine.site_id == user.site_id)
+machine_options = [(m.id, m.machine_code, m.name) for m in machines_query.all()]
+machine_labels = {machine_id: f"{code} - {name}" for machine_id, code, name in machine_options}
+
 st.subheader("Relatório por máquina")
-if machines:
-    machine = st.selectbox("Máquina", machines, format_func=lambda m: f"{m.machine_code} - {m.name}")
+if machine_options:
+    selected_machine_id = st.selectbox(
+        "Máquina",
+        [machine_id for machine_id, _, _ in machine_options],
+        format_func=lambda machine_id: machine_labels[machine_id],
+    )
+    machine = (
+        session.query(Machine)
+        .options(
+            selectinload(Machine.documents),
+            selectinload(Machine.audits),
+            selectinload(Machine.actions),
+            selectinload(Machine.changes),
+        )
+        .filter(Machine.id == selected_machine_id)
+        .one()
+    )
     st.download_button("Baixar PDF da máquina", export_machine_pdf(session, machine.id), f"relatorio_{machine.machine_code}.pdf", "application/pdf")
     st.markdown("### Resumo")
     st.write({"Status NR-12": machine.nr12_status, "Status sugerido": machine.suggested_status, "Documentos": len(machine.documents), "Auditorias": len(machine.audits), "Ações": len(machine.actions), "Mudanças": len(machine.changes)})
