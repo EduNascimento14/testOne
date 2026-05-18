@@ -9,7 +9,7 @@ from database import get_session, init_db
 from models import Machine, Site
 from utils.calculations import machines_df, update_machine_suggestion
 from utils.exports import export_inventory_excel
-from utils.validations import CRITICALITIES, MACHINE_STATUS, normalize_bool
+from utils.validations import CRITICALITIES, MACHINE_STATUS
 
 st.set_page_config(page_title="Inventário", page_icon="🏭", layout="wide")
 apply_nr12_theme()
