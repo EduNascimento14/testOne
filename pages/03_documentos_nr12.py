@@ -17,20 +17,25 @@ init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
 page_header("📄 Documentação Legal e Técnica NR-12", "Controle de documentos obrigatórios, validade e evidências por máquina.")
 
-machines = session.query(Machine).order_by(Machine.machine_code).all()
-if user.role != "Admin Corporativo": machines = [m for m in machines if m.site_id == user.site_id]
-if not machines:
+machines_query = session.query(Machine).order_by(Machine.machine_code)
+if user.role != "Admin Corporativo":
+    machines_query = machines_query.filter(Machine.site_id == user.site_id)
+machine_options = [(m.id, m.machine_code, m.name) for m in machines_query.all()]
+machine_labels = {machine_id: f"{code} - {name}" for machine_id, code, name in machine_options}
+if not machine_options:
     st.warning("Cadastre uma máquina antes de inserir documentos."); st.stop()
 
 def save_upload(file):
     if not file: return None
-    path = Path("uploads") / f"doc_{date.today().isoformat()}_{file.name}"
+    uploads_dir = Path("uploads")
+    uploads_dir.mkdir(exist_ok=True)
+    path = uploads_dir / f"doc_{date.today().isoformat()}_{file.name}"
     path.write_bytes(file.getbuffer())
     return str(path)
 
 with st.expander("Cadastrar documento", expanded=True):
     with st.form("doc_form"):
-        machine = st.selectbox("Máquina vinculada", machines, format_func=lambda m: f"{m.machine_code} - {m.name}")
+        machine_id = st.selectbox("Máquina vinculada", [machine_id for machine_id, _, _ in machine_options], format_func=lambda mid: machine_labels[mid])
         c1, c2 = st.columns(2)
         dtype = c1.selectbox("Tipo de documento", DOCUMENT_TYPES)
         name = c2.text_input("Nome do documento")
@@ -43,6 +48,7 @@ with st.expander("Cadastrar documento", expanded=True):
         uploaded = st.file_uploader("Upload do arquivo")
         notes = st.text_area("Observações")
         if st.form_submit_button("Salvar documento", disabled=not can_edit(user)):
+            machine = session.get(Machine, machine_id)
             file_path = save_upload(uploaded)
             calc = document_status(expiry, status)
             doc = Document(machine_id=machine.id, document_type=dtype, name=name or dtype, issue_date=issue, expiry_date=expiry, responsible=responsible, status=calc, file_path=file_path, notes=notes)
@@ -63,7 +69,11 @@ st.download_button("Exportar documentos Excel", export_documents_excel(session),
 
 if docs:
     st.subheader("Excluir documento")
-    doc = st.selectbox("Documento", docs, format_func=lambda d: f"#{d.id} {d.machine.machine_code} - {d.document_type}")
+    doc_options = [(d.id, d.machine.machine_code, d.document_type) for d in docs]
+    doc_labels = {doc_id: f"#{doc_id} {machine_code} - {document_type}" for doc_id, machine_code, document_type in doc_options}
+    doc_id = st.selectbox("Documento", [doc_id for doc_id, _, _ in doc_options], format_func=lambda did: doc_labels[did])
     if st.button("Excluir", disabled=not can_edit(user)):
-        machine = doc.machine; session.delete(doc); session.flush(); update_machine_suggestion(session, machine, user.name); session.commit(); st.success("Documento excluído."); st.rerun()
+        doc = session.get(Document, doc_id)
+        machine = session.get(Machine, doc.machine_id)
+        session.delete(doc); session.flush(); update_machine_suggestion(session, machine, user.name); session.commit(); st.success("Documento excluído."); st.rerun()
 session.close()
