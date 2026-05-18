@@ -20,6 +20,7 @@ page_header("🏭 Inventário de Máquinas e Equipamentos", "Cadastro, consulta,
 
 sites = session.query(Site).order_by(Site.code).all(); allowed = sites if user.role == "Admin Corporativo" else [user.site]
 site_map = {s.code: s for s in allowed}
+DEFAULT_STATUS = "Pendente de ação não crítica"
 
 def machine_form(machine: Machine | None = None):
     with st.form("machine_form"):
@@ -40,7 +41,8 @@ def machine_form(machine: Machine | None = None):
         owner = c11.text_input("Responsável da área", value=getattr(machine, "area_owner", "") or "")
         criticality = c12.selectbox("Criticidade", CRITICALITIES, index=CRITICALITIES.index(machine.criticality) if machine and machine.criticality in CRITICALITIES else 1)
         c13, c14, c15 = st.columns(3)
-        status = c13.selectbox("Status NR-12", MACHINE_STATUS, index=MACHINE_STATUS.index(machine.nr12_status) if machine and machine.nr12_status in MACHINE_STATUS else 3)
+        status_index = MACHINE_STATUS.index(machine.nr12_status) if machine and machine.nr12_status in MACHINE_STATUS else MACHINE_STATUS.index(DEFAULT_STATUS)
+        status = c13.selectbox("Status NR-12", MACHINE_STATUS, index=status_index)
         adequacy = c14.date_input("Data da última adequação", value=getattr(machine, "last_nr12_adequacy_date", None) or date.today())
         last_audit = c15.date_input("Data da última auditoria", value=getattr(machine, "last_audit_date", None) or date.today())
         next_audit = st.date_input("Próxima auditoria prevista", value=getattr(machine, "next_audit_date", None) or date.today())
@@ -53,16 +55,7 @@ def machine_form(machine: Machine | None = None):
         notes = st.text_area("Observações", value=getattr(machine, "notes", "") or "")
         submitted = st.form_submit_button("Salvar", disabled=not can_edit(user))
     if submitted:
-        code = code.strip()
-        area = area.strip()
-        name = name.strip()
-        line = line.strip()
-        manufacturer = manufacturer.strip()
-        model = model.strip()
-        serial = serial.strip()
-        equip_type = equip_type.strip()
-        owner = owner.strip()
-        notes = notes.strip()
+        code = code.strip(); area = area.strip(); name = name.strip(); line = line.strip(); manufacturer = manufacturer.strip(); model = model.strip(); serial = serial.strip(); equip_type = equip_type.strip(); owner = owner.strip(); notes = notes.strip()
         if not code or not area or not name:
             st.error("ID, área e nome da máquina são obrigatórios."); return
         existing = session.query(Machine).filter_by(machine_code=code).first()
@@ -76,14 +69,9 @@ def machine_form(machine: Machine | None = None):
         m.has_nr12_report, m.has_art, m.has_risk_assessment, m.has_updated_manual, m.has_training = has_report, has_art, has_risk, has_manual, has_training
         m.notes = notes
         try:
-            session.add(m)
-            session.flush()
-            update_machine_suggestion(session, m, user.name)
-            session.commit()
+            session.add(m); session.flush(); update_machine_suggestion(session, m, user.name); session.commit()
         except IntegrityError:
-            session.rollback()
-            st.error("Não foi possível salvar: já existe um registro com esses dados ou algum campo obrigatório está inválido.")
-            return
+            session.rollback(); st.error("Não foi possível salvar: já existe um registro com esses dados ou algum campo obrigatório está inválido."); return
         st.success("Máquina salva."); st.rerun()
 
 tab1, tab2, tab3 = st.tabs(["Consultar", "Cadastrar/Editar", "Importar Excel"])
@@ -123,7 +111,10 @@ with tab3:
             site = session.query(Site).filter_by(code=str(r.get("Site")).strip()).first()
             if not site or (user.role != "Admin Corporativo" and site.id != user.site_id): continue
             m = session.query(Machine).filter_by(machine_code=str(r.get("Código")).strip()).first() or Machine(machine_code=str(r.get("Código")).strip(), site_id=site.id, area="", name="")
-            m.site_id=site.id; m.area=str(r.get("Área", "")); m.name=str(r.get("Máquina", "")); m.criticality=str(r.get("Criticidade", "Média")); m.nr12_status=str(r.get("Status NR-12", "Em adequação"));
+            imported_status = str(r.get("Status NR-12", DEFAULT_STATUS)).strip()
+            if imported_status not in MACHINE_STATUS:
+                imported_status = DEFAULT_STATUS
+            m.site_id=site.id; m.area=str(r.get("Área", "")); m.name=str(r.get("Máquina", "")); m.criticality=str(r.get("Criticidade", "Média")); m.nr12_status=imported_status
             session.add(m); count += 1
         session.commit(); st.success(f"{count} máquinas importadas/atualizadas.")
 session.close()
