@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 import pandas as pd
 import streamlit as st
+from sqlalchemy.exc import IntegrityError
 from utils.theme import apply_nr12_theme, page_header
 from auth import can_edit, require_login
 from database import get_session, init_db
@@ -52,8 +53,21 @@ def machine_form(machine: Machine | None = None):
         notes = st.text_area("Observações", value=getattr(machine, "notes", "") or "")
         submitted = st.form_submit_button("Salvar", disabled=not can_edit(user))
     if submitted:
+        code = code.strip()
+        area = area.strip()
+        name = name.strip()
+        line = line.strip()
+        manufacturer = manufacturer.strip()
+        model = model.strip()
+        serial = serial.strip()
+        equip_type = equip_type.strip()
+        owner = owner.strip()
+        notes = notes.strip()
         if not code or not area or not name:
             st.error("ID, área e nome da máquina são obrigatórios."); return
+        existing = session.query(Machine).filter_by(machine_code=code).first()
+        if existing and (machine is None or existing.id != machine.id):
+            st.error(f"Já existe uma máquina cadastrada com o ID {code}. Selecione essa máquina para editar ou use outro ID."); return
         m = machine or Machine(machine_code=code, site_id=site_map[site_code].id, area=area, name=name)
         m.machine_code, m.site_id, m.area, m.line_process, m.name = code, site_map[site_code].id, area, line, name
         m.manufacturer, m.model, m.serial_number, m.manufacturing_year = manufacturer, model, serial, int(year)
@@ -61,7 +75,16 @@ def machine_form(machine: Machine | None = None):
         m.last_nr12_adequacy_date, m.last_audit_date, m.next_audit_date = adequacy, last_audit, next_audit
         m.has_nr12_report, m.has_art, m.has_risk_assessment, m.has_updated_manual, m.has_training = has_report, has_art, has_risk, has_manual, has_training
         m.notes = notes
-        session.add(m); session.flush(); update_machine_suggestion(session, m, user.name); session.commit(); st.success("Máquina salva."); st.rerun()
+        try:
+            session.add(m)
+            session.flush()
+            update_machine_suggestion(session, m, user.name)
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            st.error("Não foi possível salvar: já existe um registro com esses dados ou algum campo obrigatório está inválido.")
+            return
+        st.success("Máquina salva."); st.rerun()
 
 tab1, tab2, tab3 = st.tabs(["Consultar", "Cadastrar/Editar", "Importar Excel"])
 with tab1:
