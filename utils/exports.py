@@ -4,7 +4,7 @@ from io import BytesIO
 import pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from models import ActionPlan, Audit, ChangeManagement, Document, Machine, Site
 from utils.calculations import actions_df, machines_df
 
@@ -43,7 +43,18 @@ def export_audits_excel(session: Session) -> bytes:
 
 
 def export_machine_pdf(session: Session, machine_id: int) -> bytes:
-    m = session.get(Machine, machine_id)
+    m = (
+        session.query(Machine)
+        .options(
+            selectinload(Machine.site),
+            selectinload(Machine.documents),
+            selectinload(Machine.audits),
+            selectinload(Machine.actions),
+            selectinload(Machine.changes),
+        )
+        .filter(Machine.id == machine_id)
+        .one()
+    )
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     y = 800
