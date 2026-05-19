@@ -32,18 +32,21 @@ def save_upload(file, prefix):
     path = uploads_dir / f"{prefix}_{date.today().isoformat()}_{file.name}"
     path.write_bytes(file.getbuffer()); return str(path)
 
-with st.form("audit_form"):
-    c1, c2, c3 = st.columns(3)
-    machine_id = c1.selectbox("Máquina", [machine_id for machine_id, _, _, _ in machine_options], format_func=lambda mid: machine_labels[mid])
-    audit_type = c2.selectbox("Tipo de verificação", AUDIT_TYPES)
+c1, c2 = st.columns(2)
+machine_id = c1.selectbox("Máquina", [machine_id for machine_id, _, _, _ in machine_options], format_func=lambda mid: machine_labels[mid])
+audit_type = c2.selectbox("Tipo de verificação", AUDIT_TYPES)
+st.caption(f"Periodicidade recomendada para criticidade {machine_criticalities[machine_id]}: {audit_periodicity_label(machine_criticalities[machine_id], audit_type)}")
+
+templates = session.query(ChecklistTemplate).filter_by(active=True, audit_type=audit_type).order_by(ChecklistTemplate.position).all()
+if not templates:
+    templates = session.query(ChecklistTemplate).filter_by(active=True, audit_type="Auditoria EHS").order_by(ChecklistTemplate.position).all()
+
+with st.form(f"audit_form_{machine_id}_{audit_type}"):
+    c3, c4 = st.columns(2)
     audit_date = c3.date_input("Data", value=date.today())
-    st.caption(f"Periodicidade recomendada para criticidade {machine_criticalities[machine_id]}: {audit_periodicity_label(machine_criticalities[machine_id], audit_type)}")
-    auditor = st.text_input("Responsável", value=user.name)
+    auditor = c4.text_input("Responsável", value=user.name)
     participants = st.text_input("Participantes")
     general_notes = st.text_area("Observações gerais")
-    templates = session.query(ChecklistTemplate).filter_by(active=True, audit_type=audit_type).order_by(ChecklistTemplate.position).all()
-    if not templates:
-        templates = session.query(ChecklistTemplate).filter_by(active=True, audit_type="Auditoria EHS").order_by(ChecklistTemplate.position).all()
     st.markdown("### Checklist aplicável")
     item_payload = []
     for t in templates:
@@ -51,9 +54,9 @@ with st.form("audit_form"):
         if t.evidence_expected:
             st.caption(f"Evidência esperada: {t.evidence_expected}")
         r1, r2, r3 = st.columns([1, 2, 1])
-        result = r1.selectbox("Resultado", ITEM_RESULTS, key=f"res_{t.id}")
-        comment = r2.text_input("Comentário / evidência", key=f"com_{t.id}")
-        gen = r3.checkbox("Gera ação?", value=(result == "Não conforme"), key=f"act_{t.id}")
+        result = r1.selectbox("Resultado", ITEM_RESULTS, key=f"res_{audit_type}_{t.id}")
+        comment = r2.text_input("Comentário / evidência", key=f"com_{audit_type}_{t.id}")
+        gen = r3.checkbox("Gera ação?", value=(result == "Não conforme"), key=f"act_{audit_type}_{t.id}")
         item_payload.append({"question": t.question, "is_critical": t.is_critical, "result": result, "comment": comment, "generate_action": gen})
     evidence = st.file_uploader("Evidências anexas da verificação")
     submitted = st.form_submit_button("Salvar verificação", disabled=not can_edit(user))
