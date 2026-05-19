@@ -21,7 +21,7 @@ class Usuario(Base):
     id = Column(Integer, primary_key=True)
     nome = Column(String(120), nullable=False)
     email = Column(String(160), unique=True, nullable=False)
-    site_id = Column(ForeignKey("sites.id"))
+    site_id = Column(Integer, ForeignKey("sites.id"))
     perfil = Column(String(40), nullable=False)
     ativo = Column(Boolean, default=True)
     site = relationship("Site")
@@ -43,7 +43,7 @@ class Requisito(Base):
     __tablename__ = "requisitos"
 
     id = Column(Integer, primary_key=True)
-    diretiva_id = Column(ForeignKey("diretivas.id"), nullable=False)
+    diretiva_id = Column(Integer, ForeignKey("diretivas.id"), nullable=False)
     codigo_requisito = Column(String(60), unique=True, nullable=False)
     pergunta = Column(Text, nullable=False)
     orientacao = Column(Text)
@@ -61,9 +61,9 @@ class Auditoria(Base):
     nome = Column(String(180), nullable=False)
     ano = Column(Integer, nullable=False)
     ciclo = Column(String(80), nullable=False)
-    site_auditado_id = Column(ForeignKey("sites.id"), nullable=False)
-    site_auditor_lider_id = Column(ForeignKey("sites.id"), nullable=False)
-    site_auditor_apoio_id = Column(ForeignKey("sites.id"))
+    site_auditado_id = Column(Integer, ForeignKey("sites.id"), nullable=False)
+    site_auditor_lider_id = Column(Integer, ForeignKey("sites.id"), nullable=False)
+    site_auditor_apoio_id = Column(Integer, ForeignKey("sites.id"))
     auditor_lider = Column(String(120))
     auditor_apoio = Column(String(120))
     data_planejada = Column(Date)
@@ -82,8 +82,8 @@ class RespostaChecklist(Base):
     __table_args__ = (UniqueConstraint("auditoria_id", "requisito_id", name="uq_auditoria_requisito"),)
 
     id = Column(Integer, primary_key=True)
-    auditoria_id = Column(ForeignKey("auditorias.id"), nullable=False)
-    requisito_id = Column(ForeignKey("requisitos.id"), nullable=False)
+    auditoria_id = Column(Integer, ForeignKey("auditorias.id"), nullable=False)
+    requisito_id = Column(Integer, ForeignKey("requisitos.id"), nullable=False)
     aplicavel = Column(Boolean, default=True)
     status_conformidade = Column(String(40), default="Conforme")
     nota_maturidade = Column(Integer)
@@ -100,9 +100,9 @@ class Achado(Base):
     __tablename__ = "achados"
 
     id = Column(Integer, primary_key=True)
-    auditoria_id = Column(ForeignKey("auditorias.id"), nullable=False)
-    requisito_id = Column(ForeignKey("requisitos.id"))
-    site_id = Column(ForeignKey("sites.id"), nullable=False)
+    auditoria_id = Column(Integer, ForeignKey("auditorias.id"), nullable=False)
+    requisito_id = Column(Integer, ForeignKey("requisitos.id"))
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False)
     tipo_achado = Column(String(80), nullable=False)
     descricao = Column(Text, nullable=False)
     evidencia = Column(Text)
@@ -127,9 +127,9 @@ class EvidenciaArquivo(Base):
     __tablename__ = "evidencias_arquivos"
 
     id = Column(Integer, primary_key=True)
-    auditoria_id = Column(ForeignKey("auditorias.id"), nullable=False)
-    requisito_id = Column(ForeignKey("requisitos.id"), nullable=False)
-    achado_id = Column(ForeignKey("achados.id"))
+    auditoria_id = Column(Integer, ForeignKey("auditorias.id"), nullable=False)
+    requisito_id = Column(Integer, ForeignKey("requisitos.id"), nullable=False)
+    achado_id = Column(Integer, ForeignKey("achados.id"))
     nome_arquivo = Column(String(240), nullable=False)
     caminho_arquivo = Column(String(500), nullable=False)
     tipo_arquivo = Column(String(120))
