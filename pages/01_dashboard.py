@@ -16,9 +16,17 @@ init_db(); session = get_session(); user = require_login(session)
 if not user: st.stop()
 
 page_header("📊 Dashboard NR-12 Corporativo", "Sustentação da conformidade, prazos de verificação, desvios críticos e governança por site.")
+refresh_errors = 0
 for m in session.query(Machine).all():
-    update_machine_suggestion(session, m, user.name)
-session.commit()
+    try:
+        update_machine_suggestion(session, m, user.name)
+    except Exception:
+        session.rollback()
+        refresh_errors += 1
+if refresh_errors:
+    st.warning(f"{refresh_errors} máquina(s) não tiveram o status recalculado automaticamente. Os dados seguem disponíveis para consulta.")
+else:
+    session.commit()
 
 sites = session.query(Site).order_by(Site.code).all()
 allowed = sites if user.role == "Admin Corporativo" else [user.site]
