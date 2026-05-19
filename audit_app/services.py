@@ -14,6 +14,15 @@ from audit_app.models import Achado, Auditoria, Diretiva, EvidenciaArquivo, Requ
 from audit_app.seed import ensure_auditoria_checklist
 
 
+def normalizar_nota_maturidade(value):
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return max(0, min(5, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def conformidade_percentual(df):
     if df.empty or "status" not in df:
         return 0.0
@@ -100,10 +109,9 @@ def salvar_respostas(session, edited_df, avaliado_por):
         resp = session.get(RespostaChecklist, int(row["id"]))
         if not resp:
             continue
-        nota = row.get("nota_maturidade")
         resp.aplicavel = bool(row.get("aplicavel", True))
         resp.status_conformidade = "Não Aplicável" if not resp.aplicavel else row.get("status", "Conforme")
-        resp.nota_maturidade = None if pd.isna(nota) else max(0, min(5, int(nota)))
+        resp.nota_maturidade = normalizar_nota_maturidade(row.get("nota_maturidade"))
         resp.evidencia_verificada = row.get("evidencia_verificada", "")
         resp.comentario_auditor = row.get("comentario_auditor", "")
         resp.necessita_acao = bool(row.get("necessita_acao", False))
@@ -166,7 +174,7 @@ def export_relatorio_pdf(session, auditoria_id):
         for item in ach.head(10).to_dict("records"):
             story.append(Paragraph(f"{pdf_text(item['tipo_achado'])} - {pdf_text(item['descricao'])} - {pdf_text(item['status'])}", styles["BodyText"]))
     story.append(Spacer(1, 12))
-    story.append(Paragraph("Conclusão: utilizar este relatório como base para reunião de fechamento, priorização do PAC e acompanhamento de EHS.", styles["BodyText"]))
+    story.append(Paragraph("Conclusão: utilizar este relatório como base para reunião de fechamento, priorização do PAC e acompanhamento de EHS.", styles["BodyText"]));
     doc.build(story)
     output.seek(0)
     return output.read()
