@@ -53,66 +53,6 @@ def _load_machine_for_status(session: Session, machine: Machine) -> Machine:
     )
 
 
-def suggest_machine_status(session: Session, machine: Machine) -> tuple[str, list[str]]:
-    machine = _load_machine_for_status(session, machine)
-    reasons: list[str] = []
-    today = date.today()
-    open_actions = [a for a in machine.actions if a.status not in {"Concluída", "Cancelada"}]
-    if any(a.classification == "Crítico" and (a.status == "Vencida" or (a.due_date and a.due_date < today)) for a in open_actions):
-        reasons.append("Ação crítica vencida")
-        return "Bloqueada por desvio crítico", reasons
-    if any(a.classification == "Crítico" for a in open_actions):
-        reasons.append("Ação crítica aberta")
-        return "Bloqueada por desvio crítico", reasons
-    docs_by_type = {d.document_type: document_status(d.expiry_date, d.status) for d in machine.documents}
-    missing = [doc for doc in MANDATORY_DOCUMENTS if not getattr(machine, {"Laudo NR-12": "has_nr12_report", "ART": "has_art", "Apreciação de risco": "has_risk_assessment"}[doc]) and doc not in docs_by_type]
-    expired = [doc for doc, status in docs_by_type.items() if doc in MANDATORY_DOCUMENTS and status == "Vencido"]
-    if missing or expired:
-        reasons.append("Documentação legal essencial ausente ou vencida")
-        return "Pendente de ação não crítica", reasons
-    latest_audit = session.query(Audit).filter_by(machine_id=machine.id).order_by(Audit.audit_date.desc(), Audit.id.desc()).first()
-    if latest_audit and latest_audit.result == "Bloqueada por desvio crítico":
-        reasons.append("Última auditoria exigiu bloqueio")
-        return "Bloqueada por desvio crítico", reasons
-    if latest_audit and latest_audit.result == "Pendente de ação não crítica":
-        reasons.append("Última auditoria com pendência não crítica")
-        return "Pendente de ação não crítica", reasons
-    critical_pending_change = any(c.impacts_safety and c.status in {"Solicitada", "Em análise", "Implementada"} and not (c.ehs_approval and (c.maintenance_approval or c.engineering_approval)) for c in machine.changes)
-    if critical_pending_change:
-        reasons.append("Mudança crítica sem validação/aprovação")
-        return "Bloqueada por desvio crítico", reasons
-    if open_actions:
-        reasons.append("Ações maiores/menores abertas")
-    if not latest_audit:
-        reasons.append("Sem auditoria registrada")
-    elif latest_audit.result == "Conforme com observação":
-        reasons.append("Última auditoria com observação")
-    ehs_due = next_due_date(session, machine, "Auditoria EHS")
-    if ehs_due and ehs_due < today:
-        reasons.append("Auditoria EHS vencida")
-        return "Pendente de ação não crítica", reasons
-    if ehs_due and ehs_due <= today + timedelta(days=60):
-        reasons.append("Auditoria EHS próxima do vencimento")
-    post_moc_pending = any(c.status == "Implementada" and c.needs_post_change_audit for c in machine.changes)
-    if post_moc_pending:
-        reasons.append("Mudança implementada aguardando auditoria pós-MOC")
-    if reasons:
-        return "Conforme com observação", reasons
-    return "Conforme", ["Requisitos essenciais atendidos"]
-
-
-def update_machine_suggestion(session: Session, machine: Machine, changed_by: str | None = None) -> str:
-    machine = _load_machine_for_status(session, machine)
-    new_status, reasons = suggest_machine_status(session, machine)
-    previous = machine.suggested_status or machine.nr12_status
-    machine.suggested_status = new_status
-    if machine.nr12_status not in {"Fora de uso", "Não aplicável", "Em readequação"}:
-        machine.nr12_status = new_status
-    if previous != new_status:
-        session.add(StatusHistory(machine_id=machine.id, previous_status=previous, new_status=new_status, reason="; ".join(reasons), changed_by=changed_by))
-    return new_status
-
-
 def latest_audit_date(session: Session, machine: Machine, audit_type: str) -> date | None:
     audit = (
         session.query(Audit)
@@ -139,11 +79,71 @@ def next_due_date(session: Session, machine: Machine, audit_type: str) -> date |
     return base + timedelta(days=interval)
 
 
+def suggest_machine_status(session: Session, machine: Machine) -> tuple[str, list[str]]:
+    machine = _load_machine_for_status(session, machine)
+    reasons: list[str] = []
+    today = date.today()
+    open_actions = [a for a in machine.actions if a.status not in {"Concluída", "Cancelada"}]
+    if any(a.classification == "Crítico" and (a.status == "Vencida" or (a.due_date and a.due_date < today)) for a in open_actions):
+        return "Bloqueada por desvio crítico", ["Ação crítica vencida"]
+    if any(a.classification == "Crítico" for a in open_actions):
+        return "Bloqueada por desvio crítico", ["Ação crítica aberta"]
+
+    docs_by_type = {d.document_type: document_status(d.expiry_date, d.status) for d in machine.documents}
+    missing = [doc for doc in MANDATORY_DOCUMENTS if not getattr(machine, {"Laudo NR-12": "has_nr12_report", "ART": "has_art", "Apreciação de risco": "has_risk_assessment"}[doc]) and doc not in docs_by_type]
+    expired = [doc for doc, status in docs_by_type.items() if doc in MANDATORY_DOCUMENTS and status == "Vencido"]
+    if missing or expired:
+        return "Pendente de ação não crítica", ["Documentação legal essencial ausente ou vencida"]
+
+    latest_audit = session.query(Audit).filter_by(machine_id=machine.id).order_by(Audit.audit_date.desc(), Audit.id.desc()).first()
+    if latest_audit and latest_audit.result == "Bloqueada por desvio crítico":
+        return "Bloqueada por desvio crítico", ["Última auditoria exigiu bloqueio"]
+    if latest_audit and latest_audit.result == "Pendente de ação não crítica":
+        return "Pendente de ação não crítica", ["Última auditoria com pendência não crítica"]
+
+    critical_pending_change = any(c.impacts_safety and c.status in {"Solicitada", "Em análise", "Implementada"} and not (c.ehs_approval and (c.maintenance_approval or c.engineering_approval)) for c in machine.changes)
+    if critical_pending_change:
+        return "Bloqueada por desvio crítico", ["Mudança crítica sem validação/aprovação"]
+
+    if open_actions:
+        reasons.append("Ações maiores/menores abertas")
+    if not latest_audit:
+        reasons.append("Sem auditoria registrada")
+    elif latest_audit.result == "Conforme com observação":
+        reasons.append("Última auditoria com observação")
+
+    ehs_due = next_due_date(session, machine, "Auditoria EHS")
+    if ehs_due and ehs_due < today:
+        return "Pendente de ação não crítica", ["Auditoria EHS vencida"]
+    if ehs_due and ehs_due <= today + timedelta(days=60):
+        reasons.append("Auditoria EHS próxima do vencimento")
+
+    if any(c.status == "Implementada" and c.needs_post_change_audit for c in machine.changes):
+        reasons.append("Mudança implementada aguardando auditoria pós-MOC")
+    if reasons:
+        return "Conforme com observação", reasons
+    return "Conforme", ["Requisitos essenciais atendidos"]
+
+
+def update_machine_suggestion(session: Session, machine: Machine, changed_by: str | None = None) -> str:
+    machine = _load_machine_for_status(session, machine)
+    new_status, reasons = suggest_machine_status(session, machine)
+    previous = machine.suggested_status or machine.nr12_status
+    machine.suggested_status = new_status
+    if machine.nr12_status not in {"Fora de uso", "Não aplicável", "Em readequação"}:
+        machine.nr12_status = new_status
+    if previous != new_status:
+        session.add(StatusHistory(machine_id=machine.id, previous_status=previous, new_status=new_status, reason="; ".join(reasons), changed_by=changed_by))
+    return new_status
+
+
 def audit_schedule_df(session: Session, machine_ids: list[int] | None = None) -> pd.DataFrame:
     rows = []
     today = date.today()
     query = session.query(Machine).join(Site).order_by(Site.code, Machine.machine_code)
     if machine_ids is not None:
+        if not machine_ids:
+            return pd.DataFrame(rows)
         query = query.filter(Machine.id.in_(machine_ids))
     for machine in query.all():
         for audit_type in SCHEDULED_AUDIT_TYPES:
@@ -152,12 +152,7 @@ def audit_schedule_df(session: Session, machine_ids: list[int] | None = None) ->
                 continue
             latest = latest_audit_date(session, machine, audit_type)
             days = (due - today).days
-            if days < 0:
-                status = "Vencida"
-            elif days <= 30:
-                status = "Próxima"
-            else:
-                status = "Programada"
+            status = "Vencida" if days < 0 else "Próxima" if days <= 30 else "Programada"
             rows.append({
                 "ID": machine.id,
                 "Site": machine.site.code,
