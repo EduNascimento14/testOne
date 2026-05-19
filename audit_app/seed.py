@@ -1,7 +1,5 @@
-from datetime import date, timedelta
-
-from audit_app.constants import CHECKLIST_BASE, CHECKLIST_NR12, CRITICIDADES, SITES_PADRAO
-from audit_app.models import Auditoria, ChecklistItemNR12, Diretiva, MaquinaNR12, Requisito, RespostaChecklist, Site, Usuario
+from audit_app.constants import CHECKLIST_BASE, CRITICIDADES, SITES_PADRAO
+from audit_app.models import Auditoria, Diretiva, Requisito, RespostaChecklist, Site, Usuario
 
 
 def logical_requisito_codes():
@@ -22,7 +20,15 @@ def ensure_auditoria_checklist(session, auditoria_id):
     criados = 0
     for requisito in session.query(Requisito).filter_by(ativo=True).all():
         if requisito.id not in existentes:
-            session.add(RespostaChecklist(auditoria_id=auditoria_id, requisito_id=requisito.id, aplicavel=True, status_conformidade="Conforme", nota_maturidade=3))
+            session.add(
+                RespostaChecklist(
+                    auditoria_id=auditoria_id,
+                    requisito_id=requisito.id,
+                    aplicavel=True,
+                    status_conformidade="Conforme",
+                    nota_maturidade=3,
+                )
+            )
             criados += 1
     return criados
 
@@ -45,8 +51,6 @@ def seed_usuarios(session):
         ("Capitu", "capitu@empresa.local", "Admin_LAG", None),
         ("EHS Local SJC", "ehs.sjc@empresa.local", "EHS_Local", sjc),
         ("Auditor Corporativo", "auditor.corporativo@empresa.local", "Auditor", None),
-        ("Manutenção SJC", "manutencao.sjc@empresa.local", "Manutencao", sjc),
-        ("Operação SJC", "operacao.sjc@empresa.local", "Producao_Operacao", sjc),
     ]
     for nome, email, perfil, site in usuarios:
         user = session.query(Usuario).filter_by(email=email).one_or_none()
@@ -94,45 +98,10 @@ def seed_checklist_ehs(session):
             requisito.ativo = False
 
 
-def seed_checklist_nr12(session):
-    valid_codes = set()
-    for tipo, itens in CHECKLIST_NR12.items():
-        for codigo, pergunta, criticidade in itens:
-            valid_codes.add(codigo)
-            item = session.query(ChecklistItemNR12).filter_by(codigo=codigo).one_or_none()
-            if item is None:
-                session.add(ChecklistItemNR12(tipo_verificacao=tipo, codigo=codigo, pergunta=pergunta, criticidade=criticidade, evidencia_esperada="Registro, inspeção visual, teste funcional ou evidência documental", ativo=True))
-            else:
-                item.tipo_verificacao = tipo
-                item.pergunta = pergunta
-                item.criticidade = criticidade
-                item.ativo = True
-    for item in session.query(ChecklistItemNR12).all():
-        if item.codigo not in valid_codes:
-            item.ativo = False
-
-
-def seed_maquinas_minimas(session):
-    if session.query(MaquinaNR12).count():
-        return
-    sjc = session.query(Site).filter_by(codigo="SJC").one_or_none()
-    dia = session.query(Site).filter_by(codigo="DIA").one_or_none()
-    if not sjc:
-        return
-    maquinas = [
-        {"codigo": "SJC-PR-001", "site_id": sjc.id, "area_setor": "Manufatura", "linha_processo": "Linha A", "nome": "Prensa hidráulica 01", "fabricante": "Fabricante A", "modelo": "PH-500", "ano": 2018, "tipo_equipamento": "Prensa", "responsavel_area": "Produção", "criticidade": "Crítico", "status_nr12": "Conforme com observação", "ultima_adequacao_nr12": date.today() - timedelta(days=300), "ultima_auditoria": date.today() - timedelta(days=90), "proxima_auditoria_prevista": date.today() + timedelta(days=90), "possui_laudo_nr12": True, "possui_art": True, "possui_apreciacao_risco": True, "possui_manual_atualizado": True, "possui_treinamento": True},
-        {"codigo": "DIA-CV-002", "site_id": dia.id if dia else sjc.id, "area_setor": "Embalagem", "linha_processo": "Linha B", "nome": "Transportador de caixas", "fabricante": "Fabricante B", "modelo": "TC-200", "ano": 2020, "tipo_equipamento": "Transportador", "responsavel_area": "Operação", "criticidade": "Alto", "status_nr12": "Pendente de ação não crítica", "proxima_auditoria_prevista": date.today() - timedelta(days=10), "possui_laudo_nr12": False, "possui_art": True, "possui_apreciacao_risco": True, "possui_manual_atualizado": False, "possui_treinamento": True},
-    ]
-    for data in maquinas:
-        session.add(MaquinaNR12(**data))
-
-
 def seed_base(session):
     seed_sites(session)
     seed_usuarios(session)
     seed_checklist_ehs(session)
-    seed_checklist_nr12(session)
-    seed_maquinas_minimas(session)
     for auditoria in session.query(Auditoria).all():
         ensure_auditoria_checklist(session, auditoria.id)
 
@@ -140,5 +109,8 @@ def seed_base(session):
 def validate_seed(session):
     total_categorias = session.query(Diretiva).filter(Diretiva.ativa.is_(True)).count()
     total_requisitos = session.query(Requisito).filter(Requisito.ativo.is_(True)).count()
-    total_nr12 = session.query(ChecklistItemNR12).filter(ChecklistItemNR12.ativo.is_(True)).count()
-    return {"categorias": total_categorias, "requisitos_ativos": total_requisitos, "itens_nr12": total_nr12, "base_ok": total_categorias >= 8 and total_requisitos >= 80 and total_nr12 >= 15}
+    return {
+        "categorias": total_categorias,
+        "requisitos_ativos": total_requisitos,
+        "base_ok": total_categorias >= 8 and total_requisitos >= 80,
+    }
