@@ -1,1 +1,1 @@
-"""Aplicativo modular de Auditoria Cruzada de EHS Directives."""
+"""Plataforma integrada EHS."""
