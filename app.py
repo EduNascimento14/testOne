@@ -1,3 +1,6 @@
+from pathlib import Path
+from xml.sax.saxutils import escape
+
 import streamlit as st
 
 from audit_app.constants import APP_TITLE
@@ -12,8 +15,10 @@ from audit_app.pages import (
     page_sites,
     page_usuarios,
 )
-from audit_app.ui import apply_theme, header, portal_card, sidebar_user
+from audit_app.ui import apply_theme, header, sidebar_user
 
+
+NR12_DASHBOARD = "pages/01_dashboard.py"
 
 AUDITORIA_NAV = {
     "Dashboard Auditoria Cruzada": page_dashboard_ehs,
@@ -27,12 +32,35 @@ AUDITORIA_NAV = {
 }
 
 
+def portal_card(title, description):
+    st.markdown(
+        f"<div class='portal-card'><h2>{escape(str(title))}</h2><p>{escape(str(description))}</p></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def nr12_page_disponivel():
+    return Path(NR12_DASHBOARD).exists()
+
+
 def abrir_nr12():
-    try:
-        st.switch_page("pages/01_dashboard.py")
-    except Exception:
-        st.session_state["mostrar_link_nr12"] = True
-        st.rerun()
+    if nr12_page_disponivel() and hasattr(st, "switch_page"):
+        try:
+            st.switch_page(NR12_DASHBOARD)
+        except Exception:
+            pass
+    st.session_state["mostrar_link_nr12"] = True
+    st.rerun()
+
+
+def render_link_nr12():
+    if not st.session_state.get("mostrar_link_nr12"):
+        return
+    if nr12_page_disponivel() and hasattr(st, "page_link"):
+        st.info("Acesse o módulo de Sustentação NR-12 pelo link abaixo.")
+        st.page_link(NR12_DASHBOARD, label="Abrir Sustentação NR-12")
+    else:
+        st.warning("O módulo de Sustentação NR-12 não está disponível neste deploy. Verifique se as páginas NR-12 foram publicadas no repositório.")
 
 
 def page_portal(session, user):
@@ -55,12 +83,7 @@ def page_portal(session, user):
         if st.button("Acessar Sustentação NR-12", use_container_width=True):
             abrir_nr12()
 
-    if st.session_state.get("mostrar_link_nr12"):
-        st.info("Acesse o módulo de Sustentação NR-12 pelo link abaixo.")
-        if hasattr(st, "page_link"):
-            st.page_link("pages/01_dashboard.py", label="Abrir Sustentação NR-12")
-        else:
-            st.warning("Abra a página de Sustentação NR-12 pelo menu lateral do Streamlit.")
+    render_link_nr12()
 
 
 def sidebar_auditoria():
@@ -81,7 +104,7 @@ def render_auditoria_cruzada(page, session, user):
 
 
 def main():
-    st.set_page_config(page_title=APP_TITLE, page_icon="EHS", layout="wide")
+    st.set_page_config(page_title=APP_TITLE, page_icon="🛡️", layout="wide")
     apply_theme()
     try:
         init_db()
