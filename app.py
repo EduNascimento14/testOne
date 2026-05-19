@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 import os
 from contextlib import contextmanager
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import pandas as pd
 import plotly.express as px
@@ -30,143 +29,18 @@ PRIORIDADES = ["Alta", "Média", "Baixa"]
 CRITICIDADES = ["Crítico", "Alto", "Médio", "Baixo"]
 PERFIS = ["Admin_LAG", "EHS_Local", "Auditor", "Visualizador", "Responsavel_Acao"]
 
+RESPOSTAS_COLUMNS = ["id", "auditoria_id", "auditoria", "site", "ciclo", "diretiva", "codigo_requisito", "pergunta", "criticidade", "aplicavel", "status", "nota_maturidade", "evidencia_verificada", "comentario_auditor", "necessita_acao"]
+ACHADOS_COLUMNS = ["id", "auditoria", "site", "requisito", "tipo_achado", "descricao", "responsavel", "prazo", "status", "prioridade", "vencido"]
+
 CHECKLIST_BASE = [
-    {
-        "codigo": "EHS-01",
-        "titulo": "Liderança e Gestão EHS",
-        "descricao": "Governança, responsabilidades, indicadores e cultura de EHS.",
-        "perguntas": [
-            "Existe política de EHS formalizada e comunicada?",
-            "A liderança participa ativamente das ações de EHS?",
-            "Existem metas e indicadores de EHS definidos?",
-            "Os indicadores são monitorados periodicamente?",
-            "Existem reuniões periódicas de EHS?",
-            "Existe definição clara de responsabilidades EHS?",
-            "A organização promove cultura de reporte sem culpa?",
-            "Existem mecanismos formais de melhoria contínua?",
-            "Os riscos críticos são acompanhados pela liderança?",
-            "Existe integração entre EHS e operação?",
-        ],
-    },
-    {
-        "codigo": "EHS-02",
-        "titulo": "Conformidade Legal",
-        "descricao": "Gestão de requisitos legais, licenças, evidências e prazos.",
-        "perguntas": [
-            "Existe levantamento atualizado de requisitos legais?",
-            "As licenças ambientais estão válidas?",
-            "Existem controles para condicionantes legais?",
-            "Os requisitos legais possuem evidências documentadas?",
-            "Existe monitoramento periódico de atendimento legal?",
-            "Há gestão de prazos legais?",
-            "Existe plano para adequação de não conformidades legais?",
-            "Existem auditorias legais periódicas?",
-            "Há rastreabilidade documental?",
-            "Os responsáveis legais estão definidos?",
-        ],
-    },
-    {
-        "codigo": "EHS-03",
-        "titulo": "Gestão de Riscos",
-        "descricao": "Identificação de perigos, avaliação de riscos e eficácia dos controles.",
-        "perguntas": [
-            "Existe processo formal de identificação de perigos?",
-            "Os riscos ocupacionais estão avaliados?",
-            "Existem controles implementados para riscos críticos?",
-            "Há hierarquia de controles aplicada?",
-            "Existe revisão periódica das análises de risco?",
-            "Mudanças operacionais passam por avaliação de risco?",
-            "Existe gestão de mudanças formal?",
-            "Há participação dos trabalhadores nas análises?",
-            "Os riscos ambientais estão avaliados?",
-            "Existe monitoramento de eficácia dos controles?",
-        ],
-    },
-    {
-        "codigo": "EHS-04",
-        "titulo": "Investigação de Incidentes",
-        "descricao": "Reporte, investigação, causas sistêmicas e ações corretivas.",
-        "perguntas": [
-            "Existe processo formal de investigação?",
-            "Os incidentes são reportados adequadamente?",
-            "As causas sistêmicas são avaliadas?",
-            "Há definição de ações corretivas?",
-            "Existe acompanhamento das ações?",
-            "Os aprendizados são compartilhados?",
-            "Há foco em melhoria do sistema e não culpabilização?",
-            "Near misses são investigados?",
-            "Existe rastreabilidade das investigações?",
-            "Indicadores de incidentes são monitorados?",
-        ],
-    },
-    {
-        "codigo": "EHS-05",
-        "titulo": "Treinamentos e Competências",
-        "descricao": "Matriz de treinamento, competências críticas e reciclagens.",
-        "perguntas": [
-            "Existe matriz de treinamento atualizada?",
-            "Os treinamentos obrigatórios estão válidos?",
-            "Há avaliação de eficácia dos treinamentos?",
-            "Os terceiros recebem treinamentos adequados?",
-            "Existe controle de vencimentos?",
-            "As competências críticas estão mapeadas?",
-            "Há registros formais dos treinamentos?",
-            "Existe integração EHS para novos colaboradores?",
-            "Os líderes recebem treinamento em EHS?",
-            "Existe reciclagem periódica?",
-        ],
-    },
-    {
-        "codigo": "EHS-06",
-        "titulo": "Gestão Ambiental",
-        "descricao": "Resíduos, MTR, CDF, emissões, efluentes e resposta ambiental.",
-        "perguntas": [
-            "Existe segregação adequada de resíduos?",
-            "Os resíduos possuem identificação?",
-            "Existe controle de MTR?",
-            "Os CDFs são controlados?",
-            "Há controle de empresas destinadoras?",
-            "Existem inspeções ambientais periódicas?",
-            "Há controle de emissões atmosféricas?",
-            "Existe controle de efluentes?",
-            "Existe plano de resposta ambiental?",
-            "Há monitoramento de indicadores ambientais?",
-        ],
-    },
-    {
-        "codigo": "EHS-07",
-        "titulo": "Segurança Operacional",
-        "descricao": "Máquinas, NR-12, bloqueio, EPI, permissões e controles críticos.",
-        "perguntas": [
-            "Máquinas possuem proteções adequadas?",
-            "Existe atendimento à NR-12?",
-            "Há bloqueio e etiquetagem implementados?",
-            "Os EPIs estão adequados?",
-            "Existe inspeção periódica de segurança?",
-            "Há controle de permissões de trabalho?",
-            "Existe controle de trabalho em altura?",
-            "Espaços confinados possuem gestão adequada?",
-            "Existe controle de energia perigosa?",
-            "Há inspeções comportamentais estruturadas?",
-        ],
-    },
-    {
-        "codigo": "EHS-08",
-        "titulo": "Preparação e Resposta a Emergências",
-        "descricao": "Plano de emergência, brigada, simulados e equipamentos críticos.",
-        "perguntas": [
-            "Existe plano de emergência atualizado?",
-            "Há brigada treinada?",
-            "Existem simulados periódicos?",
-            "Os equipamentos de emergência estão inspecionados?",
-            "Existe controle de produtos perigosos?",
-            "Há rotas de fuga sinalizadas?",
-            "Existe comunicação de emergência definida?",
-            "Os cenários críticos foram avaliados?",
-            "Existe integração com serviços externos?",
-            "Há registros dos simulados?",
-        ],
-    },
+    {"codigo": "EHS-01", "titulo": "Liderança e Gestão EHS", "descricao": "Governança, responsabilidades, indicadores e cultura de EHS.", "perguntas": ["Existe política de EHS formalizada e comunicada?", "A liderança participa ativamente das ações de EHS?", "Existem metas e indicadores de EHS definidos?", "Os indicadores são monitorados periodicamente?", "Existem reuniões periódicas de EHS?", "Existe definição clara de responsabilidades EHS?", "A organização promove cultura de reporte sem culpa?", "Existem mecanismos formais de melhoria contínua?", "Os riscos críticos são acompanhados pela liderança?", "Existe integração entre EHS e operação?"]},
+    {"codigo": "EHS-02", "titulo": "Conformidade Legal", "descricao": "Gestão de requisitos legais, licenças, evidências e prazos.", "perguntas": ["Existe levantamento atualizado de requisitos legais?", "As licenças ambientais estão válidas?", "Existem controles para condicionantes legais?", "Os requisitos legais possuem evidências documentadas?", "Existe monitoramento periódico de atendimento legal?", "Há gestão de prazos legais?", "Existe plano para adequação de não conformidades legais?", "Existem auditorias legais periódicas?", "Há rastreabilidade documental?", "Os responsáveis legais estão definidos?"]},
+    {"codigo": "EHS-03", "titulo": "Gestão de Riscos", "descricao": "Identificação de perigos, avaliação de riscos e eficácia dos controles.", "perguntas": ["Existe processo formal de identificação de perigos?", "Os riscos ocupacionais estão avaliados?", "Existem controles implementados para riscos críticos?", "Há hierarquia de controles aplicada?", "Existe revisão periódica das análises de risco?", "Mudanças operacionais passam por avaliação de risco?", "Existe gestão de mudanças formal?", "Há participação dos trabalhadores nas análises?", "Os riscos ambientais estão avaliados?", "Existe monitoramento de eficácia dos controles?"]},
+    {"codigo": "EHS-04", "titulo": "Investigação de Incidentes", "descricao": "Reporte, investigação, causas sistêmicas e ações corretivas.", "perguntas": ["Existe processo formal de investigação?", "Os incidentes são reportados adequadamente?", "As causas sistêmicas são avaliadas?", "Há definição de ações corretivas?", "Existe acompanhamento das ações?", "Os aprendizados são compartilhados?", "Há foco em melhoria do sistema e não culpabilização?", "Near misses são investigados?", "Existe rastreabilidade das investigações?", "Indicadores de incidentes são monitorados?"]},
+    {"codigo": "EHS-05", "titulo": "Treinamentos e Competências", "descricao": "Matriz de treinamento, competências críticas e reciclagens.", "perguntas": ["Existe matriz de treinamento atualizada?", "Os treinamentos obrigatórios estão válidos?", "Há avaliação de eficácia dos treinamentos?", "Os terceiros recebem treinamentos adequados?", "Existe controle de vencimentos?", "As competências críticas estão mapeadas?", "Há registros formais dos treinamentos?", "Existe integração EHS para novos colaboradores?", "Os líderes recebem treinamento em EHS?", "Existe reciclagem periódica?"]},
+    {"codigo": "EHS-06", "titulo": "Gestão Ambiental", "descricao": "Resíduos, MTR, CDF, emissões, efluentes e resposta ambiental.", "perguntas": ["Existe segregação adequada de resíduos?", "Os resíduos possuem identificação?", "Existe controle de MTR?", "Os CDFs são controlados?", "Há controle de empresas destinadoras?", "Existem inspeções ambientais periódicas?", "Há controle de emissões atmosféricas?", "Existe controle de efluentes?", "Existe plano de resposta ambiental?", "Há monitoramento de indicadores ambientais?"]},
+    {"codigo": "EHS-07", "titulo": "Segurança Operacional", "descricao": "Máquinas, NR-12, bloqueio, EPI, permissões e controles críticos.", "perguntas": ["Máquinas possuem proteções adequadas?", "Existe atendimento à NR-12?", "Há bloqueio e etiquetagem implementados?", "Os EPIs estão adequados?", "Existe inspeção periódica de segurança?", "Há controle de permissões de trabalho?", "Existe controle de trabalho em altura?", "Espaços confinados possuem gestão adequada?", "Existe controle de energia perigosa?", "Há inspeções comportamentais estruturadas?"]},
+    {"codigo": "EHS-08", "titulo": "Preparação e Resposta a Emergências", "descricao": "Plano de emergência, brigada, simulados e equipamentos críticos.", "perguntas": ["Existe plano de emergência atualizado?", "Há brigada treinada?", "Existem simulados periódicos?", "Os equipamentos de emergência estão inspecionados?", "Existe controle de produtos perigosos?", "Há rotas de fuga sinalizadas?", "Existe comunicação de emergência definida?", "Os cenários críticos foram avaliados?", "Existe integração com serviços externos?", "Há registros dos simulados?"]},
 ]
 
 
@@ -338,15 +212,10 @@ def seed_base(session: Session) -> None:
     session.flush()
 
     primeiro_site = session.query(Site).filter_by(codigo="SJC").one_or_none()
-    usuarios = [
-        ("Admin EHS", "admin.ehs@empresa.local", "Admin_LAG", primeiro_site),
-        ("Auditor EHS", "auditor.ehs@empresa.local", "Auditor", primeiro_site),
-        ("Visualizador EHS", "visualizador.ehs@empresa.local", "Visualizador", primeiro_site),
-    ]
-    for nome, email, perfil, site in usuarios:
+    for nome, email, perfil in [("Admin EHS", "admin.ehs@empresa.local", "Admin_LAG"), ("Auditor EHS", "auditor.ehs@empresa.local", "Auditor"), ("Visualizador EHS", "visualizador.ehs@empresa.local", "Visualizador")]:
         user = session.query(Usuario).filter_by(email=email).one_or_none()
         if user is None:
-            session.add(Usuario(nome=nome, email=email, perfil=perfil, site_id=site.id if site else None, ativo=True))
+            session.add(Usuario(nome=nome, email=email, perfil=perfil, site_id=primeiro_site.id if primeiro_site else None, ativo=True))
         else:
             user.ativo = True
             user.perfil = perfil
@@ -368,18 +237,7 @@ def seed_base(session: Session) -> None:
             codigo_req = f"{cat['codigo']}-{idx:02d}"
             requisito = session.query(Requisito).filter_by(codigo_requisito=codigo_req).one_or_none()
             if requisito is None:
-                session.add(
-                    Requisito(
-                        diretiva_id=diretiva.id,
-                        codigo_requisito=codigo_req,
-                        pergunta=pergunta,
-                        orientacao="Avaliar documentos, registros, entrevistas e verificação em campo.",
-                        criticidade=criticidade_por_texto(pergunta),
-                        tipo_evidencia_esperada="Documento / Registro / Entrevista / Campo",
-                        area_responsavel_sugerida="EHS / Área responsável",
-                        ativo=True,
-                    )
-                )
+                session.add(Requisito(diretiva_id=diretiva.id, codigo_requisito=codigo_req, pergunta=pergunta, orientacao="Avaliar documentos, registros, entrevistas e verificação em campo.", criticidade=criticidade_por_texto(pergunta), tipo_evidencia_esperada="Documento / Registro / Entrevista / Campo", area_responsavel_sugerida="EHS / Área responsável", ativo=True))
             else:
                 requisito.diretiva_id = diretiva.id
                 requisito.pergunta = pergunta
@@ -440,7 +298,7 @@ def can_edit_action(user: Usuario | None, achado: Achado | None = None) -> bool:
 
 
 def conformidade_percentual(df: pd.DataFrame) -> float:
-    if df.empty:
+    if df.empty or "status" not in df:
         return 0.0
     valid = df[df["status"] != "Não Aplicável"]
     if valid.empty:
@@ -450,7 +308,7 @@ def conformidade_percentual(df: pd.DataFrame) -> float:
 
 
 def maturidade_media(df: pd.DataFrame) -> float:
-    if df.empty or "nota_maturidade" not in df:
+    if df.empty or "nota_maturidade" not in df or "status" not in df:
         return 0.0
     valid = df[(df["status"] != "Não Aplicável") & (df["nota_maturidade"].notna())]
     return round(float(valid["nota_maturidade"].mean()), 2) if not valid.empty else 0.0
@@ -472,24 +330,8 @@ def respostas_df(session: Session, auditoria_id: int | None = None) -> pd.DataFr
         q = q.filter(Auditoria.id == auditoria_id)
     rows = []
     for resp, aud, req, dir_, site in q.all():
-        rows.append({
-            "id": resp.id,
-            "auditoria_id": aud.id,
-            "auditoria": aud.nome,
-            "site": site.codigo,
-            "ciclo": aud.ciclo,
-            "diretiva": dir_.titulo,
-            "codigo_requisito": req.codigo_requisito,
-            "pergunta": req.pergunta,
-            "criticidade": req.criticidade,
-            "aplicavel": resp.aplicavel,
-            "status": resp.status_conformidade,
-            "nota_maturidade": resp.nota_maturidade,
-            "evidencia_verificada": resp.evidencia_verificada or "",
-            "comentario_auditor": resp.comentario_auditor or "",
-            "necessita_acao": resp.necessita_acao,
-        })
-    return pd.DataFrame(rows)
+        rows.append({"id": resp.id, "auditoria_id": aud.id, "auditoria": aud.nome, "site": site.codigo, "ciclo": aud.ciclo, "diretiva": dir_.titulo, "codigo_requisito": req.codigo_requisito, "pergunta": req.pergunta, "criticidade": req.criticidade, "aplicavel": resp.aplicavel, "status": resp.status_conformidade, "nota_maturidade": resp.nota_maturidade, "evidencia_verificada": resp.evidencia_verificada or "", "comentario_auditor": resp.comentario_auditor or "", "necessita_acao": resp.necessita_acao})
+    return pd.DataFrame(rows, columns=RESPOSTAS_COLUMNS)
 
 
 def achados_df(session: Session, auditoria_id: int | None = None) -> pd.DataFrame:
@@ -500,44 +342,20 @@ def achados_df(session: Session, auditoria_id: int | None = None) -> pd.DataFram
     today = date.today()
     for ach, aud, site, req in q.all():
         vencido = bool(ach.prazo and ach.prazo < today and ach.status not in ["Concluído", "Cancelado"])
-        rows.append({
-            "id": ach.id,
-            "auditoria": aud.nome,
-            "site": site.codigo,
-            "requisito": req.codigo_requisito if req else "-",
-            "tipo_achado": ach.tipo_achado,
-            "descricao": ach.descricao,
-            "responsavel": ach.responsavel or "",
-            "prazo": ach.prazo,
-            "status": "Vencido" if vencido else ach.status,
-            "prioridade": ach.prioridade,
-            "vencido": vencido,
-        })
-    return pd.DataFrame(rows)
+        rows.append({"id": ach.id, "auditoria": aud.nome, "site": site.codigo, "requisito": req.codigo_requisito if req else "-", "tipo_achado": ach.tipo_achado, "descricao": ach.descricao, "responsavel": ach.responsavel or "", "prazo": ach.prazo, "status": "Vencido" if vencido else ach.status, "prioridade": ach.prioridade, "vencido": vencido})
+    return pd.DataFrame(rows, columns=ACHADOS_COLUMNS)
 
 
 def pontuacao_por(df: pd.DataFrame, coluna: str) -> pd.DataFrame:
     if df.empty or coluna not in df:
         return pd.DataFrame(columns=[coluna, "conformidade", "maturidade"])
-    rows = []
-    for valor, grupo in df.groupby(coluna):
-        rows.append({coluna: valor, "conformidade": conformidade_percentual(grupo), "maturidade": maturidade_media(grupo)})
-    return pd.DataFrame(rows)
+    return pd.DataFrame([{coluna: valor, "conformidade": conformidade_percentual(grupo), "maturidade": maturidade_media(grupo)} for valor, grupo in df.groupby(coluna)], columns=[coluna, "conformidade", "maturidade"])
 
 
 def dashboard_kpis(session: Session) -> dict[str, int | float]:
     df = respostas_df(session)
     ach = achados_df(session)
-    return {
-        "planejadas": session.query(Auditoria).filter_by(status="Planejada").count(),
-        "em_andamento": session.query(Auditoria).filter_by(status="Em andamento").count(),
-        "concluidas": session.query(Auditoria).filter_by(status="Concluída").count(),
-        "conformidade_media": conformidade_percentual(df),
-        "maturidade_media": maturidade_media(df),
-        "achados_abertos": int((ach["status"].isin(["Aberto", "Em andamento", "Vencido"])).sum()) if not ach.empty else 0,
-        "achados_vencidos": int(ach["vencido"].sum()) if not ach.empty else 0,
-        "nc_criticas_abertas": session.query(Achado).filter(Achado.tipo_achado == "Não conformidade crítica", Achado.status.in_(["Aberto", "Em andamento", "Vencido"])).count(),
-    }
+    return {"planejadas": session.query(Auditoria).filter_by(status="Planejada").count(), "em_andamento": session.query(Auditoria).filter_by(status="Em andamento").count(), "concluidas": session.query(Auditoria).filter_by(status="Concluída").count(), "conformidade_media": conformidade_percentual(df), "maturidade_media": maturidade_media(df), "achados_abertos": int(ach["status"].isin(["Aberto", "Em andamento", "Vencido"]).sum()) if not ach.empty else 0, "achados_vencidos": int(ach["vencido"].sum()) if not ach.empty else 0, "nc_criticas_abertas": session.query(Achado).filter(Achado.tipo_achado == "Não conformidade crítica", Achado.status.in_(["Aberto", "Em andamento", "Vencido"])).count()}
 
 
 def criar_auditoria(session: Session, **data) -> Auditoria:
@@ -555,9 +373,10 @@ def salvar_respostas(session: Session, edited_df: pd.DataFrame, avaliado_por: st
         resp = session.get(RespostaChecklist, int(row["id"]))
         if not resp:
             continue
+        nota = row.get("nota_maturidade")
         resp.aplicavel = bool(row.get("aplicavel", True))
         resp.status_conformidade = "Não Aplicável" if not resp.aplicavel else row.get("status", "Conforme")
-        resp.nota_maturidade = None if pd.isna(row.get("nota_maturidade")) else int(row.get("nota_maturidade"))
+        resp.nota_maturidade = None if pd.isna(nota) else max(0, min(5, int(nota)))
         resp.evidencia_verificada = row.get("evidencia_verificada", "")
         resp.comentario_auditor = row.get("comentario_auditor", "")
         resp.necessita_acao = bool(row.get("necessita_acao", False))
@@ -567,9 +386,13 @@ def salvar_respostas(session: Session, edited_df: pd.DataFrame, avaliado_por: st
 
 def salvar_upload(uploaded_file, auditoria_id: int, requisito_id: int, achado_id: int | None, enviado_por: str | None, session: Session) -> None:
     safe_name = Path(uploaded_file.name).name
-    path = UPLOAD_DIR / f"aud{auditoria_id}_req{requisito_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{safe_name}"
+    path = UPLOAD_DIR / f"aud{auditoria_id}_req{requisito_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}_{safe_name}"
     path.write_bytes(uploaded_file.getbuffer())
     session.add(EvidenciaArquivo(auditoria_id=auditoria_id, requisito_id=requisito_id, achado_id=achado_id, nome_arquivo=safe_name, caminho_arquivo=str(path), tipo_arquivo=getattr(uploaded_file, "type", None), enviado_por=enviado_por))
+
+
+def pdf_text(value: object) -> str:
+    return escape("" if value is None else str(value))
 
 
 def export_checklist_excel(session: Session, auditoria_id: int) -> bytes:
@@ -599,8 +422,8 @@ def export_relatorio_pdf(session: Session, auditoria_id: int) -> bytes:
     doc = SimpleDocTemplate(output, pagesize=A4)
     styles = getSampleStyleSheet()
     story = [Paragraph(APP_TITLE, styles["Title"]), Spacer(1, 10)]
-    story.append(Paragraph(f"Auditoria: {auditoria.nome if auditoria else auditoria_id}", styles["Heading2"]))
-    story.append(Paragraph(f"Conformidade: {conformidade}% | Maturidade: {maturidade} | Resultado: {classificar_resultado(conformidade, nc_critica)}", styles["BodyText"]))
+    story.append(Paragraph(f"Auditoria: {pdf_text(auditoria.nome if auditoria else auditoria_id)}", styles["Heading2"]))
+    story.append(Paragraph(f"Conformidade: {conformidade}% | Maturidade: {maturidade} | Resultado: {pdf_text(classificar_resultado(conformidade, nc_critica))}", styles["BodyText"]))
     story.append(Spacer(1, 12))
     resultado = pontuacao_por(df, "diretiva")
     table_data = [["Categoria", "Conformidade", "Maturidade"]] + resultado.round(2).astype(str).values.tolist() if not resultado.empty else [["Categoria", "Conformidade", "Maturidade"]]
@@ -613,7 +436,7 @@ def export_relatorio_pdf(session: Session, auditoria_id: int) -> bytes:
         story.append(Paragraph("Não há registros de PAC para esta auditoria.", styles["BodyText"]))
     else:
         for item in ach.head(10).to_dict("records"):
-            story.append(Paragraph(f"{item['tipo_achado']} — {item['descricao']} — {item['status']}", styles["BodyText"]))
+            story.append(Paragraph(f"{pdf_text(item['tipo_achado'])} - {pdf_text(item['descricao'])} - {pdf_text(item['status'])}", styles["BodyText"]))
     story.append(Spacer(1, 12))
     story.append(Paragraph("Conclusão: utilizar este relatório como base para reunião de fechamento, priorização do PAC e acompanhamento de EHS.", styles["BodyText"]))
     doc.build(story)
@@ -622,77 +445,30 @@ def export_relatorio_pdf(session: Session, auditoria_id: int) -> bytes:
 
 
 def apply_theme() -> None:
-    st.markdown(
-        """
+    st.markdown("""
         <style>
-        :root {
-            --brand-bg: #f6f8fb;
-            --card-bg: #ffffff;
-            --muted: #5f6b7a;
-            --border: #e7ebf3;
-            --title: #12263f;
-            --accent: #1f4bb8;
-            --gold-1: #ffcd61;
-            --gold-2: #ffb91d;
-        }
-        .stApp { background: var(--brand-bg); }
-        section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, var(--gold-1) 0%, var(--gold-2) 100%) !important;
-            border-right: 1px solid rgba(18, 38, 63, 0.12);
-        }
-        section[data-testid="stSidebar"] * { color: #1f1f1f !important; }
-        section[data-testid="stSidebar"] [data-testid="stRadio"] label { font-weight: 700; }
-        .page-header {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 1rem 1.2rem;
-            margin-bottom: 1rem;
-            box-shadow: 0 4px 16px rgba(18, 38, 63, 0.05);
-        }
-        .page-header h1 { margin: 0; font-size: 1.55rem; color: var(--title); }
-        .page-header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.94rem; }
-        .block-shell, div[data-testid="stForm"], div[data-testid="stExpander"] {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 0.85rem 1rem;
-            box-shadow: 0 2px 8px rgba(18, 38, 63, 0.04);
-        }
-        .section-title { margin: 1.1rem 0 0.55rem; color: var(--title); font-size: 1.08rem; font-weight: 700; }
-        .kpi-card {
-            border: 1px solid var(--border);
-            background: var(--card-bg);
-            border-radius: 14px;
-            padding: 0.9rem 1rem;
-            box-shadow: 0 2px 8px rgba(18, 38, 63, 0.04);
-            min-height: 88px;
-        }
-        .kpi-label { color: var(--muted); font-size: 0.78rem; margin-bottom: 0.15rem; }
-        .kpi-value { color: var(--title); font-size: 1.25rem; font-weight: 800; }
-        .stButton button, .stDownloadButton button {
-            border-radius: 10px !important;
-            border: 1px solid #d9e0ec !important;
-            font-weight: 700 !important;
-        }
-        .stButton button[kind="primary"] { background: var(--accent) !important; color: white !important; }
-        div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] { border-radius: 14px; overflow: hidden; }
+        :root {--brand-bg:#f6f8fb;--card-bg:#ffffff;--muted:#5f6b7a;--border:#e7ebf3;--title:#12263f;--accent:#1f4bb8;--gold-1:#ffcd61;--gold-2:#ffb91d;}
+        .stApp {background:var(--brand-bg);} .block-container {padding-top:1.4rem;padding-bottom:2.2rem;}
+        section[data-testid="stSidebar"] {background:linear-gradient(180deg,var(--gold-1) 0%,var(--gold-2) 100%) !important;border-right:1px solid rgba(18,38,63,.12);}
+        section[data-testid="stSidebar"] * {color:#1f1f1f !important;} section[data-testid="stSidebar"] [data-testid="stRadio"] label {font-weight:700;}
+        .page-header {background:var(--card-bg);border:1px solid var(--border);border-radius:14px;padding:1rem 1.2rem;margin-bottom:1rem;box-shadow:0 4px 16px rgba(18,38,63,.05);} .page-header h1 {margin:0;font-size:1.55rem;color:var(--title);} .page-header p {margin:.35rem 0 0;color:var(--muted);font-size:.94rem;}
+        div[data-testid="stForm"], div[data-testid="stExpander"] {background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:.85rem 1rem;box-shadow:0 2px 8px rgba(18,38,63,.04);} .section-title {margin:1.1rem 0 .55rem;color:var(--title);font-size:1.08rem;font-weight:700;}
+        .kpi-card {border:1px solid var(--border);background:var(--card-bg);border-radius:12px;padding:.9rem 1rem;box-shadow:0 2px 8px rgba(18,38,63,.04);min-height:88px;} .kpi-label {color:var(--muted);font-size:.78rem;margin-bottom:.15rem;} .kpi-value {color:var(--title);font-size:1.25rem;font-weight:800;}
+        .stButton button, .stDownloadButton button {border-radius:10px !important;border:1px solid #d9e0ec !important;font-weight:700 !important;} .stButton button[kind="primary"] {background:var(--accent) !important;color:white !important;} div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {border-radius:12px;overflow:hidden;}
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    """, unsafe_allow_html=True)
 
 
 def header(title: str, subtitle: str = "") -> None:
-    st.markdown(f"<div class='page-header'><h1>{title}</h1><p>{subtitle}</p></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='page-header'><h1>{escape(title)}</h1><p>{escape(subtitle)}</p></div>", unsafe_allow_html=True)
 
 
 def section(title: str) -> None:
-    st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='section-title'>{escape(title)}</div>", unsafe_allow_html=True)
 
 
 def kpi_card(label: str, value: str | int | float) -> None:
-    st.markdown(f"<div class='kpi-card'><div class='kpi-label'>{label}</div><div class='kpi-value'>{value}</div></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='kpi-card'><div class='kpi-label'>{escape(str(label))}</div><div class='kpi-value'>{escape(str(value))}</div></div>", unsafe_allow_html=True)
 
 
 def sidebar_user(session: Session) -> Usuario | None:
@@ -700,8 +476,11 @@ def sidebar_user(session: Session) -> Usuario | None:
     st.sidebar.caption("Gestão corporativa de auditorias cruzadas")
     usuarios = session.query(Usuario).filter_by(ativo=True).order_by(Usuario.nome).all()
     if not usuarios:
+        st.sidebar.warning("Nenhum usuário ativo.")
         return None
-    return st.sidebar.selectbox("Usuário", usuarios, format_func=lambda u: f"{u.nome} · {u.perfil}")
+    labels = {u.id: f"{u.nome} · {u.perfil}" for u in usuarios}
+    selected_id = st.sidebar.selectbox("Usuário", list(labels), format_func=lambda user_id: labels[user_id])
+    return session.get(Usuario, selected_id)
 
 
 def select_auditoria(session: Session, label: str = "Auditoria") -> Auditoria | None:
@@ -709,7 +488,9 @@ def select_auditoria(session: Session, label: str = "Auditoria") -> Auditoria | 
     if not auditorias:
         st.info("Crie uma auditoria para utilizar esta tela.")
         return None
-    return st.selectbox(label, auditorias, format_func=lambda a: f"#{a.id} · {a.nome} · {a.status}")
+    labels = {a.id: f"#{a.id} · {a.nome} · {a.status}" for a in auditorias}
+    selected_id = st.selectbox(label, list(labels), format_func=lambda audit_id: labels[audit_id])
+    return session.get(Auditoria, selected_id)
 
 
 def page_dashboard(session: Session) -> None:
@@ -727,9 +508,9 @@ def page_dashboard(session: Session) -> None:
     if df.empty:
         st.info("Crie uma auditoria para habilitar os gráficos.")
         return
-    c1, c2 = st.columns(2)
     site_score = pontuacao_por(df, "site")
     cat_score = pontuacao_por(df, "diretiva")
+    c1, c2 = st.columns(2)
     c1.plotly_chart(px.bar(site_score, x="site", y="conformidade", title="Conformidade por site", text_auto=True, range_y=[0, 100], color_discrete_sequence=["#1f4bb8"]), use_container_width=True)
     c2.plotly_chart(px.bar(site_score, x="site", y="maturidade", title="Maturidade por site", text_auto=True, range_y=[0, 5], color_discrete_sequence=["#ffb91d"]), use_container_width=True)
     c3, c4 = st.columns(2)
@@ -737,9 +518,7 @@ def page_dashboard(session: Session) -> None:
     if not ach.empty:
         c4.plotly_chart(px.pie(ach, names="tipo_achado", title="Registros por tipo"), use_container_width=True)
         st.plotly_chart(px.bar(ach.groupby("status", as_index=False).size(), x="status", y="size", title="PAC por status", text_auto=True, color_discrete_sequence=["#1f4bb8"]), use_container_width=True)
-    heat_rows = []
-    for (site_, diretiva), group in df.groupby(["site", "diretiva"]):
-        heat_rows.append({"site": site_, "diretiva": diretiva, "conformidade": conformidade_percentual(group)})
+    heat_rows = [{"site": site_, "diretiva": diretiva, "conformidade": conformidade_percentual(group)} for (site_, diretiva), group in df.groupby(["site", "diretiva"])]
     hdf = pd.DataFrame(heat_rows)
     if not hdf.empty:
         st.plotly_chart(px.imshow(hdf.pivot(index="site", columns="diretiva", values="conformidade"), title="Heatmap site x categoria", aspect="auto", color_continuous_scale="RdYlGn", zmin=0, zmax=100), use_container_width=True)
@@ -756,7 +535,9 @@ def page_planejamento(session: Session, user: Usuario | None) -> None:
     with cinfo1: kpi_card("Sites disponíveis", len(sites))
     with cinfo2: kpi_card("Itens do checklist", total_reqs)
     with cinfo3: kpi_card("Categorias", len(CHECKLIST_BASE))
-
+    if not sites:
+        st.error("Cadastre ao menos um site ativo antes de criar auditorias.")
+        return
     section("Nova auditoria")
     with st.form("nova_auditoria"):
         c1, c2, c3 = st.columns([1, 1.2, 1])
@@ -775,28 +556,14 @@ def page_planejamento(session: Session, user: Usuario | None) -> None:
         submitted = st.form_submit_button("Criar auditoria", type="primary", disabled=not can_edit_audit(user))
     if submitted:
         try:
-            auditoria = criar_auditoria(
-                session,
-                nome=f"Auditoria Cruzada {site_auditado.codigo} — {ciclo}",
-                ano=int(ano),
-                ciclo=ciclo,
-                site_auditado_id=site_auditado.id,
-                site_auditor_lider_id=site_lider.id,
-                site_auditor_apoio_id=site_apoio.id if site_apoio else None,
-                auditor_lider=auditor_lider,
-                auditor_apoio=auditor_apoio,
-                data_planejada=data_planejada,
-                status="Planejada",
-                escopo=escopo,
-                observacoes=observacoes,
-            )
+            auditoria = criar_auditoria(session, nome=f"Auditoria Cruzada {site_auditado.codigo} - {ciclo}", ano=int(ano), ciclo=ciclo, site_auditado_id=site_auditado.id, site_auditor_lider_id=site_lider.id, site_auditor_apoio_id=site_apoio.id if site_apoio else None, auditor_lider=auditor_lider, auditor_apoio=auditor_apoio, data_planejada=data_planejada, status="Planejada", escopo=escopo, observacoes=observacoes)
             st.success(f"Auditoria #{auditoria.id} criada com {total_reqs} itens de checklist.")
         except ValueError as exc:
             st.error(str(exc))
-
     section("Auditorias cadastradas")
     auds = session.query(Auditoria).order_by(Auditoria.id.desc()).all()
-    st.dataframe(pd.DataFrame([{"ID": a.id, "Nome": a.nome, "Site": a.site_auditado.codigo, "Ciclo": a.ciclo, "Data planejada": a.data_planejada, "Status": a.status} for a in auds]), use_container_width=True, hide_index=True)
+    aud_cols = ["ID", "Nome", "Site", "Ciclo", "Data planejada", "Status"]
+    st.dataframe(pd.DataFrame([{"ID": a.id, "Nome": a.nome, "Site": a.site_auditado.codigo, "Ciclo": a.ciclo, "Data planejada": a.data_planejada, "Status": a.status} for a in auds], columns=aud_cols), use_container_width=True, hide_index=True)
 
 
 def page_checklist(session: Session, user: Usuario | None) -> None:
@@ -807,37 +574,22 @@ def page_checklist(session: Session, user: Usuario | None) -> None:
     ensure_auditoria_checklist(session, auditoria.id)
     editable = can_edit_audit(user, auditoria)
     df = respostas_df(session, auditoria.id)
+    if df.empty:
+        st.warning("Não há requisitos ativos para esta auditoria. Reexecute o seed da base ou revise a Base do Checklist.")
+        return
     c1, c2, c3 = st.columns(3)
     categoria = c1.selectbox("Categoria", ["Todas"] + sorted(df["diretiva"].unique().tolist()))
     status = c2.selectbox("Status", ["Todos"] + STATUS_CONFORMIDADE)
     criticidade = c3.selectbox("Criticidade", ["Todas"] + CRITICIDADES)
     filtered = df.copy()
-    if categoria != "Todas":
-        filtered = filtered[filtered["diretiva"] == categoria]
-    if status != "Todos":
-        filtered = filtered[filtered["status"] == status]
-    if criticidade != "Todas":
-        filtered = filtered[filtered["criticidade"] == criticidade]
-
+    if categoria != "Todas": filtered = filtered[filtered["diretiva"] == categoria]
+    if status != "Todos": filtered = filtered[filtered["status"] == status]
+    if criticidade != "Todas": filtered = filtered[filtered["criticidade"] == criticidade]
     display_cols = ["id", "diretiva", "codigo_requisito", "criticidade", "pergunta", "aplicavel", "status", "nota_maturidade", "evidencia_verificada", "comentario_auditor", "necessita_acao"]
-    edited = st.data_editor(
-        filtered[display_cols],
-        hide_index=True,
-        use_container_width=True,
-        disabled=["id", "diretiva", "codigo_requisito", "criticidade", "pergunta"] if editable else display_cols,
-        column_config={
-            "status": st.column_config.SelectboxColumn("Status", options=STATUS_CONFORMIDADE),
-            "nota_maturidade": st.column_config.NumberColumn("Maturidade", min_value=0, max_value=5, step=1),
-            "necessita_acao": st.column_config.CheckboxColumn("Gerar PAC?"),
-            "evidencia_verificada": st.column_config.TextColumn("Evidência"),
-            "comentario_auditor": st.column_config.TextColumn("Observação"),
-        },
-        key=f"editor_{auditoria.id}",
-    )
+    edited = st.data_editor(filtered[display_cols], hide_index=True, use_container_width=True, disabled=["id", "diretiva", "codigo_requisito", "criticidade", "pergunta"] if editable else display_cols, column_config={"status": st.column_config.SelectboxColumn("Status", options=STATUS_CONFORMIDADE), "nota_maturidade": st.column_config.NumberColumn("Maturidade", min_value=0, max_value=5, step=1), "necessita_acao": st.column_config.CheckboxColumn("Gerar PAC?"), "evidencia_verificada": st.column_config.TextColumn("Evidência"), "comentario_auditor": st.column_config.TextColumn("Observação")}, key=f"editor_{auditoria.id}")
     if st.button("Salvar respostas", type="primary", disabled=not editable):
         salvar_respostas(session, edited, user.nome if user else None)
         st.success("Respostas salvas.")
-
     desvios = edited[(edited["status"].isin(["Não Conforme", "Parcialmente Conforme"])) | (edited["necessita_acao"] == True)]
     with st.expander(f"Itens com indicação de PAC ({len(desvios)})"):
         st.dataframe(desvios[["codigo_requisito", "criticidade", "status", "pergunta"]], use_container_width=True, hide_index=True)
@@ -859,11 +611,15 @@ def page_checklist(session: Session, user: Usuario | None) -> None:
                         st.success("PAC criado.")
     with st.expander("Anexar evidência ao item"):
         reqs = session.query(Requisito).filter_by(ativo=True).order_by(Requisito.codigo_requisito).all()
-        req = st.selectbox("Item", reqs, format_func=lambda r: f"{r.codigo_requisito} · {r.pergunta[:80]}")
-        uploaded = st.file_uploader("Arquivo de evidência")
-        if uploaded and st.button("Salvar evidência", disabled=not editable):
-            salvar_upload(uploaded, auditoria.id, req.id, None, user.nome if user else None, session)
-            st.success("Evidência salva.")
+        if not reqs:
+            st.info("Não há requisitos ativos para anexar evidências.")
+        else:
+            req_labels = {r.id: f"{r.codigo_requisito} · {r.pergunta[:80]}" for r in reqs}
+            req_id = st.selectbox("Item", list(req_labels), format_func=lambda item_id: req_labels[item_id])
+            uploaded = st.file_uploader("Arquivo de evidência")
+            if uploaded and st.button("Salvar evidência", disabled=not editable):
+                salvar_upload(uploaded, auditoria.id, req_id, None, user.nome if user else None, session)
+                st.success("Evidência salva.")
 
 
 def page_pac(session: Session, user: Usuario | None) -> None:
@@ -875,7 +631,7 @@ def page_pac(session: Session, user: Usuario | None) -> None:
         c1, c2, c3, c4 = st.columns(4)
         sites = ["Todos"] + sorted(ach["site"].unique().tolist())
         tipos = ["Todos"] + TIPOS_ACHADO
-        status_opts = ["Todos"] + STATUS_ACHADO + ["Vencido"]
+        status_opts = ["Todos"] + list(dict.fromkeys(STATUS_ACHADO + ["Vencido"]))
         site_filter = c1.selectbox("Site", sites)
         tipo_filter = c2.selectbox("Tipo", tipos)
         status_filter = c3.selectbox("Status", status_opts)
@@ -886,11 +642,15 @@ def page_pac(session: Session, user: Usuario | None) -> None:
         if status_filter != "Todos": filtered = filtered[filtered["status"] == status_filter]
         if vencidos: filtered = filtered[filtered["vencido"] == True]
         st.dataframe(filtered, use_container_width=True, hide_index=True)
-
     registros = session.query(Achado).order_by(Achado.id.desc()).all()
     if registros:
         section("Editar PAC")
-        achado = st.selectbox("Registro", registros, format_func=lambda a: f"#{a.id} · {a.tipo_achado} · {a.status}")
+        labels = {a.id: f"#{a.id} · {a.tipo_achado} · {a.status}" for a in registros}
+        achado_id = st.selectbox("Registro", list(labels), format_func=lambda item_id: labels[item_id])
+        achado = session.get(Achado, achado_id)
+        if not achado:
+            st.warning("Registro de PAC não encontrado.")
+            return
         with st.form("editar_pac"):
             tipo = st.selectbox("Tipo", TIPOS_ACHADO, index=TIPOS_ACHADO.index(achado.tipo_achado) if achado.tipo_achado in TIPOS_ACHADO else 0)
             descricao = st.text_area("Descrição", value=achado.descricao)
@@ -956,10 +716,10 @@ def page_base(session: Session, user: Usuario | None) -> None:
         st.success("Base sincronizada.")
     section("Categorias")
     dirs = session.query(Diretiva).filter(Diretiva.codigo.in_([c["codigo"] for c in CHECKLIST_BASE])).order_by(Diretiva.codigo).all()
-    st.dataframe(pd.DataFrame([{"Código": d.codigo, "Título": d.titulo, "Descrição": d.descricao, "Ativa": d.ativa} for d in dirs]), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame([{"Código": d.codigo, "Título": d.titulo, "Descrição": d.descricao, "Ativa": d.ativa} for d in dirs], columns=["Código", "Título", "Descrição", "Ativa"]), use_container_width=True, hide_index=True)
     section("Requisitos")
     reqs = session.query(Requisito).filter(Requisito.codigo_requisito.in_(logical_requisito_codes())).order_by(Requisito.codigo_requisito).all()
-    req_df = pd.DataFrame([{"id": r.id, "Código": r.codigo_requisito, "Categoria": r.diretiva.titulo, "Pergunta": r.pergunta, "Criticidade": r.criticidade, "Ativo": r.ativo} for r in reqs])
+    req_df = pd.DataFrame([{"id": r.id, "Código": r.codigo_requisito, "Categoria": r.diretiva.titulo, "Pergunta": r.pergunta, "Criticidade": r.criticidade, "Ativo": r.ativo} for r in reqs], columns=["id", "Código", "Categoria", "Pergunta", "Criticidade", "Ativo"])
     edited = st.data_editor(req_df, hide_index=True, use_container_width=True, disabled=["id", "Código", "Categoria", "Pergunta"], column_config={"Criticidade": st.column_config.SelectboxColumn("Criticidade", options=CRITICIDADES), "Ativo": st.column_config.CheckboxColumn("Ativo")})
     if st.button("Salvar ajustes", type="primary", disabled=not can_admin(user)):
         for row in edited.to_dict("records"):
@@ -973,7 +733,12 @@ def page_base(session: Session, user: Usuario | None) -> None:
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="🛡️", layout="wide")
     apply_theme()
-    init_db()
+    try:
+        init_db()
+    except Exception as exc:
+        st.error("Erro ao inicializar o banco de dados da auditoria cruzada.")
+        st.exception(exc)
+        st.stop()
     with get_session() as session:
         user = sidebar_user(session)
         page = st.sidebar.radio("Navegação", ["Dashboard", "Planejar auditoria", "Executar checklist", "Achados / PAC", "Relatórios", "Base do Checklist"])
