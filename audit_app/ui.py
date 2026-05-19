@@ -17,6 +17,13 @@ def apply_theme():
         .page-header {background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:1rem 1.2rem;margin-bottom:1rem;box-shadow:0 4px 16px rgba(18,38,63,.05);}
         .page-header h1 {margin:0;font-size:1.55rem;color:var(--title);letter-spacing:0;}
         .page-header p {margin:.35rem 0 0;color:var(--muted);font-size:.94rem;}
+        .portal-card {background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:1.15rem 1.2rem;margin:.2rem 0 .75rem;min-height:150px;box-shadow:0 4px 16px rgba(18,38,63,.05);}
+        .portal-card h2 {margin:0 0 .55rem;color:var(--title);font-size:1.2rem;letter-spacing:0;}
+        .portal-card p {margin:0;color:var(--muted);font-size:.94rem;line-height:1.45;}
+        .sidebar-profile {background:rgba(255,255,255,.38);border:1px solid rgba(18,38,63,.14);border-radius:10px;padding:.7rem .75rem;margin:.65rem 0 .9rem;}
+        .sidebar-profile strong {display:block;color:#1f1f1f;font-size:.94rem;}
+        .sidebar-profile span {display:block;color:#3d3d3d;font-size:.76rem;margin-top:.1rem;}
+        .sidebar-section-title {font-size:.76rem;text-transform:uppercase;font-weight:800;letter-spacing:.04em;margin:.85rem 0 .35rem;color:#3d2b00;}
         div[data-testid="stForm"], div[data-testid="stExpander"] {background:var(--card-bg);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;box-shadow:0 2px 8px rgba(18,38,63,.04);}
         .section-title {margin:1.1rem 0 .55rem;color:var(--title);font-size:1.08rem;font-weight:700;}
         .kpi-card {border:1px solid var(--border);background:var(--card-bg);border-radius:10px;padding:.9rem 1rem;box-shadow:0 2px 8px rgba(18,38,63,.04);min-height:88px;}
@@ -33,7 +40,17 @@ def apply_theme():
 
 
 def header(title, subtitle=""):
-    st.markdown(f"<div class='page-header'><h1>{escape(str(title))}</h1><p>{escape(str(subtitle))}</p></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='page-header'><h1>{escape(str(title))}</h1><p>{escape(str(subtitle))}</p></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def portal_card(title, description):
+    st.markdown(
+        f"<div class='portal-card'><h2>{escape(str(title))}</h2><p>{escape(str(description))}</p></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def section(title):
@@ -41,7 +58,10 @@ def section(title):
 
 
 def kpi_card(label, value):
-    st.markdown(f"<div class='kpi-card'><div class='kpi-label'>{escape(str(label))}</div><div class='kpi-value'>{escape(str(value))}</div></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='kpi-card'><div class='kpi-label'>{escape(str(label))}</div><div class='kpi-value'>{escape(str(value))}</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def alert_card(text):
@@ -73,14 +93,20 @@ def site_filter_query(query, model_site_id_col, session, user):
 
 def sidebar_user(session):
     st.sidebar.markdown("### Plataforma EHS")
-    st.sidebar.caption("Auditoria Cruzada e Sustentação NR-12")
+    st.sidebar.caption("Auditorias Cruzadas e Sustentação NR-12")
     usuarios = session.query(Usuario).filter_by(ativo=True).order_by(Usuario.nome).all()
     if not usuarios:
         st.sidebar.warning("Nenhum usuário ativo.")
         return None
     labels = {u.id: f"{u.nome} · {u.perfil}" for u in usuarios}
     selected_id = st.sidebar.selectbox("Usuário", list(labels), format_func=lambda user_id: labels[user_id])
-    return session.get(Usuario, selected_id)
+    user = session.get(Usuario, selected_id)
+    site = user.site.codigo if user and user.site else "Corporativo"
+    st.sidebar.markdown(
+        f"<div class='sidebar-profile'><strong>{escape(user.nome)}</strong><span>{escape(user.perfil)} · {escape(site)}</span></div>",
+        unsafe_allow_html=True,
+    )
+    return user
 
 
 def select_auditoria(session, user=None, label="Auditoria"):
