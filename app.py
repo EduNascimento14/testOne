@@ -114,20 +114,59 @@ CHECKLIST_EHS = {
 def apply_theme():
     st.markdown("""
     <style>
-    .stApp{background:#f6f8fb}.block-container{padding-top:1.4rem}
-    /* Oculta a navegação multipage nativa do Streamlit, caso exista pasta pages/ no ambiente. */
+    :root{
+        --bg:#f6f8fb; --card:#ffffff; --ink:#111827; --muted:#64748b;
+        --line:#e5e7eb; --gold:#d9a514; --gold2:#f5c542; --navy:#0f172a;
+    }
+    .stApp{background:var(--bg); font-family:"Inter","Segoe UI",Arial,sans-serif; color:var(--ink);}
+    .block-container{padding-top:1.4rem; padding-bottom:2rem;}
     [data-testid="stSidebarNav"]{display:none!important;visibility:hidden!important;height:0!important;}
-    section[data-testid="stSidebar"]{background:linear-gradient(180deg,#f5c542,#d9a514,#8a6510)}
-    section[data-testid="stSidebar"] *{color:#1f2937!important}
-    div.stButton>button,div.stDownloadButton>button{border-radius:14px;border:1px solid #d7dde8;background:#fff;font-weight:700;box-shadow:0 6px 18px rgba(31,41,55,.07)}
-    .ehs-header,.card,.kpi{background:#fff;border:1px solid #e6eaf0;border-radius:22px;box-shadow:0 10px 25px rgba(31,41,55,.07);padding:1rem;margin-bottom:.8rem}
-    .ehs-header{background:linear-gradient(135deg,#fff,#fff8e3)} .ehs-header h1{margin:0;color:#111827}.ehs-header p{margin:.2rem 0;color:#5b6575}
-    .kpi-label{color:#697386;font-size:.78rem;font-weight:800;text-transform:uppercase}.kpi-value{font-size:1.8rem;font-weight:900;color:#111827}.muted{color:#697386;font-size:.85rem}
-    .section-title{font-size:1.2rem;font-weight:900;color:#1f2937;margin:1rem 0 .5rem}
+    section[data-testid="stSidebar"]{
+        background:
+          radial-gradient(circle at 18% 6%, rgba(245,197,66,.28), transparent 30%),
+          radial-gradient(circle at 90% 38%, rgba(217,165,20,.14), transparent 26%),
+          linear-gradient(165deg,#0f172a 0%,#111827 52%,#1f2937 100%)!important;
+        border-right:1px solid rgba(255,255,255,.08);
+        box-shadow:14px 0 35px rgba(15,23,42,.14);
+    }
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"]{color:#f8fafc!important;}
+    section[data-testid="stSidebar"] .stCaptionContainer,
+    section[data-testid="stSidebar"] small{color:#cbd5e1!important;}
+    section[data-testid="stSidebar"] [data-baseweb="select"] *{color:#111827!important;}
+    section[data-testid="stSidebar"] div[role="radiogroup"] label{
+        background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.10);
+        border-radius:14px; padding:.55rem .7rem; margin:.18rem 0;
+        transition:all .18s ease; box-shadow:0 8px 20px rgba(0,0,0,.08);
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover{
+        background:rgba(245,197,66,.18); border-color:rgba(245,197,66,.45); transform:translateX(2px);
+    }
+    section[data-testid="stSidebar"] div.stButton>button{
+        background:linear-gradient(135deg,#f8fafc,#ffffff)!important; color:#0f172a!important;
+        border:1px solid rgba(245,197,66,.35)!important; box-shadow:0 10px 24px rgba(0,0,0,.18)!important;
+    }
+    div.stButton>button,div.stDownloadButton>button{
+        border-radius:14px;border:1px solid #d7dde8;background:#fff;font-weight:750;
+        box-shadow:0 6px 18px rgba(31,41,55,.07); transition:all .15s ease;
+    }
+    div.stButton>button:hover,div.stDownloadButton>button:hover{border-color:var(--gold); transform:translateY(-1px); box-shadow:0 10px 24px rgba(31,41,55,.12);}
+    .ehs-header,.card,.kpi{background:var(--card);border:1px solid var(--line);border-radius:22px;box-shadow:0 10px 25px rgba(31,41,55,.07);padding:1rem;margin-bottom:.8rem}
+    .ehs-header{background:linear-gradient(135deg,#fff,#fff8e3)} .ehs-header h1{margin:0;color:var(--ink);letter-spacing:-.03em}.ehs-header p{margin:.2rem 0;color:#5b6575}
+    .kpi-label{color:#697386;font-size:.78rem;font-weight:850;text-transform:uppercase;letter-spacing:.02em}.kpi-value{font-size:1.8rem;font-weight:900;color:var(--ink)}.muted{color:#697386;font-size:.85rem}
+    .section-title{font-size:1.2rem;font-weight:900;color:#1f2937;margin:1rem 0 .5rem;letter-spacing:-.01em}
     .empty{border:1px dashed #c9d1df;border-radius:18px;background:#fff;padding:1rem;text-align:center;color:#697386}
-    .alert{background:#fff7df;border-left:6px solid #d9a514;border-radius:16px;padding:.8rem;margin:.5rem 0}
+    .alert{background:#fff7df;border-left:6px solid var(--gold);border-radius:16px;padding:.8rem;margin:.5rem 0}
+    .check-item{border:1px solid #e5e7eb;border-radius:18px;background:#fff;padding:1rem;margin:.7rem 0;box-shadow:0 8px 22px rgba(15,23,42,.05)}
+    .check-q{font-weight:850;color:#111827;font-size:1rem;margin-bottom:.4rem}
+    .check-meta{display:inline-block;border-radius:999px;padding:.12rem .5rem;font-size:.72rem;font-weight:800;background:#fff7df;color:#7a5400;border:1px solid #f3d27a;margin-left:.4rem}
+    .check-category{margin:1rem 0 .35rem;padding:.55rem .8rem;border-radius:14px;background:#eef2ff;color:#1e293b;font-weight:900;border:1px solid #dbe3ff}
     </style>""", unsafe_allow_html=True)
-
 def hide_sidebar_on_home():
     """Na tela inicial, a plataforma se comporta como landing page, sem menu lateral."""
     if st.session_state.get("modulo", "home") == "home":
@@ -388,7 +427,10 @@ def dashboard_integrado(db,u):
     for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status.in_(["Vencida","Aberta","Em andamento"])).limit(5):
         if p.status=="Vencida" or p.tipo_achado=="Não conformidade crítica": alerts.append({"Módulo":"Auditoria EHS","Tipo":p.tipo_achado,"Site":site_code(db,p.site_id),"Descrição":(p.descricao or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
     section("Alertas principais")
-    st.dataframe(pd.DataFrame(alerts),use_container_width=True,hide_index=True) if alerts else empty_state("Nenhum alerta crítico ou vencido identificado.")
+    if alerts:
+        st.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhum alerta crítico ou vencido identificado.")
 def home_page(db,u):
     header("Plataforma Integrada EHS","NR-12 e Auditorias Cruzadas de EHS Directives em uma única aplicação")
     dashboard_integrado(db,u); section("Módulos")
@@ -416,15 +458,30 @@ def nr12_dashboard(db,u):
             with c: kpi_card(l,v)
     section("Gráficos")
     c1,c2=st.columns(2)
-    with c1: st.plotly_chart(px.histogram(dfm,x="Site",color="Status NR-12",barmode="group",title="Status NR-12 por site").update_layout(template="plotly_white"),use_container_width=True) if not dfm.empty else empty_state("Sem máquinas.")
-    with c2: st.plotly_chart(px.pie(dfm,names="Criticidade",title="Máquinas por criticidade",hole=.45).update_layout(template="plotly_white"),use_container_width=True) if not dfm.empty else empty_state("Sem dados.")
+    with c1:
+        if not dfm.empty:
+            st.plotly_chart(px.histogram(dfm, x="Site", color="Status NR-12", barmode="group", title="Status NR-12 por site").update_layout(template="plotly_white"), use_container_width=True)
+        else:
+            empty_state("Sem máquinas.")
+    with c2:
+        if not dfm.empty:
+            st.plotly_chart(px.pie(dfm, names="Criticidade", title="Máquinas por criticidade", hole=.45).update_layout(template="plotly_white"), use_container_width=True)
+        else:
+            empty_state("Sem dados.")
     c3,c4=st.columns(2)
-    with c3: st.plotly_chart(px.histogram(dfp,x="Status",color="Classificação",barmode="group",title="PAC por status/classificação").update_layout(template="plotly_white"),use_container_width=True) if not dfp.empty else empty_state("Sem PACs.")
+    with c3:
+        if not dfp.empty:
+            st.plotly_chart(px.histogram(dfp, x="Status", color="Classificação", barmode="group", title="PAC por status/classificação").update_layout(template="plotly_white"), use_container_width=True)
+        else:
+            empty_state("Sem PACs.")
     with c4:
         dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":cards[7][1]},{"Tipo":"Próximas","Qtd":cards[8][1]}]); st.plotly_chart(px.bar(dv,x="Tipo",y="Qtd",title="Verificações vencidas/próximas").update_layout(template="plotly_white"),use_container_width=True)
     section("Máquinas prioritárias")
     pr=dfm[dfm["Status NR-12"].isin(["Bloqueada por desvio crítico","Pendente de ação não crítica","Conforme com observação"])] if not dfm.empty else pd.DataFrame()
-    st.dataframe(pr,use_container_width=True,hide_index=True) if not pr.empty else empty_state("Nenhuma máquina prioritária.")
+    if not pr.empty:
+        st.dataframe(pr, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhuma máquina prioritária.")
 def nr12_inventario(db,u):
     header("Inventário de Máquinas","Cadastro, edição, consulta e exportação")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids)).order_by(Site.codigo)}
@@ -465,31 +522,82 @@ def nr12_documentos(db,u):
                     if tipo=="Apreciação de risco": m.possui_apreciacao_risco=True
                     db.commit(); st.success("Documento salvo."); st.rerun()
     df=df_docs(db,ids); section("Consulta")
-    st.dataframe(df,use_container_width=True,hide_index=True) if not df.empty else empty_state("Nenhum documento.")
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhum documento.")
     download_excel_button("Exportar documentos Excel","documentos_nr12.xlsx",{"Documentos":df})
 def nr12_checklists(db,u):
-    header("Checklists e Inspeções NR-12","Registro por máquina, pontuação e geração automática de PAC")
-    ids=visible_site_ids(u,db); opts=machine_options(db,ids)
-    if can_edit(u,"nr12_operacao") and opts:
-        with st.form("ver"):
-            tipo=st.selectbox("Tipo",TIPOS_VERIFICACAO_NR12); lab=st.selectbox("Máquina",list(opts)); resp=st.text_input("Responsável",u.nome); obs=st.text_area("Observações")
-            temp=[]
-            for it in db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo,ativo=True).order_by(ChecklistItemNR12.ordem):
-                st.markdown(f"**{it.ordem}. {it.pergunta}** {'⚠️ Crítico' if it.item_critico else ''}")
-                c1,c2,c3,c4=st.columns([1,1.2,2,1])
-                apl=c1.checkbox("Aplicável",True,key=f"ap{it.id}"); res=c2.selectbox("Resultado",RESULTADOS_NR12,key=f"rr{it.id}"); com=c3.text_input("Comentário/evidência",key=f"co{it.id}"); gp=c4.checkbox("Gerar PAC",res=="Não conforme",key=f"gp{it.id}")
-                temp.append((it,apl,res,com,gp))
-            if st.form_submit_button("Salvar verificação",use_container_width=True):
-                m=db.get(MaquinaNR12,opts[lab]); v=VerificacaoNR12(maquina_id=m.id,site_id=m.site_id,tipo=tipo,data_verificacao=date.today(),responsavel=resp,observacoes=obs,proxima_verificacao=date.today()+timedelta(days=180)); db.add(v); db.flush(); rs=[]
-                for it,apl,res,com,gp in temp:
-                    r=RespostaNR12(verificacao_id=v.id,item_id=it.id,aplicavel=apl,resultado="Não aplicável" if not apl else res,comentario_evidencia=com,gerar_pac=gp); db.add(r); rs.append(r)
-                db.flush(); v.resultado,v.pontuacao,v.possui_nc_critica=calcular_resultado_verificacao_nr12(rs); m.ultima_auditoria=date.today(); m.proxima_auditoria=v.proxima_verificacao; m.status_nr12="Bloqueada por desvio crítico" if v.resultado=="Crítico" else v.resultado if v.resultado in STATUS_MAQUINA else m.status_nr12
+    header("Checklists e Inspeções NR-12", "Registro por máquina, pontuação e geração automática de PAC")
+    ids = visible_site_ids(u, db)
+    opts = machine_options(db, ids)
+    if not opts:
+        empty_state("Cadastre uma máquina antes.")
+    elif not can_edit(u, "nr12_operacao"):
+        alert_card("Seu perfil permite consulta, mas não registro.")
+    else:
+        tipo = st.selectbox("Tipo de checklist", TIPOS_VERIFICACAO_NR12, key="nr12_tipo_checklist_selector")
+        itens = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ativo=True).order_by(ChecklistItemNR12.ordem).all()
+        with st.form(f"ver_{tipo}"):
+            lab = st.selectbox("Máquina", list(opts), key=f"maq_{tipo}")
+            resp = st.text_input("Responsável", u.nome, key=f"resp_{tipo}")
+            obs = st.text_area("Observações", key=f"obs_{tipo}")
+            temp = []
+            for it in itens:
+                st.markdown(
+                    f"<div class='check-item'><div class='check-q'>{it.ordem}. {it.pergunta}"
+                    f"{'<span class=\"check-meta\">Crítico</span>' if it.item_critico else ''}</div></div>",
+                    unsafe_allow_html=True,
+                )
+                c1, c2, c3, c4 = st.columns([1, 1.3, 2.6, 1])
+                apl = c1.checkbox("Aplicável", True, key=f"nr12_ap_{tipo}_{it.id}")
+                res = c2.selectbox("Resultado", RESULTADOS_NR12, key=f"nr12_rr_{tipo}_{it.id}")
+                com = c3.text_input("Comentário/evidência", key=f"nr12_co_{tipo}_{it.id}")
+                gp = c4.checkbox("Gerar PAC", False, key=f"nr12_gp_{tipo}_{it.id}")
+                temp.append((it, apl, res, com, gp))
+            if st.form_submit_button("Salvar verificação", use_container_width=True):
+                m = db.get(MaquinaNR12, opts[lab])
+                v = VerificacaoNR12(
+                    maquina_id=m.id,
+                    site_id=m.site_id,
+                    tipo=tipo,
+                    data_verificacao=date.today(),
+                    responsavel=resp,
+                    observacoes=obs,
+                    proxima_verificacao=date.today() + timedelta(days=180),
+                )
+                db.add(v)
+                db.flush()
+                rs = []
+                for it, apl, res, com, gp in temp:
+                    r = RespostaNR12(
+                        verificacao_id=v.id,
+                        item_id=it.id,
+                        aplicavel=apl,
+                        resultado="Não aplicável" if not apl else res,
+                        comentario_evidencia=com,
+                        gerar_pac=gp,
+                    )
+                    db.add(r)
+                    rs.append(r)
+                db.flush()
+                v.resultado, v.pontuacao, v.possui_nc_critica = calcular_resultado_verificacao_nr12(rs)
+                m.ultima_auditoria = date.today()
+                m.proxima_auditoria = v.proxima_verificacao
+                m.status_nr12 = "Bloqueada por desvio crítico" if v.resultado == "Crítico" else v.resultado if v.resultado in STATUS_MAQUINA else m.status_nr12
                 for r in rs:
-                    if r.resultado=="Não conforme" or r.gerar_pac: gerar_pac_automatico_nr12(db,v,r,resp)
-                db.commit(); st.success(f"Verificação salva: {v.resultado} | {v.pontuacao}%"); st.rerun()
-    elif not opts: empty_state("Cadastre uma máquina antes.")
-    else: alert_card("Seu perfil permite consulta, mas não registro.")
-    df=df_ver(db,ids); section("Verificações registradas"); st.dataframe(df,use_container_width=True,hide_index=True) if not df.empty else empty_state("Nenhuma verificação."); download_excel_button("Exportar verificações Excel","verificacoes_nr12.xlsx",{"Verificações":df})
+                    if r.resultado == "Não conforme" or r.gerar_pac:
+                        gerar_pac_automatico_nr12(db, v, r, resp)
+                db.commit()
+                st.success(f"Verificação salva: {v.resultado} | {v.pontuacao}%")
+                st.rerun()
+    df = df_ver(db, ids)
+    section("Verificações registradas")
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhuma verificação.")
+    download_excel_button("Exportar verificações Excel", "verificacoes_nr12.xlsx", {"Verificações": df})
 def nr12_pac(db,u):
     header("PAC NR-12","Planos de ação corretiva")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}; opts=machine_options(db,ids)
@@ -499,7 +607,10 @@ def nr12_pac(db,u):
                 site=st.selectbox("Site",list(sites)); maq=st.selectbox("Máquina",["—"]+list(opts)); clas=st.selectbox("Classificação",CLASSIFICACAO_PAC); stat=st.selectbox("Status",STATUS_PAC); prazo=st.date_input("Prazo",date.today()+timedelta(days=30)); resp=st.text_input("Responsável"); area=st.text_input("Área"); desc=st.text_area("Descrição do desvio")
                 if st.form_submit_button("Salvar",use_container_width=True): db.add(PACNR12(origem="Manual",site_id=sites[site],maquina_id=None if maq=="—" else opts[maq],classificacao=clas,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao_desvio=desc)); db.commit(); st.success("PAC salvo."); st.rerun()
     df=df_pac_nr12(db,ids); section("Consulta")
-    st.dataframe(df,use_container_width=True,hide_index=True) if not df.empty else empty_state("Nenhum PAC.")
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhum PAC.")
     download_excel_button("Exportar PAC NR-12 Excel","pac_nr12.xlsx",{"PAC":df})
     if can_edit(u,"nr12_manutencao") and not df.empty:
         p=db.get(PACNR12,int(st.selectbox("Atualizar PAC",df["ID"].tolist())))
@@ -527,7 +638,13 @@ def nr12_moc(db,u):
                     mid=None if maq=="—" else opts[maq]; db.add(MOCNR12(site_id=sites[site],maquina_id=mid,tipo_mudanca=tipo,descricao=desc,solicitante=solic,area_solicitante=area,data=date.today(),impacta_seguranca=imp,exige_moc=exige,status=status,aprovacao_ehs=ehs,aprovacao_manutencao=man,aprovacao_engenharia=eng,aprovacao_producao=prod,necessita_auditoria_pos_mudanca=aud,necessita_treinamento=tre,observacoes=obs,validacao_final=val))
                     if mid and crit and status=="Implementada" and not val: db.get(MaquinaNR12,mid).status_nr12="Bloqueada por desvio crítico"
                     db.commit(); st.success("MOC salva."); st.rerun()
-    df=df_moc(db,ids); section("MOCs registradas"); st.dataframe(df,use_container_width=True,hide_index=True) if not df.empty else empty_state("Nenhuma MOC."); download_excel_button("Exportar MOC Excel","moc_nr12.xlsx",{"MOC":df})
+    df = df_moc(db, ids)
+    section("MOCs registradas")
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhuma MOC.")
+    download_excel_button("Exportar MOC Excel", "moc_nr12.xlsx", {"MOC": df})
 def nr12_termo(db,u):
     header("Termo de Garantia NR-12","Emissão anual por site")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
@@ -571,9 +688,21 @@ def ehs_dashboard(db,u):
             with c: kpi_card(labs[i],f"{vals[i]}%" if i==3 else vals[i])
     section("Gráficos")
     c1,c2=st.columns(2)
-    with c1: st.plotly_chart(px.bar(da,x="Site auditado",y="Conformidade %",color="Status",title="Conformidade por site").update_layout(template="plotly_white"),use_container_width=True) if not da.empty else empty_state("Sem auditorias.")
-    with c2: st.plotly_chart(px.histogram(dp,x="Status",color="Prioridade",barmode="group",title="PAC por status").update_layout(template="plotly_white"),use_container_width=True) if not dp.empty else empty_state("Sem PACs.")
-    section("Principais gaps"); st.dataframe(dp.head(20),use_container_width=True,hide_index=True) if not dp.empty else empty_state("Nenhum gap registrado.")
+    with c1:
+        if not da.empty:
+            st.plotly_chart(px.bar(da, x="Site auditado", y="Conformidade %", color="Status", title="Conformidade por site").update_layout(template="plotly_white"), use_container_width=True)
+        else:
+            empty_state("Sem auditorias.")
+    with c2:
+        if not dp.empty:
+            st.plotly_chart(px.histogram(dp, x="Status", color="Prioridade", barmode="group", title="PAC por status").update_layout(template="plotly_white"), use_container_width=True)
+        else:
+            empty_state("Sem PACs.")
+    section("Principais gaps")
+    if not dp.empty:
+        st.dataframe(dp.head(20), use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhum gap registrado.")
 def ehs_planejamento(db,u):
     header("Planejamento de Auditorias","Cadastro de ciclos e geração automática do checklist")
     ids=visible_site_ids(u,db); sv={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}; sall={s.codigo:s.id for s in db.query(Site).filter(Site.codigo!="Corporativo")}
@@ -582,28 +711,92 @@ def ehs_planejamento(db,u):
             ano=st.number_input("Ano",2020,2100,date.today().year); ciclo=st.text_input("Ciclo","Ciclo 1"); site=st.selectbox("Site auditado",list(sv)); lider=st.selectbox("Site auditor líder",["—"]+list(sall)); apoio=st.selectbox("Site auditor apoio",["—"]+list(sall)); aud_l=st.text_input("Auditor líder",u.nome); aud_a=st.text_input("Auditor apoio"); data=st.date_input("Data planejada",date.today()+timedelta(days=30)); status=st.selectbox("Status",STATUS_AUDITORIA); esc=st.text_area("Escopo"); obs=st.text_area("Observações")
             if st.form_submit_button("Criar auditoria e checklist",use_container_width=True):
                 a=AuditoriaCruzada(ano=ano,ciclo=ciclo,site_auditado_id=sv[site],site_auditor_lider_id=None if lider=="—" else sall[lider],site_auditor_apoio_id=None if apoio=="—" else sall[apoio],auditor_lider=aud_l,auditor_apoio=aud_a,data_planejada=data,status=status,escopo=esc,observacoes=obs); db.add(a); db.flush(); gerar_checklist_automatico_ehs(db,a.id,False); db.commit(); st.success("Auditoria criada."); st.rerun()
-    da=df_aud(db,ids); st.dataframe(da,use_container_width=True,hide_index=True) if not da.empty else empty_state("Nenhuma auditoria."); download_excel_button("Exportar auditorias Excel","auditorias_cruzadas.xlsx",{"Auditorias":da})
+    da = df_aud(db, ids)
+    if not da.empty:
+        st.dataframe(da, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhuma auditoria.")
+    download_excel_button("Exportar auditorias Excel", "auditorias_cruzadas.xlsx", {"Auditorias": da})
 def ehs_checklist(db,u):
-    header("Checklist EHS Directives","Checklist incorporado, pontuação e maturidade")
-    ids=visible_site_ids(u,db); auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.id.desc()).all()
-    if not auds: empty_state("Crie uma auditoria no planejamento."); return
-    amap={f"{a.id} — {site_code(db,a.site_auditado_id)} — {a.ciclo} — {a.status}":a.id for a in auds}; a=db.get(AuditoriaCruzada,amap[st.selectbox("Auditoria",list(amap))]); gerar_checklist_automatico_ehs(db,a.id)
-    res=db.query(RespostaAuditoriaEHS).join(RequisitoEHS).join(DiretivaEHS).filter(RespostaAuditoriaEHS.auditoria_id==a.id).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem).all()
-    rows=[{"ID":r.id,"Categoria":r.requisito.diretiva.categoria,"Ordem":r.requisito.ordem,"Requisito":r.requisito.pergunta,"Aplicável":r.aplicavel,"Status":r.status,"Maturidade 0-5":r.nota_maturidade,"Evidência verificada":r.evidencia_verificada or "","Comentário do auditor":r.comentario_auditor or "","Necessita PAC":r.necessita_pac} for r in res]
-    df=pd.DataFrame(rows); c1,c2,c3=st.columns(3)
-    with c1: kpi_card("Conformidade",f"{calcular_conformidade_ehs(res)}%")
-    with c2: kpi_card("Maturidade média",calcular_maturidade_ehs(res))
-    with c3: kpi_card("Itens",len(df))
-    if can_edit(u,"auditoria"):
-        ed=st.data_editor(df,use_container_width=True,hide_index=True,disabled=["ID","Categoria","Ordem","Requisito"],column_config={"Status":st.column_config.SelectboxColumn("Status",options=STATUS_RESPOSTA_EHS),"Maturidade 0-5":st.column_config.NumberColumn("Maturidade 0-5",min_value=0,max_value=5,step=.5)})
-        if st.button("Salvar respostas e gerar PACs marcados",use_container_width=True):
-            for _,row in ed.iterrows():
-                r=db.get(RespostaAuditoriaEHS,int(row["ID"])); r.aplicavel=bool(row["Aplicável"]); r.status="Não Aplicável" if not r.aplicavel else row["Status"]; r.nota_maturidade=float(row["Maturidade 0-5"]); r.evidencia_verificada=row["Evidência verificada"]; r.comentario_auditor=row["Comentário do auditor"]; r.necessita_pac=bool(row["Necessita PAC"])
-            db.flush(); res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all(); a.conformidade_percentual=calcular_conformidade_ehs(res); a.maturidade_media=calcular_maturidade_ehs(res)
+    header("Checklist EHS Directives", "Checklist incorporado, pontuação, maturidade e geração de PAC")
+    ids = visible_site_ids(u, db)
+    auds = db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.id.desc()).all()
+    if not auds:
+        empty_state("Crie uma auditoria no planejamento.")
+        return
+    amap = {f"{a.id} — {site_code(db,a.site_auditado_id)} — {a.ciclo} — {a.status}": a.id for a in auds}
+    a = db.get(AuditoriaCruzada, amap[st.selectbox("Auditoria", list(amap), key="auditoria_ehs_selector")])
+    gerar_checklist_automatico_ehs(db, a.id)
+    res = db.query(RespostaAuditoriaEHS).join(RequisitoEHS).join(DiretivaEHS).filter(
+        RespostaAuditoriaEHS.auditoria_id == a.id
+    ).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all()
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kpi_card("Conformidade", f"{calcular_conformidade_ehs(res)}%")
+    with c2:
+        kpi_card("Maturidade média", calcular_maturidade_ehs(res))
+    with c3:
+        kpi_card("Itens", len(res))
+    pode_editar = can_edit(u, "auditoria")
+    respostas_para_salvar = []
+    if pode_editar:
+        with st.form(f"form_checklist_ehs_{a.id}"):
+            categoria_atual = None
             for r in res:
-                if r.necessita_pac or r.status in ["Não Conforme","Parcialmente Conforme"]: gerar_pac_automatico_ehs(db,a,r,a.auditor_lider)
-            db.commit(); st.success("Checklist salvo."); st.rerun()
-    else: st.dataframe(df,use_container_width=True,hide_index=True)
+                categoria = r.requisito.diretiva.categoria
+                if categoria != categoria_atual:
+                    st.markdown(f"<div class='check-category'>{categoria}</div>", unsafe_allow_html=True)
+                    categoria_atual = categoria
+                st.markdown(
+                    f"<div class='check-item'><div class='check-q'>{r.requisito.ordem}. {r.requisito.pergunta}"
+                    f"<span class='check-meta'>{r.requisito.criticidade}</span></div>"
+                    f"<div class='muted'>Evidência esperada: {r.requisito.evidencia_esperada or 'Verificar evidência aplicável.'}</div></div>",
+                    unsafe_allow_html=True,
+                )
+                col1, col2, col3, col4, col5, col6 = st.columns([.85, 1.45, 1, 2.2, 2.2, .9])
+                apl = col1.checkbox("Aplicável", value=bool(r.aplicavel), key=f"ehs_ap_{a.id}_{r.id}")
+                status_atual = r.status if r.status in STATUS_RESPOSTA_EHS else "Conforme"
+                status = col2.selectbox("Status", STATUS_RESPOSTA_EHS, index=STATUS_RESPOSTA_EHS.index(status_atual), key=f"ehs_status_{a.id}_{r.id}")
+                maturidade = col3.number_input("Maturidade", min_value=0.0, max_value=5.0, value=float(r.nota_maturidade or 0), step=.5, key=f"ehs_mat_{a.id}_{r.id}")
+                evidencia = col4.text_input("Evidência verificada", value=r.evidencia_verificada or "", key=f"ehs_evid_{a.id}_{r.id}")
+                comentario = col5.text_input("Comentário do auditor", value=r.comentario_auditor or "", key=f"ehs_com_{a.id}_{r.id}")
+                pac = col6.checkbox("PAC", value=bool(r.necessita_pac), key=f"ehs_pac_{a.id}_{r.id}")
+                respostas_para_salvar.append((r.id, apl, status, maturidade, evidencia, comentario, pac))
+            if st.form_submit_button("Salvar checklist e gerar PACs necessários", use_container_width=True):
+                for rid, apl, status, maturidade, evidencia, comentario, pac in respostas_para_salvar:
+                    r = db.get(RespostaAuditoriaEHS, int(rid))
+                    r.aplicavel = bool(apl)
+                    r.status = "Não Aplicável" if not apl else status
+                    r.nota_maturidade = float(maturidade)
+                    r.evidencia_verificada = evidencia
+                    r.comentario_auditor = comentario
+                    r.necessita_pac = bool(pac)
+                db.flush()
+                res_atual = db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
+                a.conformidade_percentual = calcular_conformidade_ehs(res_atual)
+                a.maturidade_media = calcular_maturidade_ehs(res_atual)
+                for r in res_atual:
+                    if r.necessita_pac or r.status in ["Não Conforme", "Parcialmente Conforme"]:
+                        gerar_pac_automatico_ehs(db, a, r, a.auditor_lider)
+                db.commit()
+                st.success("Checklist salvo.")
+                st.rerun()
+    else:
+        categoria_atual = None
+        for r in res:
+            categoria = r.requisito.diretiva.categoria
+            if categoria != categoria_atual:
+                st.markdown(f"<div class='check-category'>{categoria}</div>", unsafe_allow_html=True)
+                categoria_atual = categoria
+            status_txt = "Não Aplicável" if not r.aplicavel else r.status
+            st.markdown(
+                f"<div class='check-item'><div class='check-q'>{r.requisito.ordem}. {r.requisito.pergunta}"
+                f"<span class='check-meta'>{r.requisito.criticidade}</span></div>"
+                f"<div class='muted'>Status: <b>{status_txt}</b> | Maturidade: <b>{r.nota_maturidade}</b></div>"
+                f"<div class='muted'>Evidência: {r.evidencia_verificada or '—'}</div>"
+                f"<div class='muted'>Comentário: {r.comentario_auditor or '—'}</div></div>",
+                unsafe_allow_html=True,
+            )
 def ehs_pac(db,u):
     header("PAC Auditoria Cruzada","Tratamento de achados e verificação de eficácia")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
@@ -612,7 +805,12 @@ def ehs_pac(db,u):
             with st.form("pace"):
                 site=st.selectbox("Site",list(sites)); tipo=st.selectbox("Tipo de achado",TIPOS_ACHADO_EHS); pr=st.selectbox("Prioridade/criticidade",["Alta","Média","Baixa"]); stat=st.selectbox("Status",STATUS_PAC); prazo=st.date_input("Prazo",date.today()+timedelta(days=30)); resp=st.text_input("Responsável"); area=st.text_input("Área responsável"); desc=st.text_area("Descrição"); evid=st.text_area("Evidência"); risco=st.text_area("Risco"); causa=st.text_area("Causa raiz"); aci=st.text_area("Ação imediata"); acc=st.text_area("Ação corretiva")
                 if st.form_submit_button("Salvar PAC EHS",use_container_width=True): db.add(PACEHS(site_id=sites[site],tipo_achado=tipo,prioridade_criticidade=pr,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao=desc,evidencia=evid,risco=risco,causa_raiz=causa,acao_imediata=aci,acao_corretiva=acc)); db.commit(); st.success("PAC salvo."); st.rerun()
-    df=df_pac_ehs(db,ids); st.dataframe(df,use_container_width=True,hide_index=True) if not df.empty else empty_state("Nenhum PAC EHS."); download_excel_button("Exportar PAC EHS Excel","pac_ehs.xlsx",{"PAC EHS":df})
+    df = df_pac_ehs(db, ids)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhum PAC EHS.")
+    download_excel_button("Exportar PAC EHS Excel", "pac_ehs.xlsx", {"PAC EHS": df})
 def ehs_base_checklist(db,u):
     header("Base do Checklist EHS","Visualizar categorias, requisitos, criticidade e evidência esperada")
     reqs=db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem).all()
