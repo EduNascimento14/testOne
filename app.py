@@ -16,7 +16,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from sqlalchemy import create_engine, Column, Integer, String, Text, Date, DateTime, Boolean, Float, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Text, Date, DateTime, Boolean, Float, ForeignKey, UniqueConstraint, LargeBinary, inspect
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -45,9 +45,29 @@ USUARIOS_PADRAO = [
 ]
 STATUS_MAQUINA = ["Conforme","Conforme com observação","Pendente de ação não crítica","Bloqueada por desvio crítico","Em readequação","Fora de uso","Não aplicável"]
 CRITICIDADES = ["Alta","Média","Baixa"]
+RISCOS_MAQUINA = ["Apreciação de risco não realizada", "Desprezível", "Atenção", "Significativo", "Alto", "Extremo"]
+STATUS_COLOR_MAP = {
+    "Conforme": "#16a34a",
+    "Conforme com observação": "#f59e0b",
+    "Pendente de ação não crítica": "#f97316",
+    "Bloqueada por desvio crítico": "#dc2626",
+    "Em readequação": "#7c3aed",
+    "Fora de uso": "#64748b",
+    "Não aplicável": "#94a3b8",
+}
+RISCO_COLOR_MAP = {
+    "Desprezível": "#22c55e",
+    "Atenção": "#eab308",
+    "Significativo": "#f97316",
+    "Alto": "#ef4444",
+    "Extremo": "#7f1d1d",
+    "Apreciação de risco não realizada": "#991b1b",
+}
+PAC_COLOR_MAP = {"Crítico": "#dc2626", "Maior": "#f97316", "Menor": "#eab308"}
+STATUS_PAC_COLOR_MAP = {"Aberta":"#f97316", "Em andamento":"#3b82f6", "Aguardando validação":"#8b5cf6", "Concluída":"#16a34a", "Vencida":"#dc2626", "Cancelada":"#64748b"}
 DOCUMENTOS_ESSENCIAIS = ["Laudo NR-12","ART","Apreciação de risco"]
-TIPOS_DOC_NR12 = ["Inventário NR-12","Apreciação de risco","Laudo NR-12","ART","Projeto mecânico","Projeto elétrico","Diagrama de segurança","Manual de operação","Manual de manutenção","Registro de treinamento","Evidência fotográfica","Checklist de validação","Termo de liberação para uso","MOC / Gestão de Mudança","Registro de intervenção","Registro de bloqueio/liberação","Termo anual NR-12","Outros"]
-TIPOS_VERIFICACAO_NR12 = ["Checklist operacional","Inspeção de manutenção","Auditoria EHS","Auditoria corporativa","Auditoria pós-MOC","Auditoria extraordinária após incidente/quase-acidente"]
+TIPOS_DOC_NR12 = ["Inventário NR-12","Apreciação de risco","Laudo NR-12","ART","Projeto mecânico","Projeto elétrico","Diagrama de segurança","Manual de operação","Manual de manutenção","Registro de treinamento","Evidência fotográfica","Checklist de validação","Termo de liberação para uso","Registro de intervenção","Registro de bloqueio/liberação","Outros"]
+TIPOS_VERIFICACAO_NR12 = ["Checklist operacional","Inspeção de manutenção","Auditoria EHS","Auditoria corporativa","Auditoria extraordinária após incidente/quase-acidente"]
 RESULTADOS_NR12 = ["Conforme","Não conforme","Não aplicável"]
 STATUS_PAC = ["Aberta","Em andamento","Aguardando validação","Concluída","Vencida","Cancelada"]
 CLASSIFICACAO_PAC = ["Crítico","Maior","Menor"]
@@ -72,13 +92,13 @@ CHECKLIST_NR12 = {
 ("Proteções fixas e móveis estão presentes, íntegras, fixadas e alinhadas conforme projeto/laudo?",True),
 ("Intertravamentos, sensores, chaves, cortinas ou scanners funcionam conforme teste previsto?",True),
 ("Botões de emergência geram parada segura e não provocam partida inesperada no desacionamento?",True),
-("Relé/controlador/PLC de segurança não apresenta falha, alarme ou alteração sem MOC?",True),
+("Relé/controlador/PLC de segurança não apresenta falha, alarme ou alteração sem aprovação formal?",True),
 ("Não há bypass, atuador avulso, jumper, imã externo, fita, calço ou anulação de dispositivo?",True),
 ("Partida, rearme, modos de operação e parada segura permanecem conforme condição validada?",True),
 ("Painéis elétricos estão fechados, identificados, sem dano e com documentação rastreável?",False),
 ("Fontes de energia, pontos de bloqueio e procedimento LOTO estão disponíveis e funcionais?",False),
 ("Intervenções em proteção/dispositivo de segurança possuem ordem, registro e teste funcional pós-intervenção?",False),
-("Componentes substituídos são equivalentes ou tiveram avaliação formal/MOC quando diferentes?",True),
+("Componentes substituídos são equivalentes ou tiveram avaliação formal quando diferentes?",True),
 ("Proteções removidas para manutenção foram reinstaladas antes do retorno à operação?",True),
 ("Pendências, desvios e necessidade de bloqueio foram registrados e encaminhados?",False)],
 "Auditoria EHS":[
@@ -89,13 +109,12 @@ CHECKLIST_NR12 = {
 ("Checklists operacionais e inspeções de manutenção estão sendo executados no prazo?",False),
 ("Proteções, intertravamentos, sensores/cortinas e emergências permanecem funcionais em campo?",True),
 ("Não há evidência de bypass, descaracterização de segurança ou alteração sem aprovação?",True),
-("MOCs NR-12 foram abertos, aprovados e encerrados com testes, treinamento e atualização documental quando aplicável?",True),
+("Alterações que possam afetar a condição segura da máquina foram avaliadas, aprovadas, testadas e documentadas antes da liberação?",True),
 ("Desvios críticos geraram bloqueio imediato e liberação formal após correção/teste funcional?",True),
 ("Planos de ação possuem responsável, prazo, classificação e acompanhamento de vencidos/reincidentes?",False),
-("Comitê Local NR-12 acompanha indicadores, desvios, bloqueios, MOCs e pendências?",False),
-("Termo anual de garantia de sustentação NR-12 do site foi emitido ou planejado?",False)]}
+("Comitê Local NR-12 acompanha indicadores, desvios, bloqueios e pendências?",False),
+("A liderança do site revisa periodicamente a consolidação de pendências, bloqueios, auditorias vencidas e PACs críticos?",False)]}
 CHECKLIST_NR12["Auditoria corporativa"] = CHECKLIST_NR12["Auditoria EHS"]
-CHECKLIST_NR12["Auditoria pós-MOC"] = CHECKLIST_NR12["Auditoria EHS"]
 CHECKLIST_NR12["Auditoria extraordinária após incidente/quase-acidente"] = CHECKLIST_NR12["Auditoria EHS"]
 
 CHECKLIST_EHS = {
@@ -123,9 +142,9 @@ def apply_theme():
     [data-testid="stSidebarNav"]{display:none!important;visibility:hidden!important;height:0!important;}
     section[data-testid="stSidebar"]{
         background:
-          radial-gradient(circle at 18% 6%, rgba(245,197,66,.28), transparent 30%),
-          radial-gradient(circle at 90% 38%, rgba(217,165,20,.14), transparent 26%),
-          linear-gradient(165deg,#0f172a 0%,#111827 52%,#1f2937 100%)!important;
+          radial-gradient(circle at 20% 8%, rgba(96,165,250,.22), transparent 28%),
+          radial-gradient(circle at 92% 35%, rgba(34,197,94,.10), transparent 24%),
+          linear-gradient(160deg,#0b1220 0%,#111827 48%,#182235 100%)!important;
         border-right:1px solid rgba(255,255,255,.08);
         box-shadow:14px 0 35px rgba(15,23,42,.14);
     }
@@ -149,8 +168,11 @@ def apply_theme():
     }
     section[data-testid="stSidebar"] div.stButton>button{
         background:linear-gradient(135deg,#f8fafc,#ffffff)!important; color:#0f172a!important;
-        border:1px solid rgba(245,197,66,.35)!important; box-shadow:0 10px 24px rgba(0,0,0,.18)!important;
+        border:1px solid rgba(148,163,184,.45)!important; box-shadow:0 10px 24px rgba(0,0,0,.18)!important;
     }
+    section[data-testid="stSidebar"] div.stButton>button *,
+    section[data-testid="stSidebar"] div.stButton>button p,
+    section[data-testid="stSidebar"] div.stButton>button span{color:#0f172a!important;}
     div.stButton>button,div.stDownloadButton>button{
         border-radius:14px;border:1px solid #d7dde8;background:#fff;font-weight:750;
         box-shadow:0 6px 18px rgba(31,41,55,.07); transition:all .15s ease;
@@ -189,11 +211,11 @@ class MaquinaNR12(Base):
     __tablename__="maquinas_nr12"
     id=Column(Integer,primary_key=True); codigo=Column(String(80),unique=True,nullable=False); site_id=Column(Integer,ForeignKey("sites.id"),nullable=False)
     area_setor=Column(String(120)); linha_processo=Column(String(120)); nome=Column(String(160),nullable=False); fabricante=Column(String(120)); modelo=Column(String(120)); numero_serie=Column(String(120)); ano=Column(String(20)); tipo_equipamento=Column(String(120)); responsavel_area=Column(String(120))
-    criticidade=Column(String(20),default="Média"); status_nr12=Column(String(80),default="Conforme"); ultima_adequacao=Column(Date); ultima_auditoria=Column(Date); proxima_auditoria=Column(Date)
+    criticidade=Column(String(20),default="Média"); risco_maquina=Column(String(80),default="Apreciação de risco não realizada"); status_nr12=Column(String(80),default="Conforme"); ultima_adequacao=Column(Date); ultima_auditoria=Column(Date); proxima_auditoria=Column(Date)
     possui_laudo=Column(Boolean,default=False); possui_art=Column(Boolean,default=False); possui_apreciacao_risco=Column(Boolean,default=False); possui_manual_atualizado=Column(Boolean,default=False); possui_treinamento=Column(Boolean,default=False)
     observacoes=Column(Text); criado_em=Column(DateTime,default=datetime.utcnow); site=relationship("Site")
 class DocumentoNR12(Base):
-    __tablename__="documentos_nr12"; id=Column(Integer,primary_key=True); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); site_id=Column(Integer,ForeignKey("sites.id")); tipo=Column(String(120)); descricao=Column(Text); data_emissao=Column(Date); data_validade=Column(Date); arquivo_nome=Column(String(260)); arquivo_caminho=Column(String(500)); responsavel=Column(String(120)); observacoes=Column(Text); criado_em=Column(DateTime,default=datetime.utcnow); maquina=relationship("MaquinaNR12"); site=relationship("Site")
+    __tablename__="documentos_nr12"; id=Column(Integer,primary_key=True); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); site_id=Column(Integer,ForeignKey("sites.id")); tipo=Column(String(120)); descricao=Column(Text); data_emissao=Column(Date); data_validade=Column(Date); arquivo_nome=Column(String(260)); arquivo_caminho=Column(String(500)); arquivo_bytes=Column(LargeBinary); responsavel=Column(String(120)); observacoes=Column(Text); criado_em=Column(DateTime,default=datetime.utcnow); maquina=relationship("MaquinaNR12"); site=relationship("Site")
 class VerificacaoNR12(Base):
     __tablename__="verificacoes_nr12"; id=Column(Integer,primary_key=True); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); site_id=Column(Integer,ForeignKey("sites.id")); tipo=Column(String(120)); data_verificacao=Column(Date); responsavel=Column(String(120)); resultado=Column(String(80)); pontuacao=Column(Float,default=0); possui_nc_critica=Column(Boolean,default=False); observacoes=Column(Text); proxima_verificacao=Column(Date); criado_em=Column(DateTime,default=datetime.utcnow); maquina=relationship("MaquinaNR12")
 class ChecklistItemNR12(Base):
@@ -224,8 +246,48 @@ class EvidenciaEHS(Base):
 # ============================================================
 # 6. Seed inicial
 # ============================================================
+def ensure_schema_updates():
+    try:
+        insp = inspect(engine)
+        if "maquinas_nr12" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("maquinas_nr12")}
+            with engine.begin() as conn:
+                if "risco_maquina" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE maquinas_nr12 ADD COLUMN risco_maquina VARCHAR(80) DEFAULT 'Apreciação de risco não realizada'")
+        insp = inspect(engine)
+        if "documentos_nr12" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("documentos_nr12")}
+            with engine.begin() as conn:
+                if "arquivo_bytes" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE documentos_nr12 ADD COLUMN arquivo_bytes BLOB")
+    except Exception:
+        pass
+
+def sync_checklists_base(db):
+    for tipo, itens in CHECKLIST_NR12.items():
+        for i, (pergunta, critico) in enumerate(itens, 1):
+            item = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ordem=i).first()
+            if item:
+                item.pergunta = pergunta
+                item.item_critico = critico
+                item.ativo = True
+            else:
+                db.add(ChecklistItemNR12(tipo_checklist=tipo, ordem=i, pergunta=pergunta, item_critico=critico, ativo=True))
+    for cat, pergs in CHECKLIST_EHS.items():
+        d = db.query(DiretivaEHS).filter_by(categoria=cat).first()
+        if not d:
+            d = DiretivaEHS(categoria=cat, descricao=cat, ativo=True)
+            db.add(d)
+            db.flush()
+        for i, p in enumerate(pergs, 1):
+            req = db.query(RequisitoEHS).filter_by(diretiva_id=d.id, ordem=i).first()
+            if req:
+                req.pergunta = p
+            else:
+                db.add(RequisitoEHS(diretiva_id=d.id, ordem=i, pergunta=p, criticidade="Alta" if i in [1,3,7] else "Média", evidencia_esperada="Evidência documental, registros, entrevistas e/ou verificação em campo.", ativo=True))
+
 def init_db():
-    Base.metadata.create_all(engine); db=SessionLocal()
+    Base.metadata.create_all(engine); ensure_schema_updates(); db=SessionLocal()
     try:
         if not db.query(Site).filter_by(codigo="Corporativo").first(): db.add(Site(codigo="Corporativo",nome="Corporativo"))
         for s in SITES_PADRAO:
@@ -234,20 +296,11 @@ def init_db():
         for nome,perfil,sitecod in USUARIOS_PADRAO:
             if not db.query(Usuario).filter_by(nome=nome).first():
                 stt=db.query(Site).filter_by(codigo=sitecod).first(); db.add(Usuario(nome=nome,perfil=perfil,site_id=stt.id if stt else None))
-        for tipo,itens in CHECKLIST_NR12.items():
-            for i,(pergunta,critico) in enumerate(itens,1):
-                if not db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo,ordem=i).first():
-                    db.add(ChecklistItemNR12(tipo_checklist=tipo,ordem=i,pergunta=pergunta,item_critico=critico,ativo=True))
-        for cat,pergs in CHECKLIST_EHS.items():
-            d=db.query(DiretivaEHS).filter_by(categoria=cat).first()
-            if not d: d=DiretivaEHS(categoria=cat,descricao=cat,ativo=True); db.add(d); db.flush()
-            for i,p in enumerate(pergs,1):
-                if not db.query(RequisitoEHS).filter_by(diretiva_id=d.id,ordem=i).first():
-                    db.add(RequisitoEHS(diretiva_id=d.id,ordem=i,pergunta=p,criticidade="Alta" if i in [1,3,7] else "Média",evidencia_esperada="Evidência documental, registros, entrevistas e/ou verificação em campo.",ativo=True))
+        sync_checklists_base(db)
         db.commit()
         if db.query(MaquinaNR12).count()==0:
             sjc=db.query(Site).filter_by(codigo="SJC").first()
-            m=MaquinaNR12(codigo="SJC-PRENSA-001",site_id=sjc.id,area_setor="Produção",linha_processo="Linha 1",nome="Prensa hidráulica 001",fabricante="Fabricante A",modelo="PH-100",numero_serie="PH100",ano="2020",tipo_equipamento="Prensa",responsavel_area="Produção",criticidade="Alta",status_nr12="Conforme com observação",ultima_adequacao=date.today()-timedelta(days=180),ultima_auditoria=date.today()-timedelta(days=90),proxima_auditoria=date.today()+timedelta(days=40),possui_laudo=True,possui_art=True,possui_apreciacao_risco=True,possui_manual_atualizado=True,possui_treinamento=True)
+            m=MaquinaNR12(codigo="SJC-PRENSA-001",site_id=sjc.id,area_setor="Produção",linha_processo="Linha 1",nome="Prensa hidráulica 001",fabricante="Fabricante A",modelo="PH-100",numero_serie="PH100",ano="2020",tipo_equipamento="Prensa",responsavel_area="Produção",criticidade="Alta",risco_maquina="Significativo",status_nr12="Conforme com observação",ultima_adequacao=date.today()-timedelta(days=180),ultima_auditoria=date.today()-timedelta(days=90),proxima_auditoria=date.today()+timedelta(days=40),possui_laudo=True,possui_art=True,possui_apreciacao_risco=True,possui_manual_atualizado=True,possui_treinamento=True)
             db.add(m); db.flush()
             for t in DOCUMENTOS_ESSENCIAIS: db.add(DocumentoNR12(maquina_id=m.id,site_id=sjc.id,tipo=t,descricao=t,data_emissao=date.today()-timedelta(days=200),data_validade=date.today()+timedelta(days=365),arquivo_nome=t+".pdf",responsavel="EHS"))
             db.add(PACNR12(origem="Seed",site_id=sjc.id,maquina_id=m.id,descricao_desvio="Pendência menor em sinalização.",classificacao="Menor",responsavel="Manutenção SJC",area_responsavel="Manutenção",prazo=date.today()+timedelta(days=20),status="Em andamento"))
@@ -301,7 +354,6 @@ def calcular_status_maquina_nr12(db,m):
     docs={d.tipo:d for d in db.query(DocumentoNR12).filter_by(maquina_id=m.id)}
     if any((t not in docs) or calcular_status_documento(docs[t])=="Vencido" for t in DOCUMENTOS_ESSENCIAIS): return "Pendente de ação não crítica"
     if db.query(PACNR12).filter(PACNR12.maquina_id==m.id,PACNR12.classificacao=="Crítico",PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação","Vencida"])).first(): return "Bloqueada por desvio crítico"
-    if db.query(MOCNR12).filter(MOCNR12.maquina_id==m.id,MOCNR12.exige_moc==True,MOCNR12.validacao_final==False,MOCNR12.status.in_(["Implementada","Aprovada"])).first(): return "Bloqueada por desvio crítico"
     return m.status_nr12 or "Conforme"
 def calcular_resultado_verificacao_nr12(resps):
     ap=[r for r in resps if r.aplicavel and r.resultado!="Não aplicável"]
@@ -388,7 +440,11 @@ def download_pdf_button(label,file,pdf): st.download_button(label,pdf,file,mime=
 
 # DataFrames
 def df_maquinas(db,ids):
-    return pd.DataFrame([{"ID":m.id,"Código":m.codigo,"Site":site_code(db,m.site_id),"Área":m.area_setor,"Linha":m.linha_processo,"Máquina":m.nome,"Fabricante":m.fabricante,"Modelo":m.modelo,"Série":m.numero_serie,"Ano":m.ano,"Tipo":m.tipo_equipamento,"Responsável":m.responsavel_area,"Criticidade":m.criticidade,"Status NR-12":calcular_status_maquina_nr12(db,m),"Próxima auditoria":fmt_date(m.proxima_auditoria),"Laudo":"Sim" if m.possui_laudo else "Não","ART":"Sim" if m.possui_art else "Não","Apreciação":"Sim" if m.possui_apreciacao_risco else "Não","Manual":"Sim" if m.possui_manual_atualizado else "Não","Treinamento":"Sim" if m.possui_treinamento else "Não","Observações":m.observacoes} for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo)])
+    rows = []
+    for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo):
+        risco = m.risco_maquina or ("Desprezível" if m.possui_apreciacao_risco else "Apreciação de risco não realizada")
+        rows.append({"ID":m.id,"Código":m.codigo,"Site":site_code(db,m.site_id),"Área":m.area_setor,"Linha":m.linha_processo,"Máquina":m.nome,"Fabricante":m.fabricante,"Modelo":m.modelo,"Série":m.numero_serie,"Ano":m.ano,"Tipo":m.tipo_equipamento,"Responsável":m.responsavel_area,"Criticidade":m.criticidade,"Risco":risco,"Status NR-12":calcular_status_maquina_nr12(db,m),"Próxima auditoria":fmt_date(m.proxima_auditoria),"Laudo":"Sim" if m.possui_laudo else "Não","ART":"Sim" if m.possui_art else "Não","Apreciação":"Sim" if m.possui_apreciacao_risco else "Não","Manual":"Sim" if m.possui_manual_atualizado else "Não","Treinamento":"Sim" if m.possui_treinamento else "Não","Observações":m.observacoes})
+    return pd.DataFrame(rows)
 def df_docs(db,ids):
     return pd.DataFrame([{"ID":d.id,"Site":site_code(db,d.site_id),"Máquina":d.maquina.codigo if d.maquina else "—","Tipo":d.tipo,"Status":calcular_status_documento(d),"Emissão":fmt_date(d.data_emissao),"Validade":fmt_date(d.data_validade),"Arquivo":d.arquivo_nome,"Responsável":d.responsavel,"Descrição":d.descricao,"Observações":d.observacoes} for d in db.query(DocumentoNR12).filter(DocumentoNR12.site_id.in_(ids)).order_by(DocumentoNR12.id.desc())])
 def df_ver(db,ids):
@@ -414,8 +470,8 @@ def dashboard_integrado(db,u):
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all()
     auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).all()
     conf=[calcular_conformidade_ehs(db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()) for a in auds]
-    vals=[len(ms),sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Bloqueada por desvio crítico"),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(),db.query(MOCNR12).filter(MOCNR12.site_id.in_(ids),MOCNR12.exige_moc==True,MOCNR12.validacao_final==False).count(),db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(),f"{round(sum(conf)/len(conf),1) if conf else 0}%",db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(),db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count()]
-    labs=["Total de máquinas NR-12","Máquinas bloqueadas","PACs NR-12 vencidos","MOCs críticas sem validação","Auditorias em andamento","Conformidade média EHS","PACs EHS vencidos","NC críticas EHS"]
+    vals=[len(ms),sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Bloqueada por desvio crítico"),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count(),db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(),f"{round(sum(conf)/len(conf),1) if conf else 0}%",db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(),db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count()]
+    labs=["Total de máquinas NR-12","Máquinas bloqueadas","PACs NR-12 vencidos","PACs NR-12 abertos","Auditorias em andamento","Conformidade média EHS","PACs EHS vencidos","NC críticas EHS"]
     section("Visão geral integrada")
     for chunk in [range(4),range(4,8)]:
         cols=st.columns(4)
@@ -436,7 +492,7 @@ def home_page(db,u):
     dashboard_integrado(db,u); section("Módulos")
     c1,c2=st.columns(2)
     with c1:
-        module_card("Sustentação NR-12","Inventário, documentos, checklists, PAC, MOC, termo anual e relatórios.","⚙️")
+        module_card("Sustentação NR-12","Inventário, documentos, checklists, PAC, pendências e relatórios.","⚙️")
         if st.button("Acessar Sustentação NR-12",use_container_width=True):
             st.session_state.modulo="nr12"; st.session_state.page_nr12="Dashboard NR-12"; st.rerun()
     with c2:
@@ -449,9 +505,45 @@ def home_page(db,u):
 # ============================================================
 def nr12_dashboard(db,u):
     header("Sustentação da Conformidade NR-12","Dashboard objetivo para máquinas já adequadas à NR-12")
-    ids=visible_site_ids(u,db); ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all(); sts=[calcular_status_maquina_nr12(db,m) for m in ms]; total=len(ms)
-    docs=db.query(DocumentoNR12).filter(DocumentoNR12.site_id.in_(ids)).all(); dfm=df_maquinas(db,ids); dfp=df_pac_nr12(db,ids)
-    cards=[("Total de máquinas",total),("% máquinas conformes",f"{round(sts.count('Conforme')/total*100,1) if total else 0}%"),("Máquinas com observação",sts.count("Conforme com observação")),("Máquinas pendentes",sts.count("Pendente de ação não crítica")),("Máquinas bloqueadas",sts.count("Bloqueada por desvio crítico")),("Docs essenciais vencidos",sum(1 for d in docs if d.tipo in DOCUMENTOS_ESSENCIAIS and calcular_status_documento(d)=="Vencido")),("Docs essenciais ausentes",sum(sum(1 for t in DOCUMENTOS_ESSENCIAIS if t not in {d.tipo for d in db.query(DocumentoNR12).filter_by(maquina_id=m.id)}) for m in ms)),("Verificações vencidas",sum(1 for m in ms if m.proxima_auditoria and m.proxima_auditoria<date.today())),("Verificações próximas",sum(1 for m in ms if m.proxima_auditoria and date.today()<=m.proxima_auditoria<=date.today()+timedelta(days=60))),("PACs abertos",db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count()),("PACs vencidos",db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count()),("MOCs críticas sem validação",db.query(MOCNR12).filter(MOCNR12.site_id.in_(ids),MOCNR12.exige_moc==True,MOCNR12.validacao_final==False).count())]
+    ids=visible_site_ids(u,db)
+    dfm_full=df_maquinas(db,ids)
+    if dfm_full.empty:
+        empty_state("Nenhuma máquina cadastrada para os filtros de acesso do usuário.")
+        return
+    section("Filtros")
+    f1,f2,f3,f4=st.columns(4)
+    unidades=f1.multiselect("Unidade", sorted(dfm_full["Site"].dropna().unique()))
+    riscos=f2.multiselect("Risco da máquina", [r for r in RISCOS_MAQUINA if r in set(dfm_full["Risco"].dropna())])
+    crits=f3.multiselect("Criticidade", sorted(dfm_full["Criticidade"].dropna().unique()))
+    status_f=f4.multiselect("Status NR-12", [s for s in STATUS_MAQUINA if s in set(dfm_full["Status NR-12"].dropna())])
+    dfm=dfm_full.copy()
+    if unidades: dfm=dfm[dfm["Site"].isin(unidades)]
+    if riscos: dfm=dfm[dfm["Risco"].isin(riscos)]
+    if crits: dfm=dfm[dfm["Criticidade"].isin(crits)]
+    if status_f: dfm=dfm[dfm["Status NR-12"].isin(status_f)]
+    m_ids=dfm["ID"].astype(int).tolist() if not dfm.empty else []
+    ms=db.query(MaquinaNR12).filter(MaquinaNR12.id.in_(m_ids)).all() if m_ids else []
+    sts=[calcular_status_maquina_nr12(db,m) for m in ms]
+    total=len(ms)
+    docs=db.query(DocumentoNR12).filter(DocumentoNR12.maquina_id.in_(m_ids)).all() if m_ids else []
+    dfp=df_pac_nr12(db,ids)
+    if not dfp.empty and not dfm.empty:
+        codigos=set(dfm["Código"].astype(str))
+        dfp=dfp[dfp["Máquina"].isin(codigos)]
+    cards=[
+        ("Total de máquinas",total),
+        ("% máquinas conformes",f"{round(sts.count('Conforme')/total*100,1) if total else 0}%"),
+        ("Máquinas com observação",sts.count("Conforme com observação")),
+        ("Máquinas pendentes",sts.count("Pendente de ação não crítica")),
+        ("Máquinas bloqueadas",sts.count("Bloqueada por desvio crítico")),
+        ("Docs essenciais vencidos",sum(1 for d in docs if d.tipo in DOCUMENTOS_ESSENCIAIS and calcular_status_documento(d)=="Vencido")),
+        ("Docs essenciais ausentes",sum(sum(1 for t in DOCUMENTOS_ESSENCIAIS if t not in {d.tipo for d in db.query(DocumentoNR12).filter_by(maquina_id=m.id)}) for m in ms)),
+        ("Verificações vencidas",sum(1 for m in ms if m.proxima_auditoria and m.proxima_auditoria<date.today())),
+        ("Verificações próximas",sum(1 for m in ms if m.proxima_auditoria and date.today()<=m.proxima_auditoria<=date.today()+timedelta(days=60))),
+        ("PACs abertos",0 if dfp.empty else int(dfp["Status"].isin(["Aberta","Em andamento","Aguardando validação"]).sum())),
+        ("PACs vencidos",0 if dfp.empty else int((dfp["Status"]=="Vencida").sum())),
+        ("Risco alto/extremo",0 if dfm.empty else int(dfm["Risco"].isin(["Alto","Extremo","Apreciação de risco não realizada"]).sum()))
+    ]
     for base in [0,4,8]:
         cols=st.columns(4)
         for c,(l,v) in zip(cols,cards[base:base+4]):
@@ -459,29 +551,25 @@ def nr12_dashboard(db,u):
     section("Gráficos")
     c1,c2=st.columns(2)
     with c1:
-        if not dfm.empty:
-            st.plotly_chart(px.histogram(dfm, x="Site", color="Status NR-12", barmode="group", title="Status NR-12 por site").update_layout(template="plotly_white"), use_container_width=True)
-        else:
-            empty_state("Sem máquinas.")
+        st.plotly_chart(px.histogram(dfm, x="Site", color="Status NR-12", barmode="group", title="Status NR-12 por site", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
     with c2:
-        if not dfm.empty:
-            st.plotly_chart(px.pie(dfm, names="Criticidade", title="Máquinas por criticidade", hole=.45).update_layout(template="plotly_white"), use_container_width=True)
-        else:
-            empty_state("Sem dados.")
+        risco_counts=dfm.groupby("Risco",as_index=False).size().rename(columns={"size":"Quantidade"}) if not dfm.empty else pd.DataFrame(columns=["Risco","Quantidade"])
+        st.plotly_chart(px.bar(risco_counts, x="Risco", y="Quantidade", color="Risco", title="Quantidade de máquinas por risco", color_discrete_map=RISCO_COLOR_MAP, category_orders={"Risco":RISCOS_MAQUINA}).update_layout(template="plotly_white", xaxis_title="Risco", yaxis_title="Máquinas"), use_container_width=True)
     c3,c4=st.columns(2)
     with c3:
         if not dfp.empty:
-            st.plotly_chart(px.histogram(dfp, x="Status", color="Classificação", barmode="group", title="PAC por status/classificação").update_layout(template="plotly_white"), use_container_width=True)
+            st.plotly_chart(px.histogram(dfp, x="Status", color="Classificação", barmode="group", title="PAC por status/classificação", color_discrete_map=PAC_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
         else:
-            empty_state("Sem PACs.")
+            empty_state("Sem PACs para os filtros selecionados.")
     with c4:
-        dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":cards[7][1]},{"Tipo":"Próximas","Qtd":cards[8][1]}]); st.plotly_chart(px.bar(dv,x="Tipo",y="Qtd",title="Verificações vencidas/próximas").update_layout(template="plotly_white"),use_container_width=True)
+        dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":cards[7][1]},{"Tipo":"Próximas","Qtd":cards[8][1]}])
+        st.plotly_chart(px.bar(dv,x="Tipo",y="Qtd",color="Tipo",title="Verificações vencidas/próximas", color_discrete_map={"Vencidas":"#dc2626","Próximas":"#f59e0b"}).update_layout(template="plotly_white", showlegend=False),use_container_width=True)
     section("Máquinas prioritárias")
     pr=dfm[dfm["Status NR-12"].isin(["Bloqueada por desvio crítico","Pendente de ação não crítica","Conforme com observação"])] if not dfm.empty else pd.DataFrame()
     if not pr.empty:
         st.dataframe(pr, use_container_width=True, hide_index=True)
     else:
-        empty_state("Nenhuma máquina prioritária.")
+        empty_state("Nenhuma máquina prioritária nos filtros selecionados.")
 def nr12_inventario(db,u):
     header("Inventário de Máquinas","Cadastro, edição, consulta e exportação")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids)).order_by(Site.codigo)}
@@ -489,34 +577,51 @@ def nr12_inventario(db,u):
         with st.expander("Cadastrar máquina"):
             with st.form("maq"):
                 a,b,c=st.columns(3)
-                with a: cod=st.text_input("Código*"); site=st.selectbox("Site*",list(sites)); area=st.text_input("Área/setor"); linha=st.text_input("Linha/processo"); nome=st.text_input("Nome*"); fab=st.text_input("Fabricante")
-                with b: mod=st.text_input("Modelo"); serie=st.text_input("Número de série"); ano=st.text_input("Ano"); tipo=st.text_input("Tipo de equipamento"); resp=st.text_input("Responsável da área"); crit=st.selectbox("Criticidade",CRITICIDADES)
-                with c: status=st.selectbox("Status NR-12",STATUS_MAQUINA); prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180))
+                with a:
+                    cod=st.text_input("Código*"); site=st.selectbox("Site*",list(sites)); area=st.text_input("Área/setor"); linha=st.text_input("Linha/processo"); nome=st.text_input("Nome*"); fab=st.text_input("Fabricante")
+                with b:
+                    mod=st.text_input("Modelo"); serie=st.text_input("Número de série"); ano=st.text_input("Ano"); tipo=st.text_input("Tipo de equipamento"); resp=st.text_input("Responsável da área"); crit=st.selectbox("Criticidade",CRITICIDADES)
+                with c:
+                    risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA); status=st.selectbox("Status NR-12",STATUS_MAQUINA); prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180))
                 ck=st.columns(5); laudo=ck[0].checkbox("Laudo"); art=ck[1].checkbox("ART"); apr=ck[2].checkbox("Apreciação"); man=ck[3].checkbox("Manual"); tre=ck[4].checkbox("Treinamento"); obs=st.text_area("Observações")
                 if st.form_submit_button("Salvar",use_container_width=True):
                     if cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
-                        db.add(MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,status_nr12=status,proxima_auditoria=prox,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs)); db.commit(); st.success("Máquina cadastrada."); st.rerun()
+                        db.add(MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,proxima_auditoria=prox,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs)); db.commit(); st.success("Máquina cadastrada."); st.rerun()
                     else: st.error("Preencha código/nome e evite código duplicado.")
     df=df_maquinas(db,ids); section("Consulta")
     if df.empty: empty_state("Nenhuma máquina cadastrada."); return
-    s=st.multiselect("Filtrar status",sorted(df["Status NR-12"].unique())); f=df[df["Status NR-12"].isin(s)] if s else df
+    f1,f2,f3,f4=st.columns(4)
+    fs=f1.multiselect("Filtrar status",sorted(df["Status NR-12"].unique()))
+    fr=f2.multiselect("Filtrar risco",[r for r in RISCOS_MAQUINA if r in set(df["Risco"].dropna())])
+    fc=f3.multiselect("Filtrar criticidade",sorted(df["Criticidade"].dropna().unique()))
+    fu=f4.multiselect("Filtrar unidade",sorted(df["Site"].dropna().unique()))
+    f=df.copy()
+    if fs: f=f[f["Status NR-12"].isin(fs)]
+    if fr: f=f[f["Risco"].isin(fr)]
+    if fc: f=f[f["Criticidade"].isin(fc)]
+    if fu: f=f[f["Site"].isin(fu)]
     st.dataframe(f,use_container_width=True,hide_index=True); download_excel_button("Exportar Excel","inventario_maquinas_nr12.xlsx",{"Inventário":f})
     if can_edit(u,"nr12_manutencao"):
         opts=machine_options(db,ids); section("Editar máquina")
         lab=st.selectbox("Máquina",list(opts)); m=db.get(MaquinaNR12,opts[lab])
         with st.form("editmaq"):
-            m.status_nr12=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(m.status_nr12) if m.status_nr12 in STATUS_MAQUINA else 0); m.criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1); m.observacoes=st.text_area("Observações",m.observacoes or "")
+            m.status_nr12=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(m.status_nr12) if m.status_nr12 in STATUS_MAQUINA else 0)
+            m.criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1)
+            risco_atual=m.risco_maquina or "Apreciação de risco não realizada"
+            m.risco_maquina=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0)
+            m.proxima_auditoria=st.date_input("Próxima auditoria prevista",value=m.proxima_auditoria or date.today()+timedelta(days=180))
+            m.observacoes=st.text_area("Observações",m.observacoes or "")
             if st.form_submit_button("Atualizar",use_container_width=True): db.commit(); st.success("Atualizado."); st.rerun()
 def nr12_documentos(db,u):
-    header("Documentos NR-12","Controle de documentos essenciais, validade e evidências")
+    header("Documentos NR-12","Controle de documentos essenciais, validade, evidências e anexos")
     ids=visible_site_ids(u,db); opts=machine_options(db,ids)
     if can_edit(u,"nr12_manutencao") and opts:
         with st.expander("Cadastrar documento"):
             with st.form("doc"):
                 lab=st.selectbox("Máquina",list(opts)); tipo=st.selectbox("Tipo",TIPOS_DOC_NR12); emiss=st.date_input("Emissão",date.today()); valid=st.date_input("Validade",date.today()+timedelta(days=365)); resp=st.text_input("Responsável"); up=st.file_uploader("Arquivo"); desc=st.text_area("Descrição")
                 if st.form_submit_button("Salvar",use_container_width=True):
-                    m=db.get(MaquinaNR12,opts[lab]); fname=up.name if up else ""
-                    db.add(DocumentoNR12(maquina_id=m.id,site_id=m.site_id,tipo=tipo,descricao=desc,data_emissao=emiss,data_validade=valid,arquivo_nome=fname,arquivo_caminho=fname,responsavel=resp))
+                    m=db.get(MaquinaNR12,opts[lab]); fname=up.name if up else ""; fbytes=up.getvalue() if up else None
+                    db.add(DocumentoNR12(maquina_id=m.id,site_id=m.site_id,tipo=tipo,descricao=desc,data_emissao=emiss,data_validade=valid,arquivo_nome=fname,arquivo_caminho=fname,arquivo_bytes=fbytes,responsavel=resp))
                     if tipo=="Laudo NR-12": m.possui_laudo=True
                     if tipo=="ART": m.possui_art=True
                     if tipo=="Apreciação de risco": m.possui_apreciacao_risco=True
@@ -527,6 +632,21 @@ def nr12_documentos(db,u):
     else:
         empty_state("Nenhum documento.")
     download_excel_button("Exportar documentos Excel","documentos_nr12.xlsx",{"Documentos":df})
+    section("Arquivos anexados")
+    docs=db.query(DocumentoNR12).filter(DocumentoNR12.site_id.in_(ids)).order_by(DocumentoNR12.id.desc()).all()
+    docs_com_nome=[d for d in docs if d.arquivo_nome]
+    if not docs_com_nome:
+        empty_state("Nenhum arquivo anexado aos documentos.")
+    else:
+        for d in docs_com_nome:
+            c1,c2,c3,c4=st.columns([1.2,1.4,2,.9])
+            c1.markdown(f"**{d.tipo}**")
+            c2.write(d.maquina.codigo if d.maquina else "—")
+            c3.write(d.arquivo_nome)
+            if d.arquivo_bytes:
+                c4.download_button("Baixar",data=d.arquivo_bytes,file_name=d.arquivo_nome,mime="application/octet-stream",key=f"doc_download_{d.id}",use_container_width=True)
+            else:
+                c4.caption("Sem arquivo salvo")
 def nr12_checklists(db,u):
     header("Checklists e Inspeções NR-12", "Registro por máquina, pontuação e geração automática de PAC")
     ids = visible_site_ids(u, db)
@@ -620,6 +740,62 @@ def nr12_pac(db,u):
                 if p.status=="Concluída" and not p.evidencia_conclusao: st.error("PAC concluído exige evidência.")
                 elif p.status=="Concluída" and p.classificacao=="Crítico" and not p.validacao_ehs: st.error("PAC crítico concluído exige validação EHS.")
                 else: db.commit(); st.success("Atualizado."); st.rerun()
+def prioridade_auditoria_nr12(db,m):
+    risco = m.risco_maquina or ("Desprezível" if m.possui_apreciacao_risco else "Apreciação de risco não realizada")
+    risco_peso={"Apreciação de risco não realizada":6,"Extremo":5,"Alto":4,"Significativo":3,"Atenção":2,"Desprezível":1}.get(risco,1)
+    status=calcular_status_maquina_nr12(db,m)
+    status_peso={"Bloqueada por desvio crítico":5,"Pendente de ação não crítica":4,"Conforme com observação":2,"Em readequação":3}.get(status,0)
+    if not m.proxima_auditoria:
+        prazo_peso=80; dias=None; prazo_txt="Sem data"
+    else:
+        dias=(m.proxima_auditoria-date.today()).days
+        if dias < 0: prazo_peso=100; prazo_txt="Vencida"
+        elif dias <= 30: prazo_peso=70; prazo_txt="Até 30 dias"
+        elif dias <= 60: prazo_peso=45; prazo_txt="Até 60 dias"
+        elif dias <= 90: prazo_peso=20; prazo_txt="Até 90 dias"
+        else: prazo_peso=0; prazo_txt="Planejada"
+    score=prazo_peso + risco_peso*10 + status_peso*8
+    if score >= 130: prioridade="Crítica"
+    elif score >= 95: prioridade="Alta"
+    elif score >= 60: prioridade="Média"
+    else: prioridade="Baixa"
+    return score, prioridade, prazo_txt, dias, risco
+
+def nr12_central_pendencias(db,u):
+    header("Central de Pendências NR-12","Próximas auditorias ordenadas por prioridade")
+    ids=visible_site_ids(u,db)
+    ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all()
+    rows=[]
+    for m in ms:
+        score, prioridade, prazo_txt, dias, risco = prioridade_auditoria_nr12(db,m)
+        rows.append({
+            "Prioridade":prioridade,
+            "Score":score,
+            "Site":site_code(db,m.site_id),
+            "Código":m.codigo,
+            "Máquina":m.nome,
+            "Área":m.area_setor,
+            "Risco":risco,
+            "Criticidade":m.criticidade,
+            "Status NR-12":calcular_status_maquina_nr12(db,m),
+            "Próxima auditoria":fmt_date(m.proxima_auditoria),
+            "Dias para vencer":dias if dias is not None else "—",
+            "Situação do prazo":prazo_txt,
+        })
+    df=pd.DataFrame(rows).sort_values(["Score","Risco"],ascending=[False,True]) if rows else pd.DataFrame()
+    if df.empty:
+        empty_state("Nenhuma máquina cadastrada.")
+        return
+    f1,f2,f3=st.columns(3)
+    unidade=f1.multiselect("Filtrar unidade",sorted(df["Site"].unique()))
+    risco=f2.multiselect("Filtrar risco",[r for r in RISCOS_MAQUINA if r in set(df["Risco"].dropna())])
+    prioridade=f3.multiselect("Filtrar prioridade",[p for p in ["Crítica","Alta","Média","Baixa"] if p in set(df["Prioridade"].dropna())])
+    if unidade: df=df[df["Site"].isin(unidade)]
+    if risco: df=df[df["Risco"].isin(risco)]
+    if prioridade: df=df[df["Prioridade"].isin(prioridade)]
+    st.dataframe(df.drop(columns=["Score"]),use_container_width=True,hide_index=True)
+    download_excel_button("Exportar central de pendências", "central_pendencias_nr12.xlsx", {"Pendências": df.drop(columns=["Score"])})
+
 def nr12_moc(db,u):
     header("Gestão de Mudanças / MOC NR-12","Mudanças críticas, aprovações e validação")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}; opts=machine_options(db,ids)
@@ -658,15 +834,20 @@ def nr12_termo(db,u):
             download_pdf_button("Baixar termo NR-12 PDF",f"termo_nr12_{site}_{ano}.pdf",pdf)
 def nr12_relatorios(db,u):
     header("Relatórios NR-12","Exportações em Excel e PDFs")
-    ids=visible_site_ids(u,db); d={"Inventário":df_maquinas(db,ids),"Documentos":df_docs(db,ids),"Verificações":df_ver(db,ids),"PAC":df_pac_nr12(db,ids),"MOC":df_moc(db,ids)}
-    cols=st.columns(5)
+    ids=visible_site_ids(u,db)
+    d={"Inventário":df_maquinas(db,ids),"Documentos":df_docs(db,ids),"Verificações":df_ver(db,ids),"PAC":df_pac_nr12(db,ids)}
+    cols=st.columns(4)
     for (name,df),c in zip(d.items(),cols):
         with c: download_excel_button(f"{name} Excel",f"{name.lower()}_nr12.xlsx",{name:df})
     download_excel_button("Pacote NR-12 Excel","pacote_nr12.xlsx",d)
     opts=machine_options(db,ids)
     if opts:
         lab=st.selectbox("Relatório PDF por máquina",list(opts)); m=db.get(MaquinaNR12,opts[lab])
-        pdf=gerar_pdf(f"Relatório por Máquina — {m.codigo}",f"{m.nome} | Site {site_code(db,m.site_id)}",[("Dados",df_maquinas(db,[m.site_id]).query("ID == @m.id")),("Documentos",df_docs(db,[m.site_id])),("PACs",df_pac_nr12(db,[m.site_id]))])
+        dados=df_maquinas(db,[m.site_id]); dados=dados[dados["ID"]==m.id]
+        docs=df_docs(db,[m.site_id]); docs=docs[docs["ID"].isin([d.id for d in db.query(DocumentoNR12).filter_by(maquina_id=m.id).all()])] if not docs.empty else docs
+        pacs=df_pac_nr12(db,[m.site_id]); pacs=pacs[pacs["Máquina"]==m.codigo] if not pacs.empty else pacs
+        vers=pd.DataFrame([{"ID":v.id,"Tipo":v.tipo,"Data":fmt_date(v.data_verificacao),"Responsável":v.responsavel,"Resultado":v.resultado,"Pontuação %":v.pontuacao,"NC crítica":"Sim" if v.possui_nc_critica else "Não","Próxima":fmt_date(v.proxima_verificacao),"Observações":v.observacoes} for v in db.query(VerificacaoNR12).filter_by(maquina_id=m.id).order_by(VerificacaoNR12.data_verificacao.desc())])
+        pdf=gerar_pdf(f"Relatório por Máquina — {m.codigo}",f"{m.nome} | Site {site_code(db,m.site_id)}",[("Dados",dados),("Auditorias e verificações realizadas",vers),("Documentos",docs),("PACs",pacs)])
         download_pdf_button("Baixar relatório por máquina PDF",f"relatorio_maquina_{m.codigo}.pdf",pdf)
 
 # ============================================================
@@ -846,7 +1027,7 @@ def render_sidebar(db,u):
         st.session_state.modulo="home"; st.rerun()
     st.sidebar.divider()
     if mod=="nr12":
-        pages=["Dashboard NR-12","Inventário de Máquinas","Documentos NR-12","Checklists e Inspeções","PAC NR-12","Gestão de Mudanças / MOC","Termo de Garantia","Relatórios NR-12"]
+        pages=["Dashboard NR-12","Central de Pendências","Inventário de Máquinas","Documentos NR-12","Checklists e Inspeções","PAC NR-12","Relatórios NR-12"]
         current=st.session_state.get("page_nr12",pages[0])
         st.session_state.page_nr12=st.sidebar.radio("Sustentação NR-12",pages,index=pages.index(current) if current in pages else 0)
     elif mod=="ehs":
@@ -857,7 +1038,7 @@ def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod=="home": home_page(db,u)
     elif mod=="nr12":
-        {"Dashboard NR-12":nr12_dashboard,"Inventário de Máquinas":nr12_inventario,"Documentos NR-12":nr12_documentos,"Checklists e Inspeções":nr12_checklists,"PAC NR-12":nr12_pac,"Gestão de Mudanças / MOC":nr12_moc,"Termo de Garantia":nr12_termo,"Relatórios NR-12":nr12_relatorios}[st.session_state.get("page_nr12","Dashboard NR-12")](db,u)
+        {"Dashboard NR-12":nr12_dashboard,"Central de Pendências":nr12_central_pendencias,"Inventário de Máquinas":nr12_inventario,"Documentos NR-12":nr12_documentos,"Checklists e Inspeções":nr12_checklists,"PAC NR-12":nr12_pac,"Relatórios NR-12":nr12_relatorios}[st.session_state.get("page_nr12","Dashboard NR-12")](db,u)
     elif mod=="ehs":
         {"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist EHS Directives":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios}[st.session_state.get("page_ehs","Dashboard Auditoria Cruzada")](db,u)
 
