@@ -115,6 +115,8 @@ def apply_theme():
     st.markdown("""
     <style>
     .stApp{background:#f6f8fb}.block-container{padding-top:1.4rem}
+    /* Oculta a navegação multipage nativa do Streamlit, caso exista pasta pages/ no ambiente. */
+    [data-testid="stSidebarNav"]{display:none!important;visibility:hidden!important;height:0!important;}
     section[data-testid="stSidebar"]{background:linear-gradient(180deg,#f5c542,#d9a514,#8a6510)}
     section[data-testid="stSidebar"] *{color:#1f2937!important}
     div.stButton>button,div.stDownloadButton>button{border-radius:14px;border:1px solid #d7dde8;background:#fff;font-weight:700;box-shadow:0 6px 18px rgba(31,41,55,.07)}
@@ -125,6 +127,17 @@ def apply_theme():
     .empty{border:1px dashed #c9d1df;border-radius:18px;background:#fff;padding:1rem;text-align:center;color:#697386}
     .alert{background:#fff7df;border-left:6px solid #d9a514;border-radius:16px;padding:.8rem;margin:.5rem 0}
     </style>""", unsafe_allow_html=True)
+
+def hide_sidebar_on_home():
+    """Na tela inicial, a plataforma se comporta como landing page, sem menu lateral."""
+    if st.session_state.get("modulo", "home") == "home":
+        st.markdown("""
+        <style>
+        section[data-testid="stSidebar"]{display:none!important;}
+        [data-testid="collapsedControl"]{display:none!important;}
+        .block-container{padding-left:3rem!important;padding-right:3rem!important;}
+        </style>
+        """, unsafe_allow_html=True)
 
 # ============================================================
 # 5. Banco e modelos SQLAlchemy
@@ -312,12 +325,25 @@ def kpi_card(l,v,h=""): st.markdown(f"<div class='kpi'><div class='kpi-label'>{l
 def module_card(t,d,i): st.markdown(f"<div class='card'><h3>{i} {t}</h3><p class='muted'>{d}</p></div>",unsafe_allow_html=True)
 def empty_state(t): st.markdown(f"<div class='empty'>{t}</div>",unsafe_allow_html=True)
 def alert_card(t): st.markdown(f"<div class='alert'>{t}</div>",unsafe_allow_html=True)
-def user_selector(db):
+def user_selector(db, location="sidebar"):
     us=db.query(Usuario).filter_by(ativo=True).order_by(Usuario.nome).all(); nomes=[u.nome for u in us]
-    if "usuario_nome" not in st.session_state: st.session_state.usuario_nome="Eduardo" if "Eduardo" in nomes else nomes[0]
-    sel=st.sidebar.selectbox("Usuário",nomes,index=nomes.index(st.session_state.usuario_nome) if st.session_state.usuario_nome in nomes else 0)
-    st.session_state.usuario_nome=sel; u=db.query(Usuario).filter_by(nome=sel).first()
-    st.sidebar.caption(f"Perfil: {u.perfil} | Site: {u.site.codigo if u and u.site else '—'}"); return u
+    if not nomes:
+        return None
+    if "usuario_nome" not in st.session_state:
+        st.session_state.usuario_nome="Eduardo" if "Eduardo" in nomes else nomes[0]
+    idx=nomes.index(st.session_state.usuario_nome) if st.session_state.usuario_nome in nomes else 0
+    if location=="main":
+        c1,c2=st.columns([3,1])
+        with c2:
+            sel=st.selectbox("Usuário",nomes,index=idx,key="usuario_home_select")
+            u=db.query(Usuario).filter_by(nome=sel).first()
+            st.caption(f"Perfil: {u.perfil} | Site: {u.site.codigo if u and u.site else '—'}")
+    else:
+        sel=st.sidebar.selectbox("Usuário",nomes,index=idx,key="usuario_sidebar_select")
+        u=db.query(Usuario).filter_by(nome=sel).first()
+        st.sidebar.caption(f"Perfil: {u.perfil} | Site: {u.site.codigo if u and u.site else '—'}")
+    st.session_state.usuario_nome=sel
+    return u
 def download_excel_button(label,file,sheets): st.download_button(label,gerar_excel(sheets),file,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 def download_pdf_button(label,file,pdf): st.download_button(label,pdf,file,mime="application/pdf",use_container_width=True)
 
@@ -369,10 +395,12 @@ def home_page(db,u):
     c1,c2=st.columns(2)
     with c1:
         module_card("Sustentação NR-12","Inventário, documentos, checklists, PAC, MOC, termo anual e relatórios.","⚙️")
-        if st.button("Acessar Sustentação NR-12",use_container_width=True): st.session_state.modulo="nr12"; st.rerun()
+        if st.button("Acessar Sustentação NR-12",use_container_width=True):
+            st.session_state.modulo="nr12"; st.session_state.page_nr12="Dashboard NR-12"; st.rerun()
     with c2:
         module_card("Auditoria Cruzada EHS Directives","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.","🧭")
-        if st.button("Acessar Auditoria Cruzada",use_container_width=True): st.session_state.modulo="ehs"; st.rerun()
+        if st.button("Acessar Auditoria Cruzada",use_container_width=True):
+            st.session_state.modulo="ehs"; st.session_state.page_ehs="Dashboard Auditoria Cruzada"; st.rerun()
 
 # ============================================================
 # 13. Páginas NR-12
@@ -612,14 +640,21 @@ def ehs_relatorios(db,u):
 # 15. Roteamento principal
 # ============================================================
 def render_sidebar(db,u):
+    mod=st.session_state.get("modulo","home")
+    if mod=="home":
+        return
     st.sidebar.markdown("### Navegação")
-    if st.sidebar.button("🏠 Tela inicial",use_container_width=True): st.session_state.modulo="home"; st.rerun()
-    if st.session_state.get("modulo","home")=="nr12":
+    if st.sidebar.button("🏠 Voltar para a tela inicial",use_container_width=True):
+        st.session_state.modulo="home"; st.rerun()
+    st.sidebar.divider()
+    if mod=="nr12":
         pages=["Dashboard NR-12","Inventário de Máquinas","Documentos NR-12","Checklists e Inspeções","PAC NR-12","Gestão de Mudanças / MOC","Termo de Garantia","Relatórios NR-12"]
-        st.session_state.page_nr12=st.sidebar.radio("Sustentação NR-12",pages,index=pages.index(st.session_state.get("page_nr12",pages[0])) if st.session_state.get("page_nr12",pages[0]) in pages else 0)
-    elif st.session_state.get("modulo")=="ehs":
+        current=st.session_state.get("page_nr12",pages[0])
+        st.session_state.page_nr12=st.sidebar.radio("Sustentação NR-12",pages,index=pages.index(current) if current in pages else 0)
+    elif mod=="ehs":
         pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist EHS Directives","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"]
-        st.session_state.page_ehs=st.sidebar.radio("Auditoria Cruzada",pages,index=pages.index(st.session_state.get("page_ehs",pages[0])) if st.session_state.get("page_ehs",pages[0]) in pages else 0)
+        current=st.session_state.get("page_ehs",pages[0])
+        st.session_state.page_ehs=st.sidebar.radio("Auditoria Cruzada EHS Directives",pages,index=pages.index(current) if current in pages else 0)
 def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod=="home": home_page(db,u)
@@ -632,9 +667,14 @@ def route(db,u):
 # 16. main()
 # ============================================================
 def main():
-    apply_theme(); init_db(); db=SessionLocal()
+    if "modulo" not in st.session_state:
+        st.session_state.modulo="home"
+    apply_theme(); hide_sidebar_on_home(); init_db(); db=SessionLocal()
     try:
-        if "modulo" not in st.session_state: st.session_state.modulo="home"
-        u=user_selector(db); render_sidebar(db,u); route(db,u)
-    finally: db.close()
+        location="main" if st.session_state.get("modulo","home")=="home" else "sidebar"
+        u=user_selector(db,location=location)
+        render_sidebar(db,u)
+        route(db,u)
+    finally:
+        db.close()
 if __name__=="__main__": main()
