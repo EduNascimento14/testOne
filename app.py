@@ -161,8 +161,6 @@ def sidebar_auditoria(session):
         st.session_state["modulo_ativo"] = "portal"
         st.session_state.pop("mostrar_link_nr12", None)
         st.rerun()
-    if st.sidebar.button("Ir para Sustentação NR-12", use_container_width=True):
-        abrir_nr12()
 
     st.sidebar.divider()
     st.sidebar.markdown("<div class='sidebar-section-title'>Auditoria Cruzada</div>", unsafe_allow_html=True)
