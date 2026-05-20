@@ -20,6 +20,7 @@ def apply_theme():
         .portal-card {background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:1.15rem 1.2rem;margin:.2rem 0 .75rem;min-height:150px;box-shadow:0 4px 16px rgba(18,38,63,.05);}
         .portal-card h2 {margin:0 0 .55rem;color:var(--title);font-size:1.2rem;letter-spacing:0;}
         .portal-card p {margin:0;color:var(--muted);font-size:.94rem;line-height:1.45;}
+        .portal-user-card {background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:.9rem 1rem;margin:0 0 1rem;box-shadow:0 4px 16px rgba(18,38,63,.04);max-width:420px;}
         .sidebar-profile {background:rgba(255,255,255,.38);border:1px solid rgba(18,38,63,.14);border-radius:10px;padding:.7rem .75rem;margin:.65rem 0 .9rem;}
         .sidebar-profile strong {display:block;color:#1f1f1f;font-size:.94rem;}
         .sidebar-profile span {display:block;color:#3d3d3d;font-size:.76rem;margin-top:.1rem;}
