@@ -68,14 +68,14 @@ STATUS_PAC_COLOR_MAP = {"Aberta":"#f97316", "Em andamento":"#3b82f6", "Aguardand
 DOCUMENTOS_ESSENCIAIS = ["Laudo NR-12","ART","Apreciação de risco"]
 TIPOS_DOC_NR12 = ["Inventário NR-12","Apreciação de risco","Laudo NR-12","ART","Projeto mecânico","Projeto elétrico","Diagrama de segurança","Manual de operação","Manual de manutenção","Registro de treinamento","Evidência fotográfica","Checklist de validação","Termo de liberação para uso","Registro de intervenção","Registro de bloqueio/liberação","Outros"]
 TIPOS_VERIFICACAO_NR12 = ["Checklist operacional","Inspeção de manutenção","Auditoria EHS","Auditoria corporativa","Auditoria extraordinária após incidente/quase-acidente"]
-RESULTADOS_NR12 = ["Conforme","Não conforme","Não aplicável"]
+RESULTADOS_NR12 = ["Conforme","Não conforme"]
 STATUS_PAC = ["Aberta","Em andamento","Aguardando validação","Concluída","Vencida","Cancelada"]
 CLASSIFICACAO_PAC = ["Crítico","Maior","Menor"]
 TIPOS_MUDANCA_CRITICA = ["Alteração de software/PLC","Alteração de relé/controlador de segurança","Substituição de componente de segurança","Remoção temporária de proteção","Alteração de proteção fixa/móvel","Alteração de sensores, cortinas, scanners ou intertravamentos","Mudança de layout com impacto em segurança","Retrofit","Manutenção corretiva crítica","Alteração mecânica, elétrica, pneumática ou hidráulica com impacto na condição segura"]
 TIPOS_MUDANCA = TIPOS_MUDANCA_CRITICA + ["Ajuste operacional sem impacto em segurança","Atualização documental","Manutenção preventiva","Melhoria ergonômica sem impacto em segurança","Outro"]
 STATUS_MOC = ["Aberta","Em análise","Aprovada","Implementada","Validada","Reprovada","Cancelada"]
 STATUS_AUDITORIA = ["Planejada","Em andamento","Concluída","Cancelada"]
-STATUS_RESPOSTA_EHS = ["Conforme","Parcialmente Conforme","Não Conforme","Não Aplicável"]
+STATUS_RESPOSTA_EHS = ["Conforme","Parcialmente Conforme","Não Conforme"]
 TIPOS_ACHADO_EHS = ["Não conformidade crítica","Não conformidade maior","Não conformidade menor","Observação","Oportunidade de melhoria","Boa prática"]
 
 CHECKLIST_NR12 = {
@@ -487,24 +487,27 @@ def dashboard_integrado(db,u):
         st.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum alerta crítico ou vencido identificado.")
+
 def home_page(db,u):
-    header("Plataforma Integrada EHS","NR-12 e Auditorias Cruzadas de EHS Directives em uma única aplicação")
+    header("Plataforma Integrada EHS","NR-12 e Auditorias Cruzadas de Diretrizes de EHS em uma única aplicação")
     dashboard_integrado(db,u); section("Módulos")
     c1,c2=st.columns(2)
     with c1:
         module_card("Sustentação NR-12","Inventário, documentos, checklists, PAC, pendências e relatórios.","⚙️")
         if st.button("Acessar Sustentação NR-12",use_container_width=True):
-            st.session_state.modulo="nr12"; st.session_state.page_nr12="Dashboard NR-12"; st.rerun()
+            st.session_state.modulo="nr12"
+            st.session_state.page_nr12="Dashboard NR-12"
+            st.session_state.nav_nr12="Dashboard NR-12"
+            st.rerun()
     with c2:
-        module_card("Auditoria Cruzada EHS Directives","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.","🧭")
+        module_card("Auditoria Cruzada de Diretrizes de EHS","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.","🧭")
         if st.button("Acessar Auditoria Cruzada",use_container_width=True):
-            st.session_state.modulo="ehs"; st.session_state.page_ehs="Dashboard Auditoria Cruzada"; st.rerun()
-
-# ============================================================
-# 13. Páginas NR-12
-# ============================================================
+            st.session_state.modulo="ehs"
+            st.session_state.page_ehs="Dashboard Auditoria Cruzada"
+            st.session_state.nav_ehs="Dashboard Auditoria Cruzada"
+            st.rerun()
 def nr12_dashboard(db,u):
-    header("Sustentação da Conformidade NR-12","Dashboard objetivo para máquinas já adequadas à NR-12")
+    header("Sustentação da Conformidade NR-12","Dashboard para máquinas submetidas à NR-12")
     ids=visible_site_ids(u,db)
     dfm_full=df_maquinas(db,ids)
     if dfm_full.empty:
@@ -570,176 +573,326 @@ def nr12_dashboard(db,u):
         st.dataframe(pr, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhuma máquina prioritária nos filtros selecionados.")
+
 def nr12_inventario(db,u):
     header("Inventário de Máquinas","Cadastro, edição, consulta e exportação")
-    ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids)).order_by(Site.codigo)}
+    ids=visible_site_ids(u,db)
+    sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids)).order_by(Site.codigo)}
+
+    # 1) Consulta
+    section("Consulta")
+    df=df_maquinas(db,ids)
+    if df.empty:
+        empty_state("Nenhuma máquina cadastrada.")
+    else:
+        f1,f2,f3,f4=st.columns(4)
+        fs=f1.multiselect("Filtrar status",sorted(df["Status NR-12"].dropna().unique()))
+        fr=f2.multiselect("Filtrar risco",[r for r in RISCOS_MAQUINA if r in set(df["Risco"].dropna())])
+        fc=f3.multiselect("Filtrar criticidade",sorted(df["Criticidade"].dropna().unique()))
+        fu=f4.multiselect("Filtrar unidade",sorted(df["Site"].dropna().unique()))
+        f=df.copy()
+        if fs: f=f[f["Status NR-12"].isin(fs)]
+        if fr: f=f[f["Risco"].isin(fr)]
+        if fc: f=f[f["Criticidade"].isin(fc)]
+        if fu: f=f[f["Site"].isin(fu)]
+        st.dataframe(f,use_container_width=True,hide_index=True)
+        download_excel_button("Exportar Excel","inventario_maquinas_nr12.xlsx",{"Inventário":f})
+
+    # 2) Cadastrar máquina
     if can_edit(u,"nr12_manutencao"):
-        with st.expander("Cadastrar máquina"):
-            with st.form("maq"):
-                a,b,c=st.columns(3)
-                with a:
-                    cod=st.text_input("Código*"); site=st.selectbox("Site*",list(sites)); area=st.text_input("Área/setor"); linha=st.text_input("Linha/processo"); nome=st.text_input("Nome*"); fab=st.text_input("Fabricante")
-                with b:
-                    mod=st.text_input("Modelo"); serie=st.text_input("Número de série"); ano=st.text_input("Ano"); tipo=st.text_input("Tipo de equipamento"); resp=st.text_input("Responsável da área"); crit=st.selectbox("Criticidade",CRITICIDADES)
-                with c:
-                    risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA); status=st.selectbox("Status NR-12",STATUS_MAQUINA); prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180))
-                ck=st.columns(5); laudo=ck[0].checkbox("Laudo"); art=ck[1].checkbox("ART"); apr=ck[2].checkbox("Apreciação"); man=ck[3].checkbox("Manual"); tre=ck[4].checkbox("Treinamento"); obs=st.text_area("Observações")
-                if st.form_submit_button("Salvar",use_container_width=True):
-                    if cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
-                        db.add(MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,proxima_auditoria=prox,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs)); db.commit(); st.success("Máquina cadastrada."); st.rerun()
-                    else: st.error("Preencha código/nome e evite código duplicado.")
-    df=df_maquinas(db,ids); section("Consulta")
-    if df.empty: empty_state("Nenhuma máquina cadastrada."); return
-    f1,f2,f3,f4=st.columns(4)
-    fs=f1.multiselect("Filtrar status",sorted(df["Status NR-12"].unique()))
-    fr=f2.multiselect("Filtrar risco",[r for r in RISCOS_MAQUINA if r in set(df["Risco"].dropna())])
-    fc=f3.multiselect("Filtrar criticidade",sorted(df["Criticidade"].dropna().unique()))
-    fu=f4.multiselect("Filtrar unidade",sorted(df["Site"].dropna().unique()))
-    f=df.copy()
-    if fs: f=f[f["Status NR-12"].isin(fs)]
-    if fr: f=f[f["Risco"].isin(fr)]
-    if fc: f=f[f["Criticidade"].isin(fc)]
-    if fu: f=f[f["Site"].isin(fu)]
-    st.dataframe(f,use_container_width=True,hide_index=True); download_excel_button("Exportar Excel","inventario_maquinas_nr12.xlsx",{"Inventário":f})
+        if not sites:
+            alert_card("Nenhum site disponível para cadastro conforme o perfil do usuário.")
+        else:
+            with st.expander("Cadastrar máquina"):
+                with st.form("maq"):
+                    a,b,c=st.columns(3)
+                    with a:
+                        cod=st.text_input("Código*")
+                        site=st.selectbox("Site*",list(sites))
+                        area=st.text_input("Área/setor")
+                        linha=st.text_input("Linha/processo")
+                        nome=st.text_input("Nome*")
+                        fab=st.text_input("Fabricante")
+                    with b:
+                        mod=st.text_input("Modelo")
+                        serie=st.text_input("Número de série")
+                        ano=st.text_input("Ano")
+                        tipo=st.text_input("Tipo de equipamento")
+                        resp=st.text_input("Responsável da área")
+                        crit=st.selectbox("Criticidade",CRITICIDADES)
+                    with c:
+                        risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA)
+                        status=st.selectbox("Status NR-12",STATUS_MAQUINA)
+                        prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180))
+                    ck=st.columns(5)
+                    laudo=ck[0].checkbox("Laudo")
+                    art=ck[1].checkbox("ART")
+                    apr=ck[2].checkbox("Apreciação")
+                    man=ck[3].checkbox("Manual")
+                    tre=ck[4].checkbox("Treinamento")
+                    obs=st.text_area("Observações")
+                    if st.form_submit_button("Salvar",use_container_width=True):
+                        if cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
+                            db.add(MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,proxima_auditoria=prox,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs))
+                            db.commit()
+                            st.success("Máquina cadastrada.")
+                            st.rerun()
+                        else:
+                            st.error("Preencha código/nome e evite código duplicado.")
+
+    # 3) Editar máquina
     if can_edit(u,"nr12_manutencao"):
-        opts=machine_options(db,ids); section("Editar máquina")
-        lab=st.selectbox("Máquina",list(opts)); m=db.get(MaquinaNR12,opts[lab])
-        with st.form("editmaq"):
-            m.status_nr12=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(m.status_nr12) if m.status_nr12 in STATUS_MAQUINA else 0)
-            m.criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1)
-            risco_atual=m.risco_maquina or "Apreciação de risco não realizada"
-            m.risco_maquina=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0)
-            m.proxima_auditoria=st.date_input("Próxima auditoria prevista",value=m.proxima_auditoria or date.today()+timedelta(days=180))
-            m.observacoes=st.text_area("Observações",m.observacoes or "")
-            if st.form_submit_button("Atualizar",use_container_width=True): db.commit(); st.success("Atualizado."); st.rerun()
+        opts=machine_options(db,ids)
+        if opts:
+            with st.expander("Editar máquina"):
+                lab=st.selectbox("Máquina",list(opts),key="nr12_editar_maquina_select")
+                m=db.get(MaquinaNR12,opts[lab])
+                with st.form("editmaq"):
+                    m.status_nr12=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(m.status_nr12) if m.status_nr12 in STATUS_MAQUINA else 0)
+                    m.criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1)
+                    risco_atual=m.risco_maquina or "Apreciação de risco não realizada"
+                    m.risco_maquina=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0)
+                    m.proxima_auditoria=st.date_input("Próxima auditoria prevista",value=m.proxima_auditoria or date.today()+timedelta(days=180))
+                    m.observacoes=st.text_area("Observações",m.observacoes or "")
+                    if st.form_submit_button("Atualizar",use_container_width=True):
+                        db.commit()
+                        st.success("Atualizado.")
+                        st.rerun()
+
 def nr12_documentos(db,u):
     header("Documentos NR-12","Controle de documentos essenciais, validade, evidências e anexos")
-    ids=visible_site_ids(u,db); opts=machine_options(db,ids)
-    if can_edit(u,"nr12_manutencao") and opts:
-        with st.expander("Cadastrar documento"):
-            with st.form("doc"):
-                lab=st.selectbox("Máquina",list(opts)); tipo=st.selectbox("Tipo",TIPOS_DOC_NR12); emiss=st.date_input("Emissão",date.today()); valid=st.date_input("Validade",date.today()+timedelta(days=365)); resp=st.text_input("Responsável"); up=st.file_uploader("Arquivo"); desc=st.text_area("Descrição")
-                if st.form_submit_button("Salvar",use_container_width=True):
-                    m=db.get(MaquinaNR12,opts[lab]); fname=up.name if up else ""; fbytes=up.getvalue() if up else None
-                    db.add(DocumentoNR12(maquina_id=m.id,site_id=m.site_id,tipo=tipo,descricao=desc,data_emissao=emiss,data_validade=valid,arquivo_nome=fname,arquivo_caminho=fname,arquivo_bytes=fbytes,responsavel=resp))
-                    if tipo=="Laudo NR-12": m.possui_laudo=True
-                    if tipo=="ART": m.possui_art=True
-                    if tipo=="Apreciação de risco": m.possui_apreciacao_risco=True
-                    db.commit(); st.success("Documento salvo."); st.rerun()
-    df=df_docs(db,ids); section("Consulta")
+    ids=visible_site_ids(u,db)
+    opts=machine_options(db,ids)
+
+    # 1) Consulta
+    section("Consulta")
+    df=df_docs(db,ids)
     if not df.empty:
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum documento.")
     download_excel_button("Exportar documentos Excel","documentos_nr12.xlsx",{"Documentos":df})
+
+    # 2) Arquivos anexados por máquina
     section("Arquivos anexados")
-    docs=db.query(DocumentoNR12).filter(DocumentoNR12.site_id.in_(ids)).order_by(DocumentoNR12.id.desc()).all()
-    docs_com_nome=[d for d in docs if d.arquivo_nome]
-    if not docs_com_nome:
-        empty_state("Nenhum arquivo anexado aos documentos.")
+    if not opts:
+        empty_state("Cadastre uma máquina antes de consultar arquivos anexados.")
     else:
-        for d in docs_com_nome:
-            c1,c2,c3,c4=st.columns([1.2,1.4,2,.9])
-            c1.markdown(f"**{d.tipo}**")
-            c2.write(d.maquina.codigo if d.maquina else "—")
-            c3.write(d.arquivo_nome)
-            if d.arquivo_bytes:
-                c4.download_button("Baixar",data=d.arquivo_bytes,file_name=d.arquivo_nome,mime="application/octet-stream",key=f"doc_download_{d.id}",use_container_width=True)
-            else:
-                c4.caption("Sem arquivo salvo")
+        lab_arq=st.selectbox("Selecionar máquina",list(opts),key="docs_nr12_maquina_arquivos")
+        maquina_id=opts[lab_arq]
+        docs=db.query(DocumentoNR12).filter(DocumentoNR12.maquina_id==maquina_id,DocumentoNR12.site_id.in_(ids)).order_by(DocumentoNR12.id.desc()).all()
+        docs_com_arquivo=[d for d in docs if d.arquivo_nome]
+        if not docs_com_arquivo:
+            empty_state("Nenhum arquivo anexado para a máquina selecionada.")
+        else:
+            for d in docs_com_arquivo:
+                c1,c2,c3,c4=st.columns([1.4,1.4,2.2,1])
+                c1.markdown(f"**{d.tipo}**")
+                c2.write(calcular_status_documento(d))
+                c3.write(d.arquivo_nome)
+                arquivo_data=d.arquivo_bytes
+                if not arquivo_data and d.arquivo_caminho and os.path.exists(d.arquivo_caminho):
+                    try:
+                        with open(d.arquivo_caminho,"rb") as f:
+                            arquivo_data=f.read()
+                    except Exception:
+                        arquivo_data=None
+                if arquivo_data:
+                    c4.download_button("Baixar",data=arquivo_data,file_name=d.arquivo_nome,mime="application/octet-stream",key=f"doc_download_{d.id}",use_container_width=True)
+                else:
+                    c4.caption("Arquivo registrado sem conteúdo salvo para download.")
+
+    # 3) Cadastrar documento
+    if can_edit(u,"nr12_manutencao") and opts:
+        with st.expander("Cadastrar documento"):
+            with st.form("doc"):
+                lab=st.selectbox("Máquina",list(opts),key="docs_nr12_maquina_cadastro")
+                tipo=st.selectbox("Tipo",TIPOS_DOC_NR12)
+                emiss=st.date_input("Emissão",date.today())
+                valid=st.date_input("Validade",date.today()+timedelta(days=365))
+                resp=st.text_input("Responsável")
+                up=st.file_uploader("Arquivo")
+                desc=st.text_area("Descrição")
+                if st.form_submit_button("Salvar",use_container_width=True):
+                    m=db.get(MaquinaNR12,opts[lab])
+                    fname=up.name if up else ""
+                    fbytes=up.getvalue() if up else None
+                    db.add(DocumentoNR12(maquina_id=m.id,site_id=m.site_id,tipo=tipo,descricao=desc,data_emissao=emiss,data_validade=valid,arquivo_nome=fname,arquivo_caminho=fname,arquivo_bytes=fbytes,responsavel=resp))
+                    if tipo=="Laudo NR-12": m.possui_laudo=True
+                    if tipo=="ART": m.possui_art=True
+                    if tipo=="Apreciação de risco": m.possui_apreciacao_risco=True
+                    db.commit()
+                    st.success("Documento salvo.")
+                    st.rerun()
+
 def nr12_checklists(db,u):
     header("Checklists e Inspeções NR-12", "Registro por máquina, pontuação e geração automática de PAC")
     ids = visible_site_ids(u, db)
     opts = machine_options(db, ids)
-    if not opts:
-        empty_state("Cadastre uma máquina antes.")
-    elif not can_edit(u, "nr12_operacao"):
-        alert_card("Seu perfil permite consulta, mas não registro.")
-    else:
-        tipo = st.selectbox("Tipo de checklist", TIPOS_VERIFICACAO_NR12, key="nr12_tipo_checklist_selector")
-        itens = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ativo=True).order_by(ChecklistItemNR12.ordem).all()
-        with st.form(f"ver_{tipo}"):
-            lab = st.selectbox("Máquina", list(opts), key=f"maq_{tipo}")
-            resp = st.text_input("Responsável", u.nome, key=f"resp_{tipo}")
-            obs = st.text_area("Observações", key=f"obs_{tipo}")
-            temp = []
-            for it in itens:
-                st.markdown(
-                    f"<div class='check-item'><div class='check-q'>{it.ordem}. {it.pergunta}"
-                    f"{'<span class=\"check-meta\">Crítico</span>' if it.item_critico else ''}</div></div>",
-                    unsafe_allow_html=True,
-                )
-                c1, c2, c3, c4 = st.columns([1, 1.3, 2.6, 1])
-                apl = c1.checkbox("Aplicável", True, key=f"nr12_ap_{tipo}_{it.id}")
-                res = c2.selectbox("Resultado", RESULTADOS_NR12, key=f"nr12_rr_{tipo}_{it.id}")
-                com = c3.text_input("Comentário/evidência", key=f"nr12_co_{tipo}_{it.id}")
-                gp = c4.checkbox("Gerar PAC", False, key=f"nr12_gp_{tipo}_{it.id}")
-                temp.append((it, apl, res, com, gp))
-            if st.form_submit_button("Salvar verificação", use_container_width=True):
-                m = db.get(MaquinaNR12, opts[lab])
-                v = VerificacaoNR12(
-                    maquina_id=m.id,
-                    site_id=m.site_id,
-                    tipo=tipo,
-                    data_verificacao=date.today(),
-                    responsavel=resp,
-                    observacoes=obs,
-                    proxima_verificacao=date.today() + timedelta(days=180),
-                )
-                db.add(v)
-                db.flush()
-                rs = []
-                for it, apl, res, com, gp in temp:
-                    r = RespostaNR12(
-                        verificacao_id=v.id,
-                        item_id=it.id,
-                        aplicavel=apl,
-                        resultado="Não aplicável" if not apl else res,
-                        comentario_evidencia=com,
-                        gerar_pac=gp,
-                    )
-                    db.add(r)
-                    rs.append(r)
-                db.flush()
-                v.resultado, v.pontuacao, v.possui_nc_critica = calcular_resultado_verificacao_nr12(rs)
-                m.ultima_auditoria = date.today()
-                m.proxima_auditoria = v.proxima_verificacao
-                m.status_nr12 = "Bloqueada por desvio crítico" if v.resultado == "Crítico" else v.resultado if v.resultado in STATUS_MAQUINA else m.status_nr12
-                for r in rs:
-                    if r.resultado == "Não conforme" or r.gerar_pac:
-                        gerar_pac_automatico_nr12(db, v, r, resp)
-                db.commit()
-                st.success(f"Verificação salva: {v.resultado} | {v.pontuacao}%")
-                st.rerun()
+
+    # 1) Verificações registradas
     df = df_ver(db, ids)
     section("Verificações registradas")
     if not df.empty:
         st.dataframe(df, use_container_width=True, hide_index=True)
+        ids_disponiveis=df["ID"].astype(int).tolist()
+        labels={int(row["ID"]): f'{int(row["ID"])} — {row["Máquina"]} — {row["Tipo"]} — {row["Data"]} — {row["Resultado"]}' for _, row in df.iterrows()}
+        selecionadas=st.multiselect(
+            "Selecionar checklists/verificações para baixar o resultado detalhado",
+            ids_disponiveis,
+            format_func=lambda x: labels.get(int(x), str(x)),
+            key="nr12_verificacoes_download_select",
+        )
+        if selecionadas:
+            resumo=df[df["ID"].astype(int).isin([int(x) for x in selecionadas])].copy()
+            respostas=[]
+            verificacoes=db.query(VerificacaoNR12).filter(VerificacaoNR12.id.in_([int(x) for x in selecionadas])).order_by(VerificacaoNR12.id.desc()).all()
+            for v in verificacoes:
+                for r in db.query(RespostaNR12).filter_by(verificacao_id=v.id).all():
+                    respostas.append({
+                        "Verificação ID":v.id,
+                        "Site":site_code(db,v.site_id),
+                        "Máquina":v.maquina.codigo if v.maquina else "—",
+                        "Tipo de checklist":v.tipo,
+                        "Data":fmt_date(v.data_verificacao),
+                        "Responsável":v.responsavel,
+                        "Ordem":r.item.ordem if r.item else "—",
+                        "Pergunta":r.item.pergunta if r.item else "—",
+                        "Item crítico":"Sim" if r.item and r.item.item_critico else "Não",
+                        "Aplicável":"Sim" if r.aplicavel else "Não",
+                        "Resultado":"Não aplicável" if not r.aplicavel else r.resultado,
+                        "Comentário/evidência":r.comentario_evidencia,
+                        "Gerou PAC":"Sim" if r.gerar_pac else "Não",
+                    })
+            download_excel_button(
+                "Baixar resultado detalhado dos checklists selecionados",
+                "resultado_checklists_nr12.xlsx",
+                {"Resumo":resumo,"Respostas":pd.DataFrame(respostas)}
+            )
     else:
         empty_state("Nenhuma verificação.")
     download_excel_button("Exportar verificações Excel", "verificacoes_nr12.xlsx", {"Verificações": df})
+
+    # 2) Tipo de checklist e checklist
+    section("Tipo de checklist")
+    if not opts:
+        empty_state("Cadastre uma máquina antes.")
+        return
+    if not can_edit(u, "nr12_operacao"):
+        alert_card("Seu perfil permite consulta, mas não registro.")
+        return
+
+    tipo = st.selectbox("Tipo de checklist", TIPOS_VERIFICACAO_NR12, key="nr12_tipo_checklist_selector")
+    itens = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ativo=True).order_by(ChecklistItemNR12.ordem).all()
+    section("Checklist")
+    with st.form(f"ver_{tipo}"):
+        lab = st.selectbox("Máquina", list(opts), key=f"maq_{tipo}")
+        resp = st.text_input("Responsável", u.nome, key=f"resp_{tipo}")
+        obs = st.text_area("Observações", key=f"obs_{tipo}")
+        temp = []
+        for it in itens:
+            st.markdown(
+                f"<div class='check-item'><div class='check-q'>{it.ordem}. {it.pergunta}"
+                f"{'<span class=\"check-meta\">Crítico</span>' if it.item_critico else ''}</div></div>",
+                unsafe_allow_html=True,
+            )
+            c1, c2, c3, c4 = st.columns([1, 1.3, 2.6, 1])
+            apl = c1.checkbox("Aplicável", True, key=f"nr12_ap_{tipo}_{it.id}")
+            res = c2.selectbox("Resultado", RESULTADOS_NR12, key=f"nr12_rr_{tipo}_{it.id}")
+            com = c3.text_input("Comentário/evidência", key=f"nr12_co_{tipo}_{it.id}")
+            gp = c4.checkbox("Gerar PAC", False, key=f"nr12_gp_{tipo}_{it.id}")
+            temp.append((it, apl, res, com, gp))
+        if st.form_submit_button("Salvar verificação", use_container_width=True):
+            m = db.get(MaquinaNR12, opts[lab])
+            v = VerificacaoNR12(
+                maquina_id=m.id,
+                site_id=m.site_id,
+                tipo=tipo,
+                data_verificacao=date.today(),
+                responsavel=resp,
+                observacoes=obs,
+                proxima_verificacao=date.today() + timedelta(days=180),
+            )
+            db.add(v)
+            db.flush()
+            rs = []
+            for it, apl, res, com, gp in temp:
+                r = RespostaNR12(
+                    verificacao_id=v.id,
+                    item_id=it.id,
+                    aplicavel=apl,
+                    resultado="Não aplicável" if not apl else res,
+                    comentario_evidencia=com,
+                    gerar_pac=gp,
+                )
+                db.add(r)
+                rs.append(r)
+            db.flush()
+            v.resultado, v.pontuacao, v.possui_nc_critica = calcular_resultado_verificacao_nr12(rs)
+            m.ultima_auditoria = date.today()
+            m.proxima_auditoria = v.proxima_verificacao
+            m.status_nr12 = "Bloqueada por desvio crítico" if v.resultado == "Crítico" else v.resultado if v.resultado in STATUS_MAQUINA else m.status_nr12
+            for r in rs:
+                if r.resultado == "Não conforme" or r.gerar_pac:
+                    gerar_pac_automatico_nr12(db, v, r, resp)
+            db.commit()
+            st.success(f"Verificação salva: {v.resultado} | {v.pontuacao}%")
+            st.rerun()
+
 def nr12_pac(db,u):
     header("PAC NR-12","Planos de ação corretiva")
-    ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}; opts=machine_options(db,ids)
-    if can_edit(u,"nr12_manutencao"):
-        with st.expander("Cadastrar PAC manual"):
-            with st.form("pacn"):
-                site=st.selectbox("Site",list(sites)); maq=st.selectbox("Máquina",["—"]+list(opts)); clas=st.selectbox("Classificação",CLASSIFICACAO_PAC); stat=st.selectbox("Status",STATUS_PAC); prazo=st.date_input("Prazo",date.today()+timedelta(days=30)); resp=st.text_input("Responsável"); area=st.text_input("Área"); desc=st.text_area("Descrição do desvio")
-                if st.form_submit_button("Salvar",use_container_width=True): db.add(PACNR12(origem="Manual",site_id=sites[site],maquina_id=None if maq=="—" else opts[maq],classificacao=clas,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao_desvio=desc)); db.commit(); st.success("PAC salvo."); st.rerun()
-    df=df_pac_nr12(db,ids); section("Consulta")
+    ids=visible_site_ids(u,db)
+    sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
+    opts=machine_options(db,ids)
+
+    # 1) Consulta
+    df=df_pac_nr12(db,ids)
+    section("Consulta")
     if not df.empty:
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum PAC.")
     download_excel_button("Exportar PAC NR-12 Excel","pac_nr12.xlsx",{"PAC":df})
+
+    # 2) Cadastrar PAC manual
+    if can_edit(u,"nr12_manutencao") and sites:
+        with st.expander("Cadastrar PAC manual"):
+            with st.form("pacn"):
+                site=st.selectbox("Site",list(sites))
+                maq=st.selectbox("Máquina",["—"]+list(opts))
+                clas=st.selectbox("Classificação",CLASSIFICACAO_PAC)
+                stat=st.selectbox("Status",STATUS_PAC)
+                prazo=st.date_input("Prazo",date.today()+timedelta(days=30))
+                resp=st.text_input("Responsável")
+                area=st.text_input("Área")
+                desc=st.text_area("Descrição do desvio")
+                if st.form_submit_button("Salvar",use_container_width=True):
+                    db.add(PACNR12(origem="Manual",site_id=sites[site],maquina_id=None if maq=="—" else opts[maq],classificacao=clas,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao_desvio=desc))
+                    db.commit()
+                    st.success("PAC salvo.")
+                    st.rerun()
+
+    # 3) Atualizar PAC
     if can_edit(u,"nr12_manutencao") and not df.empty:
-        p=db.get(PACNR12,int(st.selectbox("Atualizar PAC",df["ID"].tolist())))
-        with st.form("editpacn"):
-            p.status=st.selectbox("Status",STATUS_PAC,index=STATUS_PAC.index(p.status) if p.status in STATUS_PAC else 0); p.evidencia_conclusao=st.text_area("Evidência de conclusão",p.evidencia_conclusao or ""); p.validacao_ehs=st.checkbox("Validação EHS",p.validacao_ehs); p.verificacao_eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
-            if st.form_submit_button("Atualizar",use_container_width=True):
-                if p.status=="Concluída" and not p.evidencia_conclusao: st.error("PAC concluído exige evidência.")
-                elif p.status=="Concluída" and p.classificacao=="Crítico" and not p.validacao_ehs: st.error("PAC crítico concluído exige validação EHS.")
-                else: db.commit(); st.success("Atualizado."); st.rerun()
+        with st.expander("Atualizar PAC"):
+            pac_id=int(st.selectbox("Selecionar PAC",df["ID"].astype(int).tolist(),key="nr12_pac_update_select"))
+            p=db.get(PACNR12,pac_id)
+            with st.form("editpacn"):
+                p.status=st.selectbox("Status",STATUS_PAC,index=STATUS_PAC.index(p.status) if p.status in STATUS_PAC else 0)
+                p.evidencia_conclusao=st.text_area("Evidência de conclusão",p.evidencia_conclusao or "")
+                p.validacao_ehs=st.checkbox("Validação EHS",p.validacao_ehs)
+                p.verificacao_eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
+                if st.form_submit_button("Atualizar",use_container_width=True):
+                    if p.status=="Concluída" and not p.evidencia_conclusao:
+                        st.error("PAC concluído exige evidência.")
+                    elif p.status=="Concluída" and p.classificacao=="Crítico" and not p.validacao_ehs:
+                        st.error("PAC crítico concluído exige validação EHS.")
+                    else:
+                        if p.status=="Concluída" and not p.data_conclusao:
+                            p.data_conclusao=date.today()
+                        db.commit()
+                        st.success("Atualizado.")
+                        st.rerun()
 def prioridade_auditoria_nr12(db,m):
     risco = m.risco_maquina or ("Desprezível" if m.possui_apreciacao_risco else "Apreciação de risco não realizada")
     risco_peso={"Apreciação de risco não realizada":6,"Extremo":5,"Alto":4,"Significativo":3,"Atenção":2,"Desprezível":1}.get(risco,1)
@@ -858,20 +1011,71 @@ def gerar_checklist_automatico_ehs(db,auditoria_id,commit=True):
         if not db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=auditoria_id,requisito_id=r.id).first():
             db.add(RespostaAuditoriaEHS(auditoria_id=auditoria_id,requisito_id=r.id,aplicavel=True,status="Conforme",nota_maturidade=3))
     if commit: db.commit()
+
 def ehs_dashboard(db,u):
-    header("Auditoria Cruzada EHS Directives","Dashboard de planejamento, conformidade, maturidade e PAC")
-    ids=visible_site_ids(u,db); da=df_aud(db,ids); dp=df_pac_ehs(db,ids)
-    vals=[(da["Status"]=="Planejada").sum() if not da.empty else 0,(da["Status"]=="Em andamento").sum() if not da.empty else 0,(da["Status"]=="Concluída").sum() if not da.empty else 0,round(da["Conformidade %"].mean(),1) if not da.empty else 0,round(da["Maturidade"].mean(),2) if not da.empty else 0,(dp["Status"].isin(["Aberta","Em andamento","Aguardando validação"])).sum() if not dp.empty else 0,(dp["Status"]=="Vencida").sum() if not dp.empty else 0,(dp["Tipo de achado"]=="Não conformidade crítica").sum() if not dp.empty else 0]
+    header("Auditoria Cruzada de Diretrizes de EHS","Dashboard de planejamento, conformidade, maturidade e PAC")
+    ids=visible_site_ids(u,db)
+    da=df_aud(db,ids)
+    dp=df_pac_ehs(db,ids)
+    vals=[
+        (da["Status"]=="Planejada").sum() if not da.empty else 0,
+        (da["Status"]=="Em andamento").sum() if not da.empty else 0,
+        (da["Status"]=="Concluída").sum() if not da.empty else 0,
+        round(da["Conformidade %"].mean(),1) if not da.empty else 0,
+        round(da["Maturidade"].mean(),2) if not da.empty else 0,
+        (dp["Status"].isin(["Aberta","Em andamento","Aguardando validação"])).sum() if not dp.empty else 0,
+        (dp["Status"]=="Vencida").sum() if not dp.empty else 0,
+        (dp["Tipo de achado"]=="Não conformidade crítica").sum() if not dp.empty else 0
+    ]
     labs=["Auditorias planejadas","Em andamento","Concluídas","Conformidade média","Maturidade média","PACs abertos","PACs vencidos","NC críticas"]
     for chunk in [range(4),range(4,8)]:
         cols=st.columns(4)
         for c,i in zip(cols,chunk):
-            with c: kpi_card(labs[i],f"{vals[i]}%" if i==3 else vals[i])
+            with c:
+                kpi_card(labs[i],f"{vals[i]}%" if i==3 else vals[i])
+
+    section("Principais gaps")
+    if not dp.empty:
+        gaps=dp.copy()
+        ordem_status={"Vencida":0,"Aberta":1,"Em andamento":2,"Aguardando validação":3,"Concluída":4,"Cancelada":5}
+        ordem_tipo={"Não conformidade crítica":0,"Não conformidade maior":1,"Não conformidade menor":2,"Observação":3,"Oportunidade de melhoria":4,"Boa prática":5}
+        gaps["_ordem_status"]=gaps["Status"].map(ordem_status).fillna(9)
+        gaps["_ordem_tipo"]=gaps["Tipo de achado"].map(ordem_tipo).fillna(9)
+        gaps=gaps.sort_values(["_ordem_status","_ordem_tipo","Site"]).drop(columns=["_ordem_status","_ordem_tipo"])
+        st.dataframe(gaps.head(20), use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhum gap registrado.")
+
     section("Gráficos")
     c1,c2=st.columns(2)
     with c1:
-        if not da.empty:
-            st.plotly_chart(px.bar(da, x="Site auditado", y="Conformidade %", color="Status", title="Conformidade por site").update_layout(template="plotly_white"), use_container_width=True)
+        auditorias=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).all()
+        ultimas_por_site={}
+        def chave_auditoria(a):
+            return (a.data_fim or a.data_inicio or a.data_planejada or date.min, a.id or 0)
+        for a in auditorias:
+            atual=ultimas_por_site.get(a.site_auditado_id)
+            if atual is None or chave_auditoria(a)>chave_auditoria(atual):
+                ultimas_por_site[a.site_auditado_id]=a
+        rows=[]
+        for a in ultimas_por_site.values():
+            res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
+            rows.append({
+                "Auditoria":a.id,
+                "Site auditado":site_code(db,a.site_auditado_id),
+                "Data de referência":fmt_date(a.data_fim or a.data_inicio or a.data_planejada),
+                "Status":a.status,
+                "Conformidade %":calcular_conformidade_ehs(res),
+                "Maturidade":calcular_maturidade_ehs(res),
+            })
+        latest_df=pd.DataFrame(rows)
+        if not latest_df.empty:
+            st.plotly_chart(
+                px.bar(latest_df, x="Site auditado", y="Conformidade %", color="Conformidade %",
+                       hover_data=["Auditoria","Data de referência","Status","Maturidade"],
+                       title="Conformidade por site — última auditoria registrada").update_layout(template="plotly_white", yaxis_range=[0,100]),
+                use_container_width=True
+            )
         else:
             empty_state("Sem auditorias.")
     with c2:
@@ -879,27 +1083,49 @@ def ehs_dashboard(db,u):
             st.plotly_chart(px.histogram(dp, x="Status", color="Prioridade", barmode="group", title="PAC por status").update_layout(template="plotly_white"), use_container_width=True)
         else:
             empty_state("Sem PACs.")
-    section("Principais gaps")
-    if not dp.empty:
-        st.dataframe(dp.head(20), use_container_width=True, hide_index=True)
-    else:
-        empty_state("Nenhum gap registrado.")
+
 def ehs_planejamento(db,u):
     header("Planejamento de Auditorias","Cadastro de ciclos e geração automática do checklist")
-    ids=visible_site_ids(u,db); sv={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}; sall={s.codigo:s.id for s in db.query(Site).filter(Site.codigo!="Corporativo")}
-    if can_edit(u,"auditoria"):
-        with st.form("aud"):
-            ano=st.number_input("Ano",2020,2100,date.today().year); ciclo=st.text_input("Ciclo","Ciclo 1"); site=st.selectbox("Site auditado",list(sv)); lider=st.selectbox("Site auditor líder",["—"]+list(sall)); apoio=st.selectbox("Site auditor apoio",["—"]+list(sall)); aud_l=st.text_input("Auditor líder",u.nome); aud_a=st.text_input("Auditor apoio"); data=st.date_input("Data planejada",date.today()+timedelta(days=30)); status=st.selectbox("Status",STATUS_AUDITORIA); esc=st.text_area("Escopo"); obs=st.text_area("Observações")
-            if st.form_submit_button("Criar auditoria e checklist",use_container_width=True):
-                a=AuditoriaCruzada(ano=ano,ciclo=ciclo,site_auditado_id=sv[site],site_auditor_lider_id=None if lider=="—" else sall[lider],site_auditor_apoio_id=None if apoio=="—" else sall[apoio],auditor_lider=aud_l,auditor_apoio=aud_a,data_planejada=data,status=status,escopo=esc,observacoes=obs); db.add(a); db.flush(); gerar_checklist_automatico_ehs(db,a.id,False); db.commit(); st.success("Auditoria criada."); st.rerun()
+    ids=visible_site_ids(u,db)
+    sv={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
+    sall={s.codigo:s.id for s in db.query(Site).filter(Site.codigo!="Corporativo")}
+
+    section("Auditorias cadastradas")
     da = df_aud(db, ids)
     if not da.empty:
         st.dataframe(da, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhuma auditoria.")
     download_excel_button("Exportar auditorias Excel", "auditorias_cruzadas.xlsx", {"Auditorias": da})
+
+    if can_edit(u,"auditoria") and sv:
+        with st.expander("Cadastrar próxima auditoria"):
+            with st.form("aud"):
+                ano=st.number_input("Ano",2020,2100,date.today().year)
+                ciclo=st.text_input("Ciclo","Ciclo 1")
+                site=st.selectbox("Site auditado",list(sv))
+                lider=st.selectbox("Site auditor líder",["—"]+list(sall))
+                apoio=st.selectbox("Site auditor apoio",["—"]+list(sall))
+                aud_l=st.text_input("Auditor líder",u.nome)
+                aud_a=st.text_input("Auditor apoio")
+                data=st.date_input("Data planejada",date.today()+timedelta(days=30))
+                status=st.selectbox("Status",STATUS_AUDITORIA)
+                esc=st.text_area("Escopo")
+                obs=st.text_area("Observações")
+                if st.form_submit_button("Criar auditoria e checklist",use_container_width=True):
+                    a=AuditoriaCruzada(ano=ano,ciclo=ciclo,site_auditado_id=sv[site],site_auditor_lider_id=None if lider=="—" else sall[lider],site_auditor_apoio_id=None if apoio=="—" else sall[apoio],auditor_lider=aud_l,auditor_apoio=aud_a,data_planejada=data,status=status,escopo=esc,observacoes=obs)
+                    db.add(a)
+                    db.flush()
+                    gerar_checklist_automatico_ehs(db,a.id,False)
+                    db.commit()
+                    st.success("Auditoria criada.")
+                    st.rerun()
+
 def ehs_checklist(db,u):
-    header("Checklist EHS Directives", "Checklist incorporado, pontuação, maturidade e geração de PAC")
+    header("Checklist Diretrizes de EHS", "Checklist incorporado, pontuação, maturidade e geração de PAC")
+    msg=st.session_state.pop("ehs_checklist_saved_msg", None)
+    if msg:
+        st.success(msg)
     ids = visible_site_ids(u, db)
     auds = db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.id.desc()).all()
     if not auds:
@@ -960,7 +1186,7 @@ def ehs_checklist(db,u):
                     if r.necessita_pac or r.status in ["Não Conforme", "Parcialmente Conforme"]:
                         gerar_pac_automatico_ehs(db, a, r, a.auditor_lider)
                 db.commit()
-                st.success("Checklist salvo.")
+                st.session_state["ehs_checklist_saved_msg"]="Checklist salvo com sucesso. Os PACs necessários foram gerados ou atualizados."
                 st.rerun()
     else:
         categoria_atual = None
@@ -978,20 +1204,65 @@ def ehs_checklist(db,u):
                 f"<div class='muted'>Comentário: {r.comentario_auditor or '—'}</div></div>",
                 unsafe_allow_html=True,
             )
+
 def ehs_pac(db,u):
     header("PAC Auditoria Cruzada","Tratamento de achados e verificação de eficácia")
-    ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
-    if can_edit(u,"pac_ehs"):
+    ids=visible_site_ids(u,db)
+    sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
+
+    if can_edit(u,"pac_ehs") and sites:
         with st.expander("Cadastrar PAC EHS manual"):
             with st.form("pace"):
-                site=st.selectbox("Site",list(sites)); tipo=st.selectbox("Tipo de achado",TIPOS_ACHADO_EHS); pr=st.selectbox("Prioridade/criticidade",["Alta","Média","Baixa"]); stat=st.selectbox("Status",STATUS_PAC); prazo=st.date_input("Prazo",date.today()+timedelta(days=30)); resp=st.text_input("Responsável"); area=st.text_input("Área responsável"); desc=st.text_area("Descrição"); evid=st.text_area("Evidência"); risco=st.text_area("Risco"); causa=st.text_area("Causa raiz"); aci=st.text_area("Ação imediata"); acc=st.text_area("Ação corretiva")
-                if st.form_submit_button("Salvar PAC EHS",use_container_width=True): db.add(PACEHS(site_id=sites[site],tipo_achado=tipo,prioridade_criticidade=pr,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao=desc,evidencia=evid,risco=risco,causa_raiz=causa,acao_imediata=aci,acao_corretiva=acc)); db.commit(); st.success("PAC salvo."); st.rerun()
+                site=st.selectbox("Site",list(sites))
+                tipo=st.selectbox("Tipo de achado",TIPOS_ACHADO_EHS)
+                pr=st.selectbox("Prioridade/criticidade",["Alta","Média","Baixa"])
+                stat=st.selectbox("Status",STATUS_PAC)
+                prazo=st.date_input("Prazo",date.today()+timedelta(days=30))
+                resp=st.text_input("Responsável")
+                area=st.text_input("Área responsável")
+                desc=st.text_area("Descrição")
+                evid=st.text_area("Evidência")
+                risco=st.text_area("Risco")
+                causa=st.text_area("Causa raiz")
+                aci=st.text_area("Ação imediata")
+                acc=st.text_area("Ação corretiva")
+                if st.form_submit_button("Salvar PAC EHS",use_container_width=True):
+                    db.add(PACEHS(site_id=sites[site],tipo_achado=tipo,prioridade_criticidade=pr,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao=desc,evidencia=evid,risco=risco,causa_raiz=causa,acao_imediata=aci,acao_corretiva=acc))
+                    db.commit()
+                    st.success("PAC salvo.")
+                    st.rerun()
+
     df = df_pac_ehs(db, ids)
     if not df.empty:
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum PAC EHS.")
     download_excel_button("Exportar PAC EHS Excel", "pac_ehs.xlsx", {"PAC EHS": df})
+
+    if can_edit(u,"pac_ehs") and not df.empty:
+        with st.expander("Atualizar status das ações levantadas"):
+            pac_id=int(st.selectbox("Selecionar ação/PAC",df["ID"].astype(int).tolist(),key="ehs_pac_update_select"))
+            p=db.get(PACEHS,pac_id)
+            with st.form("edit_pac_ehs_status"):
+                novo_status=st.selectbox("Status",STATUS_PAC,index=STATUS_PAC.index(p.status) if p.status in STATUS_PAC else 0)
+                evidencia=st.text_area("Evidência de conclusão",p.evidencia_conclusao or "")
+                validacao=st.checkbox("Validação EHS",p.validacao_ehs)
+                eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
+                status_eficacia=st.selectbox("Status da eficácia",["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"],index=["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"].index(p.status_eficacia) if p.status_eficacia in ["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"] else 0)
+                if st.form_submit_button("Atualizar status",use_container_width=True):
+                    if novo_status=="Concluída" and not evidencia:
+                        st.error("PAC concluído exige evidência de conclusão.")
+                    else:
+                        p.status=novo_status
+                        p.evidencia_conclusao=evidencia
+                        p.validacao_ehs=validacao
+                        p.verificacao_eficacia=eficacia
+                        p.status_eficacia=status_eficacia
+                        if novo_status=="Concluída" and not p.data_conclusao:
+                            p.data_conclusao=date.today()
+                        db.commit()
+                        st.success("Status atualizado.")
+                        st.rerun()
 def ehs_base_checklist(db,u):
     header("Base do Checklist EHS","Visualizar categorias, requisitos, criticidade e evidência esperada")
     reqs=db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem).all()
@@ -1012,35 +1283,49 @@ def ehs_relatorios(db,u):
     if auds:
         amap={f"{a.id} — {site_code(db,a.site_auditado_id)} — {a.ciclo}":a.id for a in auds}; a=db.get(AuditoriaCruzada,amap[st.selectbox("Relatório PDF",list(amap))]); res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
         dfr=pd.DataFrame([{"Categoria":r.requisito.diretiva.categoria,"Requisito":r.requisito.pergunta,"Status":r.status,"Maturidade":r.nota_maturidade,"Evidência":r.evidencia_verificada,"Comentário":r.comentario_auditor} for r in res])
-        pdf=gerar_pdf(f"Relatório de Auditoria Cruzada EHS — {site_code(db,a.site_auditado_id)}",f"Auditoria {a.id} | {a.ciclo} | Conformidade {calcular_conformidade_ehs(res)}% | Maturidade {calcular_maturidade_ehs(res)}",[("Dados",pd.DataFrame([{"Ano":a.ano,"Ciclo":a.ciclo,"Site":site_code(db,a.site_auditado_id),"Status":a.status,"Auditor líder":a.auditor_lider}])),("Resultado por item",dfr),("PACs vinculados",dp[dp["Auditoria"]==a.id] if not dp.empty else dp)])
+        pdf=gerar_pdf(f"Relatório de Auditoria Cruzada de Diretrizes de EHS — {site_code(db,a.site_auditado_id)}",f"Auditoria {a.id} | {a.ciclo} | Conformidade {calcular_conformidade_ehs(res)}% | Maturidade {calcular_maturidade_ehs(res)}",[("Dados",pd.DataFrame([{"Ano":a.ano,"Ciclo":a.ciclo,"Site":site_code(db,a.site_auditado_id),"Status":a.status,"Auditor líder":a.auditor_lider}])),("Resultado por item",dfr),("PACs vinculados",dp[dp["Auditoria"]==a.id] if not dp.empty else dp)])
         download_pdf_button("Baixar relatório de auditoria PDF",f"relatorio_auditoria_ehs_{a.id}.pdf",pdf)
 
 # ============================================================
 # 15. Roteamento principal
 # ============================================================
+
 def render_sidebar(db,u):
     mod=st.session_state.get("modulo","home")
     if mod=="home":
         return
     st.sidebar.markdown("### Navegação")
     if st.sidebar.button("🏠 Voltar para a tela inicial",use_container_width=True):
-        st.session_state.modulo="home"; st.rerun()
+        st.session_state.modulo="home"
+        st.rerun()
     st.sidebar.divider()
     if mod=="nr12":
         pages=["Dashboard NR-12","Central de Pendências","Inventário de Máquinas","Documentos NR-12","Checklists e Inspeções","PAC NR-12","Relatórios NR-12"]
         current=st.session_state.get("page_nr12",pages[0])
-        st.session_state.page_nr12=st.sidebar.radio("Sustentação NR-12",pages,index=pages.index(current) if current in pages else 0)
+        if current not in pages:
+            current=pages[0]
+            st.session_state.page_nr12=current
+        if st.session_state.get("nav_nr12") not in pages:
+            st.session_state.nav_nr12=current
+        selected=st.sidebar.radio("Sustentação NR-12",pages,key="nav_nr12")
+        st.session_state.page_nr12=selected
     elif mod=="ehs":
-        pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist EHS Directives","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"]
+        pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist Diretrizes de EHS","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"]
         current=st.session_state.get("page_ehs",pages[0])
-        st.session_state.page_ehs=st.sidebar.radio("Auditoria Cruzada EHS Directives",pages,index=pages.index(current) if current in pages else 0)
+        if current not in pages:
+            current=pages[0]
+            st.session_state.page_ehs=current
+        if st.session_state.get("nav_ehs") not in pages:
+            st.session_state.nav_ehs=current
+        selected=st.sidebar.radio("Auditoria Cruzada de Diretrizes de EHS",pages,key="nav_ehs")
+        st.session_state.page_ehs=selected
 def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod=="home": home_page(db,u)
     elif mod=="nr12":
         {"Dashboard NR-12":nr12_dashboard,"Central de Pendências":nr12_central_pendencias,"Inventário de Máquinas":nr12_inventario,"Documentos NR-12":nr12_documentos,"Checklists e Inspeções":nr12_checklists,"PAC NR-12":nr12_pac,"Relatórios NR-12":nr12_relatorios}[st.session_state.get("page_nr12","Dashboard NR-12")](db,u)
     elif mod=="ehs":
-        {"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist EHS Directives":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios}[st.session_state.get("page_ehs","Dashboard Auditoria Cruzada")](db,u)
+        {"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist Diretrizes de EHS":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios}[st.session_state.get("page_ehs","Dashboard Auditoria Cruzada")](db,u)
 
 # ============================================================
 # 16. main()
