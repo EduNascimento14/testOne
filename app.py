@@ -43,17 +43,12 @@ USUARIOS_PADRAO = [
     ("EHS SJC","EHS_Local","SJC"), ("Manutenção SJC","Manutencao","SJC"),
     ("Produção SJC","Producao_Operacao","SJC"), ("Auditor EHS","Auditor","Corporativo")
 ]
-STATUS_MAQUINA = ["Conforme","Conforme com observação","Pendente de ação não crítica","Bloqueada por desvio crítico","Em readequação","Fora de uso","Não aplicável"]
+STATUS_MAQUINA = ["Conforme","Não conforme"]
 CRITICIDADES = ["Alta","Média","Baixa"]
 RISCOS_MAQUINA = ["Apreciação de risco não realizada", "Desprezível", "Atenção", "Significativo", "Alto", "Extremo"]
 STATUS_COLOR_MAP = {
     "Conforme": "#16a34a",
-    "Conforme com observação": "#f59e0b",
-    "Pendente de ação não crítica": "#f97316",
-    "Bloqueada por desvio crítico": "#dc2626",
-    "Em readequação": "#7c3aed",
-    "Fora de uso": "#64748b",
-    "Não aplicável": "#94a3b8",
+    "Não conforme": "#dc2626",
 }
 RISCO_COLOR_MAP = {
     "Desprezível": "#22c55e",
@@ -299,10 +294,12 @@ def init_db():
             if not db.query(Usuario).filter_by(nome=nome).first():
                 stt=db.query(Site).filter_by(codigo=sitecod).first(); db.add(Usuario(nome=nome,perfil=perfil,site_id=stt.id if stt else None))
         sync_checklists_base(db)
+        for maq in db.query(MaquinaNR12).all():
+            maq.status_nr12 = normalizar_status_nr12(maq.status_nr12)
         db.commit()
         if db.query(MaquinaNR12).count()==0:
             sjc=db.query(Site).filter_by(codigo="SJC").first()
-            m=MaquinaNR12(codigo="SJC-PRENSA-001",site_id=sjc.id,area_setor="Produção",linha_processo="Linha 1",nome="Prensa hidráulica 001",fabricante="Fabricante A",modelo="PH-100",numero_serie="PH100",ano="2020",tipo_equipamento="Prensa",responsavel_area="Produção",criticidade="Alta",risco_maquina="Significativo",status_nr12="Conforme com observação",ultima_adequacao=date.today()-timedelta(days=180),ultima_auditoria=date.today()-timedelta(days=90),proxima_auditoria=date.today()+timedelta(days=40),data_prevista_adequacao=date.today()+timedelta(days=120),possui_laudo=True,possui_art=True,possui_apreciacao_risco=True,possui_manual_atualizado=True,possui_treinamento=True)
+            m=MaquinaNR12(codigo="SJC-PRENSA-001",site_id=sjc.id,area_setor="Produção",linha_processo="Linha 1",nome="Prensa hidráulica 001",fabricante="Fabricante A",modelo="PH-100",numero_serie="PH100",ano="2020",tipo_equipamento="Prensa",responsavel_area="Produção",criticidade="Alta",risco_maquina="Significativo",status_nr12="Não conforme",ultima_adequacao=date.today()-timedelta(days=180),ultima_auditoria=date.today()-timedelta(days=90),proxima_auditoria=date.today()+timedelta(days=40),data_prevista_adequacao=date.today()+timedelta(days=120),possui_laudo=True,possui_art=True,possui_apreciacao_risco=True,possui_manual_atualizado=True,possui_treinamento=True)
             db.add(m); db.flush()
             for t in DOCUMENTOS_ESSENCIAIS: db.add(DocumentoNR12(maquina_id=m.id,site_id=sjc.id,tipo=t,descricao=t,data_emissao=date.today()-timedelta(days=200),data_validade=date.today()+timedelta(days=365),arquivo_nome=t+".pdf",responsavel="EHS"))
             db.add(PACNR12(origem="Seed",site_id=sjc.id,maquina_id=m.id,descricao_desvio="Pendência menor em sinalização.",classificacao="Menor",responsavel="Manutenção SJC",area_responsavel="Manutenção",prazo=date.today()+timedelta(days=20),status="Em andamento"))
@@ -350,13 +347,18 @@ def calcular_status_documento(doc):
     if doc.data_validade<date.today(): return "Vencido"
     if doc.data_validade<=date.today()+timedelta(days=60): return "Próximo do vencimento"
     return "Válido"
+def normalizar_status_nr12(status):
+    return "Conforme" if status == "Conforme" else "Não conforme"
+
 def calcular_status_maquina_nr12(db,m):
-    if not m: return "Não aplicável"
-    if m.status_nr12 in ["Fora de uso","Não aplicável","Em readequação"]: return m.status_nr12
+    if not m:
+        return "Não conforme"
     docs={d.tipo:d for d in db.query(DocumentoNR12).filter_by(maquina_id=m.id)}
-    if any((t not in docs) or calcular_status_documento(docs[t])=="Vencido" for t in DOCUMENTOS_ESSENCIAIS): return "Pendente de ação não crítica"
-    if db.query(PACNR12).filter(PACNR12.maquina_id==m.id,PACNR12.classificacao=="Crítico",PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação","Vencida"])).first(): return "Bloqueada por desvio crítico"
-    return m.status_nr12 or "Conforme"
+    if any((t not in docs) or calcular_status_documento(docs[t])=="Vencido" for t in DOCUMENTOS_ESSENCIAIS):
+        return "Não conforme"
+    if db.query(PACNR12).filter(PACNR12.maquina_id==m.id,PACNR12.classificacao=="Crítico",PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação","Vencida"])).first():
+        return "Não conforme"
+    return normalizar_status_nr12(m.status_nr12)
 def calcular_meta_adequacao_nr12(db, maquinas):
     total = len(maquinas)
     if total == 0:
@@ -376,7 +378,7 @@ def calcular_meta_adequacao_nr12(db, maquinas):
     )
     sem_data = sum(
         1 for m in maquinas
-        if status_por_id[m.id] not in ["Conforme", "Fora de uso", "Não aplicável"]
+        if status_por_id[m.id] != "Conforme"
         and not as_date(getattr(m, "data_prevista_adequacao", None))
     )
     return {
@@ -412,11 +414,12 @@ def montar_evolucao_adequacao_nr12(db, maquinas):
     return pd.DataFrame(rows)
 def calcular_resultado_verificacao_nr12(resps):
     ap=[r for r in resps if r.aplicavel and r.resultado!="Não aplicável"]
-    if not ap: return "Não aplicável",0,False
-    pct=round(sum(1 for r in ap if r.resultado=="Conforme")/len(ap)*100,1); crit=any(r.resultado=="Não conforme" and r.item and r.item.item_critico for r in ap)
-    if crit: return "Crítico",pct,True
-    if pct<70: return "Pendente de ação não crítica",pct,False
-    if pct<90: return "Conforme com observação",pct,False
+    if not ap:
+        return "Não conforme",0,False
+    pct=round(sum(1 for r in ap if r.resultado=="Conforme")/len(ap)*100,1)
+    crit=any(r.resultado=="Não conforme" and r.item and r.item.item_critico for r in ap)
+    if crit or pct < 90:
+        return "Não conforme",pct,crit
     return "Conforme",pct,False
 def calcular_conformidade_ehs(resps):
     ap=[r for r in resps if r.aplicavel and r.status!="Não Aplicável"]
@@ -525,8 +528,8 @@ def dashboard_integrado(db,u):
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all()
     auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).all()
     conf=[calcular_conformidade_ehs(db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()) for a in auds]
-    vals=[len(ms),sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Bloqueada por desvio crítico"),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count(),db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(),f"{round(sum(conf)/len(conf),1) if conf else 0}%",db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(),db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count()]
-    labs=["Total de máquinas NR-12","Máquinas bloqueadas","PACs NR-12 vencidos","PACs NR-12 abertos","Auditorias em andamento","Conformidade média EHS","PACs EHS vencidos","NC críticas EHS"]
+    vals=[len(ms),sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Não conforme"),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count(),db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(),f"{round(sum(conf)/len(conf),1) if conf else 0}%",db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(),db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count()]
+    labs=["Total de máquinas NR-12","Máquinas não conformes","PACs NR-12 vencidos","PACs NR-12 abertos","Auditorias em andamento","Conformidade média EHS","PACs EHS vencidos","NC críticas EHS"]
     section("Visão geral integrada")
     for chunk in [range(4),range(4,8)]:
         cols=st.columns(4)
@@ -594,18 +597,16 @@ def nr12_dashboard(db,u):
         ("% máquinas conformes",f"{round(sts.count('Conforme')/total*100,1) if total else 0}%"),
         ("Meta de adequação",f"{meta['percentual_atual']}%",f"{meta['adequadas']}/{meta['total']} máquinas adequadas"),
         ("Status do plano","Dentro do plano" if meta["dentro_plano"] else "Fora do plano",f"Adequadas: {meta['adequadas']} | Previstas até hoje: {meta['previstas_ate_hoje']}"),
-        ("Máquinas com observação",sts.count("Conforme com observação")),
-        ("Máquinas pendentes",sts.count("Pendente de ação não crítica")),
-        ("Máquinas bloqueadas",sts.count("Bloqueada por desvio crítico")),
+        ("Máquinas não conformes",sts.count("Não conforme")),
         ("Adequações vencidas",meta["vencidas"],"Máquinas não conformes com data prevista ultrapassada"),
+        ("Sem data de adequação",meta["sem_data"],"Máquinas não conformes sem data prevista"),
         ("Docs essenciais vencidos",sum(1 for d in docs if d.tipo in DOCUMENTOS_ESSENCIAIS and calcular_status_documento(d)=="Vencido")),
         ("Docs essenciais ausentes",sum(sum(1 for t in DOCUMENTOS_ESSENCIAIS if t not in {d.tipo for d in db.query(DocumentoNR12).filter_by(maquina_id=m.id)}) for m in ms)),
         ("Verificações vencidas",sum(1 for m in ms if m.proxima_auditoria and m.proxima_auditoria<date.today())),
         ("Verificações próximas",sum(1 for m in ms if m.proxima_auditoria and date.today()<=m.proxima_auditoria<=date.today()+timedelta(days=60))),
         ("PACs abertos",0 if dfp.empty else int(dfp["Status"].isin(["Aberta","Em andamento","Aguardando validação"]).sum())),
         ("PACs vencidos",0 if dfp.empty else int((dfp["Status"]=="Vencida").sum())),
-        ("Risco alto/extremo",0 if dfm.empty else int(dfm["Risco"].isin(["Alto","Extremo","Apreciação de risco não realizada"]).sum())),
-        ("Sem data de adequação",meta["sem_data"],"Máquinas não conformes sem data prevista")
+        ("Risco alto/extremo",0 if dfm.empty else int(dfm["Risco"].isin(["Alto","Extremo","Apreciação de risco não realizada"]).sum()))
     ]
     for base in range(0,len(cards),4):
         cols=st.columns(4)
@@ -644,7 +645,9 @@ def nr12_dashboard(db,u):
         else:
             empty_state("Sem PACs para os filtros selecionados.")
     with c4:
-        dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":cards[10][1]},{"Tipo":"Próximas","Qtd":cards[11][1]}])
+        verificacoes_vencidas=sum(1 for m in ms if m.proxima_auditoria and m.proxima_auditoria<date.today())
+        verificacoes_proximas=sum(1 for m in ms if m.proxima_auditoria and date.today()<=m.proxima_auditoria<=date.today()+timedelta(days=60))
+        dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":verificacoes_vencidas},{"Tipo":"Próximas","Qtd":verificacoes_proximas}])
         st.plotly_chart(px.bar(dv,x="Tipo",y="Qtd",color="Tipo",title="Verificações vencidas/próximas", color_discrete_map={"Vencidas":"#dc2626","Próximas":"#f59e0b"}).update_layout(template="plotly_white", showlegend=False),use_container_width=True)
 
     section("Evolução esperada da adequação NR-12")
@@ -660,7 +663,7 @@ def nr12_dashboard(db,u):
         empty_state("Sem datas previstas de adequação cadastradas para gerar a evolução esperada.")
 
     section("Máquinas prioritárias")
-    pr=dfm[dfm["Status NR-12"].isin(["Bloqueada por desvio crítico","Pendente de ação não crítica","Conforme com observação"])] if not dfm.empty else pd.DataFrame()
+    pr=dfm[dfm["Status NR-12"]=="Não conforme"] if not dfm.empty else pd.DataFrame()
     if not pr.empty:
         st.dataframe(pr, use_container_width=True, hide_index=True)
     else:
@@ -745,7 +748,8 @@ def nr12_inventario(db,u):
                 lab=st.selectbox("Máquina",list(opts),key="nr12_editar_maquina_select")
                 m=db.get(MaquinaNR12,opts[lab])
                 with st.form("editmaq"):
-                    novo_status=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(m.status_nr12) if m.status_nr12 in STATUS_MAQUINA else 0)
+                    status_atual=normalizar_status_nr12(m.status_nr12)
+                    novo_status=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(status_atual))
                     nova_criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1)
                     risco_atual=m.risco_maquina or "Apreciação de risco não realizada"
                     novo_risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0)
@@ -939,7 +943,7 @@ def nr12_checklists(db,u):
             v.resultado, v.pontuacao, v.possui_nc_critica = calcular_resultado_verificacao_nr12(rs)
             m.ultima_auditoria = date.today()
             m.proxima_auditoria = v.proxima_verificacao
-            m.status_nr12 = "Bloqueada por desvio crítico" if v.resultado == "Crítico" else v.resultado if v.resultado in STATUS_MAQUINA else m.status_nr12
+            m.status_nr12 = v.resultado if v.resultado in STATUS_MAQUINA else normalizar_status_nr12(m.status_nr12)
             for r in rs:
                 if r.resultado == "Não conforme" or r.gerar_pac:
                     gerar_pac_automatico_nr12(db, v, r, resp)
@@ -1005,7 +1009,7 @@ def prioridade_auditoria_nr12(db,m):
     risco = m.risco_maquina or ("Desprezível" if m.possui_apreciacao_risco else "Apreciação de risco não realizada")
     risco_peso={"Apreciação de risco não realizada":6,"Extremo":5,"Alto":4,"Significativo":3,"Atenção":2,"Desprezível":1}.get(risco,1)
     status=calcular_status_maquina_nr12(db,m)
-    status_peso={"Bloqueada por desvio crítico":5,"Pendente de ação não crítica":4,"Conforme com observação":2,"Em readequação":3}.get(status,0)
+    status_peso={"Não conforme":5,"Conforme":0}.get(status,0)
     if not m.proxima_auditoria:
         prazo_peso=80; dias=None; prazo_txt="Sem data"
     else:
@@ -1073,7 +1077,7 @@ def nr12_moc(db,u):
                 if crit and (not exige or (status in ["Aprovada","Implementada","Validada"] and (not ehs or not (man or eng)))): st.error("Mudança crítica exige MOC, aprovação EHS e aprovação de Manutenção ou Engenharia.")
                 else:
                     mid=None if maq=="—" else opts[maq]; db.add(MOCNR12(site_id=sites[site],maquina_id=mid,tipo_mudanca=tipo,descricao=desc,solicitante=solic,area_solicitante=area,data=date.today(),impacta_seguranca=imp,exige_moc=exige,status=status,aprovacao_ehs=ehs,aprovacao_manutencao=man,aprovacao_engenharia=eng,aprovacao_producao=prod,necessita_auditoria_pos_mudanca=aud,necessita_treinamento=tre,observacoes=obs,validacao_final=val))
-                    if mid and crit and status=="Implementada" and not val: db.get(MaquinaNR12,mid).status_nr12="Bloqueada por desvio crítico"
+                    if mid and crit and status=="Implementada" and not val: db.get(MaquinaNR12,mid).status_nr12="Não conforme"
                     db.commit(); st.success("MOC salva."); st.rerun()
     df = df_moc(db, ids)
     section("MOCs registradas")
@@ -1089,7 +1093,7 @@ def nr12_termo(db,u):
         site=st.selectbox("Site",list(sites)); ano=st.number_input("Ano/ciclo",2020,2100,date.today().year); ehs=st.text_input("Responsável EHS"); man=st.text_input("Responsável Manutenção"); prod=st.text_input("Responsável Produção/Operação"); eng=st.text_input("Responsável Engenharia"); lid=st.text_input("Liderança do site"); res=st.text_area("Ressalvas"); pend=st.text_area("Pendências"); dec=st.text_area("Declaração formal","Declaramos que o site acompanha a sustentação da conformidade NR-12 das máquinas já adequadas, mantendo inventário, controles documentais, inspeções, PAC e MOC.")
         if st.form_submit_button("Gerar termo",use_container_width=True):
             sid=sites[site]; ms=db.query(MaquinaNR12).filter_by(site_id=sid).all(); sts=[calcular_status_maquina_nr12(db,m) for m in ms]
-            resumo=pd.DataFrame([{"Indicador":"Total de máquinas","Valor":len(ms)},{"Indicador":"Conformes","Valor":sts.count("Conforme")},{"Indicador":"Com observação","Valor":sts.count("Conforme com observação")},{"Indicador":"Pendentes","Valor":sts.count("Pendente de ação não crítica")},{"Indicador":"Bloqueadas","Valor":sts.count("Bloqueada por desvio crítico")},{"Indicador":"PACs críticos abertos/vencidos","Valor":db.query(PACNR12).filter(PACNR12.site_id==sid,PACNR12.classificacao=="Crítico",PACNR12.status.in_(["Aberta","Em andamento","Vencida"])).count()},{"Indicador":"MOCs críticas sem validação","Valor":db.query(MOCNR12).filter(MOCNR12.site_id==sid,MOCNR12.exige_moc==True,MOCNR12.validacao_final==False).count()}])
+            resumo=pd.DataFrame([{"Indicador":"Total de máquinas","Valor":len(ms)},{"Indicador":"Conformes","Valor":sts.count("Conforme")},{"Indicador":"Não conformes","Valor":sts.count("Não conforme")},{"Indicador":"PACs críticos abertos/vencidos","Valor":db.query(PACNR12).filter(PACNR12.site_id==sid,PACNR12.classificacao=="Crítico",PACNR12.status.in_(["Aberta","Em andamento","Vencida"])).count()},{"Indicador":"MOCs críticas sem validação","Valor":db.query(MOCNR12).filter(MOCNR12.site_id==sid,MOCNR12.exige_moc==True,MOCNR12.validacao_final==False).count()}])
             if can_edit(u,"nr12_manutencao"): db.add(TermoGarantiaNR12(site_id=sid,ano_ciclo=ano,responsavel_ehs=ehs,responsavel_manutencao=man,responsavel_producao=prod,responsavel_engenharia=eng,lideranca_site=lid,ressalvas=res,pendencias=pend,declaracao_formal=dec)); db.commit()
             pdf=gerar_pdf(f"Termo de Garantia de Sustentação NR-12 — {site}",f"Ano/ciclo: {ano} | Emissão: {fmt_date(date.today())}",[("Declaração",dec),("Responsáveis",pd.DataFrame([{"Função":"EHS","Responsável":ehs},{"Função":"Manutenção","Responsável":man},{"Função":"Produção/Operação","Responsável":prod},{"Função":"Engenharia","Responsável":eng},{"Função":"Liderança","Responsável":lid}])),("Consolidação",resumo),("Ressalvas",res or "Sem ressalvas."),("Pendências",pend or "Sem pendências.")])
             download_pdf_button("Baixar termo NR-12 PDF",f"termo_nr12_{site}_{ano}.pdf",pdf)
