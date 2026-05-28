@@ -50,21 +50,23 @@ STATUS_COLOR_MAP = {
     "Conforme": "#16a34a",
     "Não conforme": "#dc2626",
 }
+# Paleta única para todos os indicadores e gráficos de Risco da Máquina.
+# Escala visual: verde = melhor risco; vermelho escuro = pior risco.
 RISCO_COLOR_MAP = {
-    "Desprezível": "#22c55e",
-    "Atenção": "#eab308",
-    "Significativo": "#f97316",
+    "Desprezível": "#16a34a",
+    "Atenção": "#facc15",
+    "Significativo": "#fb923c",
     "Alto": "#ef4444",
-    "Extremo": "#7f1d1d",
-    "Apreciação de risco não realizada": "#991b1b",
+    "Extremo": "#b91c1c",
+    "Apreciação de risco não realizada": "#475569",
 }
 RISCO_CARD_STYLE_MAP = {
-    "Desprezível": {"bg": "#16a34a", "fg": "#ffffff", "border": "#15803d"},
-    "Atenção": {"bg": "#facc15", "fg": "#422006", "border": "#ca8a04"},
-    "Significativo": {"bg": "#fb923c", "fg": "#ffffff", "border": "#ea580c"},
-    "Alto": {"bg": "#ef4444", "fg": "#ffffff", "border": "#dc2626"},
-    "Extremo": {"bg": "#b91c1c", "fg": "#ffffff", "border": "#7f1d1d"},
-    "Apreciação de risco não realizada": {"bg": "#475569", "fg": "#ffffff", "border": "#334155"},
+    "Desprezível": {"bg": RISCO_COLOR_MAP["Desprezível"], "fg": "#ffffff", "border": "#15803d"},
+    "Atenção": {"bg": RISCO_COLOR_MAP["Atenção"], "fg": "#422006", "border": "#ca8a04"},
+    "Significativo": {"bg": RISCO_COLOR_MAP["Significativo"], "fg": "#ffffff", "border": "#ea580c"},
+    "Alto": {"bg": RISCO_COLOR_MAP["Alto"], "fg": "#ffffff", "border": "#dc2626"},
+    "Extremo": {"bg": RISCO_COLOR_MAP["Extremo"], "fg": "#ffffff", "border": "#7f1d1d"},
+    "Apreciação de risco não realizada": {"bg": RISCO_COLOR_MAP["Apreciação de risco não realizada"], "fg": "#ffffff", "border": "#334155"},
 }
 PAC_COLOR_MAP = {"Crítico": "#dc2626", "Maior": "#f97316", "Menor": "#eab308"}
 STATUS_PAC_COLOR_MAP = {"Aberta":"#f97316", "Em andamento":"#3b82f6", "Aguardando validação":"#8b5cf6", "Concluída":"#16a34a", "Vencida":"#dc2626", "Cancelada":"#64748b"}
@@ -659,7 +661,24 @@ def nr12_dashboard(db,u):
     with c1:
         st.plotly_chart(px.histogram(dfm, x="Site", color="Status NR-12", barmode="group", title="Status NR-12 por site", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
     with c2:
-        st.plotly_chart(px.bar(risco_counts, x="Risco", y="Quantidade", color="Risco", title="Quantidade de máquinas por risco", color_discrete_map=RISCO_COLOR_MAP, category_orders={"Risco":RISCOS_MAQUINA}).update_layout(template="plotly_white", xaxis_title="Risco", yaxis_title="Máquinas"), use_container_width=True)
+        fig_risco = px.bar(
+            risco_counts,
+            x="Risco",
+            y="Quantidade",
+            color="Risco",
+            text="Quantidade",
+            title="Quantidade de máquinas por risco",
+            color_discrete_map=RISCO_COLOR_MAP,
+            category_orders={"Risco": RISCOS_MAQUINA},
+        )
+        fig_risco.update_traces(textposition="outside", marker_line_color="#ffffff", marker_line_width=1.2)
+        fig_risco.update_layout(
+            template="plotly_white",
+            xaxis_title="Risco",
+            yaxis_title="Máquinas",
+            showlegend=False,
+        )
+        st.plotly_chart(fig_risco, use_container_width=True)
     c3,c4=st.columns(2)
     with c3:
         if not dfp.empty:
