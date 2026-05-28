@@ -67,7 +67,7 @@ PAC_COLOR_MAP = {"Crítico": "#dc2626", "Maior": "#f97316", "Menor": "#eab308"}
 STATUS_PAC_COLOR_MAP = {"Aberta":"#f97316", "Em andamento":"#3b82f6", "Aguardando validação":"#8b5cf6", "Concluída":"#16a34a", "Vencida":"#dc2626", "Cancelada":"#64748b"}
 DOCUMENTOS_ESSENCIAIS = ["Laudo NR-12","ART","Apreciação de risco"]
 TIPOS_DOC_NR12 = ["Inventário NR-12","Apreciação de risco","Laudo NR-12","ART","Projeto mecânico","Projeto elétrico","Diagrama de segurança","Manual de operação","Manual de manutenção","Registro de treinamento","Evidência fotográfica","Checklist de validação","Termo de liberação para uso","Registro de intervenção","Registro de bloqueio/liberação","Outros"]
-TIPOS_VERIFICACAO_NR12 = ["Checklist operacional","Inspeção de manutenção","Auditoria EHS","Auditoria corporativa","Auditoria extraordinária após incidente/quase-acidente"]
+TIPOS_VERIFICACAO_NR12 = ["Inspeção de manutenção","Auditoria EHS","Auditoria corporativa","Auditoria extraordinária após incidente/quase-acidente"]
 RESULTADOS_NR12 = ["Conforme","Não conforme"]
 STATUS_PAC = ["Aberta","Em andamento","Aguardando validação","Concluída","Vencida","Cancelada"]
 CLASSIFICACAO_PAC = ["Crítico","Maior","Menor"]
@@ -211,7 +211,7 @@ class MaquinaNR12(Base):
     __tablename__="maquinas_nr12"
     id=Column(Integer,primary_key=True); codigo=Column(String(80),unique=True,nullable=False); site_id=Column(Integer,ForeignKey("sites.id"),nullable=False)
     area_setor=Column(String(120)); linha_processo=Column(String(120)); nome=Column(String(160),nullable=False); fabricante=Column(String(120)); modelo=Column(String(120)); numero_serie=Column(String(120)); ano=Column(String(20)); tipo_equipamento=Column(String(120)); responsavel_area=Column(String(120))
-    criticidade=Column(String(20),default="Média"); risco_maquina=Column(String(80),default="Apreciação de risco não realizada"); status_nr12=Column(String(80),default="Conforme"); ultima_adequacao=Column(Date); ultima_auditoria=Column(Date); proxima_auditoria=Column(Date)
+    criticidade=Column(String(20),default="Média"); risco_maquina=Column(String(80),default="Apreciação de risco não realizada"); status_nr12=Column(String(80),default="Conforme"); ultima_adequacao=Column(Date); ultima_auditoria=Column(Date); proxima_auditoria=Column(Date); data_prevista_adequacao=Column(Date)
     possui_laudo=Column(Boolean,default=False); possui_art=Column(Boolean,default=False); possui_apreciacao_risco=Column(Boolean,default=False); possui_manual_atualizado=Column(Boolean,default=False); possui_treinamento=Column(Boolean,default=False)
     observacoes=Column(Text); criado_em=Column(DateTime,default=datetime.utcnow); site=relationship("Site")
 class DocumentoNR12(Base):
@@ -254,6 +254,8 @@ def ensure_schema_updates():
             with engine.begin() as conn:
                 if "risco_maquina" not in cols:
                     conn.exec_driver_sql("ALTER TABLE maquinas_nr12 ADD COLUMN risco_maquina VARCHAR(80) DEFAULT 'Apreciação de risco não realizada'")
+                if "data_prevista_adequacao" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE maquinas_nr12 ADD COLUMN data_prevista_adequacao DATE")
         insp = inspect(engine)
         if "documentos_nr12" in insp.get_table_names():
             cols = {c["name"] for c in insp.get_columns("documentos_nr12")}
@@ -300,7 +302,7 @@ def init_db():
         db.commit()
         if db.query(MaquinaNR12).count()==0:
             sjc=db.query(Site).filter_by(codigo="SJC").first()
-            m=MaquinaNR12(codigo="SJC-PRENSA-001",site_id=sjc.id,area_setor="Produção",linha_processo="Linha 1",nome="Prensa hidráulica 001",fabricante="Fabricante A",modelo="PH-100",numero_serie="PH100",ano="2020",tipo_equipamento="Prensa",responsavel_area="Produção",criticidade="Alta",risco_maquina="Significativo",status_nr12="Conforme com observação",ultima_adequacao=date.today()-timedelta(days=180),ultima_auditoria=date.today()-timedelta(days=90),proxima_auditoria=date.today()+timedelta(days=40),possui_laudo=True,possui_art=True,possui_apreciacao_risco=True,possui_manual_atualizado=True,possui_treinamento=True)
+            m=MaquinaNR12(codigo="SJC-PRENSA-001",site_id=sjc.id,area_setor="Produção",linha_processo="Linha 1",nome="Prensa hidráulica 001",fabricante="Fabricante A",modelo="PH-100",numero_serie="PH100",ano="2020",tipo_equipamento="Prensa",responsavel_area="Produção",criticidade="Alta",risco_maquina="Significativo",status_nr12="Conforme com observação",ultima_adequacao=date.today()-timedelta(days=180),ultima_auditoria=date.today()-timedelta(days=90),proxima_auditoria=date.today()+timedelta(days=40),data_prevista_adequacao=date.today()+timedelta(days=120),possui_laudo=True,possui_art=True,possui_apreciacao_risco=True,possui_manual_atualizado=True,possui_treinamento=True)
             db.add(m); db.flush()
             for t in DOCUMENTOS_ESSENCIAIS: db.add(DocumentoNR12(maquina_id=m.id,site_id=sjc.id,tipo=t,descricao=t,data_emissao=date.today()-timedelta(days=200),data_validade=date.today()+timedelta(days=365),arquivo_nome=t+".pdf",responsavel="EHS"))
             db.add(PACNR12(origem="Seed",site_id=sjc.id,maquina_id=m.id,descricao_desvio="Pendência menor em sinalização.",classificacao="Menor",responsavel="Manutenção SJC",area_responsavel="Manutenção",prazo=date.today()+timedelta(days=20),status="Em andamento"))
@@ -355,6 +357,59 @@ def calcular_status_maquina_nr12(db,m):
     if any((t not in docs) or calcular_status_documento(docs[t])=="Vencido" for t in DOCUMENTOS_ESSENCIAIS): return "Pendente de ação não crítica"
     if db.query(PACNR12).filter(PACNR12.maquina_id==m.id,PACNR12.classificacao=="Crítico",PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação","Vencida"])).first(): return "Bloqueada por desvio crítico"
     return m.status_nr12 or "Conforme"
+def calcular_meta_adequacao_nr12(db, maquinas):
+    total = len(maquinas)
+    if total == 0:
+        return {"total":0,"adequadas":0,"percentual_atual":0,"previstas_ate_hoje":0,"percentual_previsto":0,"dentro_plano":True,"vencidas":0,"sem_data":0}
+    status_por_id = {m.id: calcular_status_maquina_nr12(db, m) for m in maquinas}
+    adequadas = sum(1 for m in maquinas if status_por_id[m.id] == "Conforme")
+    previstas_ate_hoje = sum(
+        1 for m in maquinas
+        if status_por_id[m.id] == "Conforme"
+        or (as_date(getattr(m, "data_prevista_adequacao", None)) and as_date(getattr(m, "data_prevista_adequacao", None)) <= date.today())
+    )
+    vencidas = sum(
+        1 for m in maquinas
+        if status_por_id[m.id] != "Conforme"
+        and as_date(getattr(m, "data_prevista_adequacao", None))
+        and as_date(getattr(m, "data_prevista_adequacao", None)) < date.today()
+    )
+    sem_data = sum(
+        1 for m in maquinas
+        if status_por_id[m.id] not in ["Conforme", "Fora de uso", "Não aplicável"]
+        and not as_date(getattr(m, "data_prevista_adequacao", None))
+    )
+    return {
+        "total": total,
+        "adequadas": adequadas,
+        "percentual_atual": round(adequadas / total * 100, 1),
+        "previstas_ate_hoje": previstas_ate_hoje,
+        "percentual_previsto": round(previstas_ate_hoje / total * 100, 1),
+        "dentro_plano": adequadas >= previstas_ate_hoje,
+        "vencidas": vencidas,
+        "sem_data": sem_data,
+    }
+
+def montar_evolucao_adequacao_nr12(db, maquinas):
+    total = len(maquinas)
+    if total == 0:
+        return pd.DataFrame()
+    status_por_id = {m.id: calcular_status_maquina_nr12(db, m) for m in maquinas}
+    datas_previstas = sorted({as_date(getattr(m, "data_prevista_adequacao", None)) for m in maquinas if as_date(getattr(m, "data_prevista_adequacao", None))})
+    if not datas_previstas:
+        return pd.DataFrame()
+    pontos = sorted(set([date.today()] + datas_previstas))
+    adequadas_atuais = sum(1 for m in maquinas if status_por_id[m.id] == "Conforme")
+    rows = []
+    for d in pontos:
+        previstas = sum(
+            1 for m in maquinas
+            if status_por_id[m.id] == "Conforme"
+            or (as_date(getattr(m, "data_prevista_adequacao", None)) and as_date(getattr(m, "data_prevista_adequacao", None)) <= d)
+        )
+        rows.append({"Data": d, "Série": "Evolução esperada", "% Adequação": round(previstas / total * 100, 1), "Quantidade": previstas})
+        rows.append({"Data": d, "Série": "Conformidade atual", "% Adequação": round(adequadas_atuais / total * 100, 1), "Quantidade": adequadas_atuais})
+    return pd.DataFrame(rows)
 def calcular_resultado_verificacao_nr12(resps):
     ap=[r for r in resps if r.aplicavel and r.resultado!="Não aplicável"]
     if not ap: return "Não aplicável",0,False
@@ -443,7 +498,7 @@ def df_maquinas(db,ids):
     rows = []
     for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo):
         risco = m.risco_maquina or ("Desprezível" if m.possui_apreciacao_risco else "Apreciação de risco não realizada")
-        rows.append({"ID":m.id,"Código":m.codigo,"Site":site_code(db,m.site_id),"Área":m.area_setor,"Linha":m.linha_processo,"Máquina":m.nome,"Fabricante":m.fabricante,"Modelo":m.modelo,"Série":m.numero_serie,"Ano":m.ano,"Tipo":m.tipo_equipamento,"Responsável":m.responsavel_area,"Criticidade":m.criticidade,"Risco":risco,"Status NR-12":calcular_status_maquina_nr12(db,m),"Próxima auditoria":fmt_date(m.proxima_auditoria),"Laudo":"Sim" if m.possui_laudo else "Não","ART":"Sim" if m.possui_art else "Não","Apreciação":"Sim" if m.possui_apreciacao_risco else "Não","Manual":"Sim" if m.possui_manual_atualizado else "Não","Treinamento":"Sim" if m.possui_treinamento else "Não","Observações":m.observacoes})
+        rows.append({"ID":m.id,"Código":m.codigo,"Site":site_code(db,m.site_id),"Área":m.area_setor,"Linha":m.linha_processo,"Máquina":m.nome,"Fabricante":m.fabricante,"Modelo":m.modelo,"Série":m.numero_serie,"Ano":m.ano,"Tipo":m.tipo_equipamento,"Responsável":m.responsavel_area,"Criticidade":m.criticidade,"Risco":risco,"Status NR-12":calcular_status_maquina_nr12(db,m),"Data prevista adequação":fmt_date(getattr(m,"data_prevista_adequacao",None)),"Próxima auditoria":fmt_date(m.proxima_auditoria),"Laudo":"Sim" if m.possui_laudo else "Não","ART":"Sim" if m.possui_art else "Não","Apreciação":"Sim" if m.possui_apreciacao_risco else "Não","Manual":"Sim" if m.possui_manual_atualizado else "Não","Treinamento":"Sim" if m.possui_treinamento else "Não","Observações":m.observacoes})
     return pd.DataFrame(rows)
 def df_docs(db,ids):
     return pd.DataFrame([{"ID":d.id,"Site":site_code(db,d.site_id),"Máquina":d.maquina.codigo if d.maquina else "—","Tipo":d.tipo,"Status":calcular_status_documento(d),"Emissão":fmt_date(d.data_emissao),"Validade":fmt_date(d.data_validade),"Arquivo":d.arquivo_nome,"Responsável":d.responsavel,"Descrição":d.descricao,"Observações":d.observacoes} for d in db.query(DocumentoNR12).filter(DocumentoNR12.site_id.in_(ids)).order_by(DocumentoNR12.id.desc())])
@@ -533,30 +588,54 @@ def nr12_dashboard(db,u):
     if not dfp.empty and not dfm.empty:
         codigos=set(dfm["Código"].astype(str))
         dfp=dfp[dfp["Máquina"].isin(codigos)]
+    meta=calcular_meta_adequacao_nr12(db,ms)
     cards=[
         ("Total de máquinas",total),
         ("% máquinas conformes",f"{round(sts.count('Conforme')/total*100,1) if total else 0}%"),
+        ("Meta de adequação",f"{meta['percentual_atual']}%",f"{meta['adequadas']}/{meta['total']} máquinas adequadas"),
+        ("Status do plano","Dentro do plano" if meta["dentro_plano"] else "Fora do plano",f"Adequadas: {meta['adequadas']} | Previstas até hoje: {meta['previstas_ate_hoje']}"),
         ("Máquinas com observação",sts.count("Conforme com observação")),
         ("Máquinas pendentes",sts.count("Pendente de ação não crítica")),
         ("Máquinas bloqueadas",sts.count("Bloqueada por desvio crítico")),
+        ("Adequações vencidas",meta["vencidas"],"Máquinas não conformes com data prevista ultrapassada"),
         ("Docs essenciais vencidos",sum(1 for d in docs if d.tipo in DOCUMENTOS_ESSENCIAIS and calcular_status_documento(d)=="Vencido")),
         ("Docs essenciais ausentes",sum(sum(1 for t in DOCUMENTOS_ESSENCIAIS if t not in {d.tipo for d in db.query(DocumentoNR12).filter_by(maquina_id=m.id)}) for m in ms)),
         ("Verificações vencidas",sum(1 for m in ms if m.proxima_auditoria and m.proxima_auditoria<date.today())),
         ("Verificações próximas",sum(1 for m in ms if m.proxima_auditoria and date.today()<=m.proxima_auditoria<=date.today()+timedelta(days=60))),
         ("PACs abertos",0 if dfp.empty else int(dfp["Status"].isin(["Aberta","Em andamento","Aguardando validação"]).sum())),
         ("PACs vencidos",0 if dfp.empty else int((dfp["Status"]=="Vencida").sum())),
-        ("Risco alto/extremo",0 if dfm.empty else int(dfm["Risco"].isin(["Alto","Extremo","Apreciação de risco não realizada"]).sum()))
+        ("Risco alto/extremo",0 if dfm.empty else int(dfm["Risco"].isin(["Alto","Extremo","Apreciação de risco não realizada"]).sum())),
+        ("Sem data de adequação",meta["sem_data"],"Máquinas não conformes sem data prevista")
     ]
-    for base in [0,4,8]:
+    for base in range(0,len(cards),4):
         cols=st.columns(4)
-        for c,(l,v) in zip(cols,cards[base:base+4]):
-            with c: kpi_card(l,v)
+        for c,card in zip(cols,cards[base:base+4]):
+            with c:
+                if len(card)==3:
+                    kpi_card(card[0],card[1],card[2])
+                else:
+                    kpi_card(card[0],card[1])
+    if meta["dentro_plano"]:
+        st.success(f"Meta de adequação dentro do plano: {meta['adequadas']} máquinas conformes para {meta['previstas_ate_hoje']} previstas até hoje.")
+    else:
+        st.warning(f"Meta de adequação fora do plano: {meta['adequadas']} máquinas conformes para {meta['previstas_ate_hoje']} previstas até hoje.")
+
+    section("Indicador por tipo de risco da máquina")
+    risco_counts=dfm.groupby("Risco",as_index=False).size().rename(columns={"size":"Quantidade"}) if not dfm.empty else pd.DataFrame(columns=["Risco","Quantidade"])
+    risco_dict={r:0 for r in RISCOS_MAQUINA}
+    if not risco_counts.empty:
+        risco_dict.update(dict(zip(risco_counts["Risco"],risco_counts["Quantidade"])))
+    for base in range(0,len(RISCOS_MAQUINA),3):
+        cols=st.columns(3)
+        for c,risco_nome in zip(cols,RISCOS_MAQUINA[base:base+3]):
+            with c:
+                kpi_card(risco_nome,risco_dict.get(risco_nome,0),"Máquinas nesse nível de risco")
+
     section("Gráficos")
     c1,c2=st.columns(2)
     with c1:
         st.plotly_chart(px.histogram(dfm, x="Site", color="Status NR-12", barmode="group", title="Status NR-12 por site", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
     with c2:
-        risco_counts=dfm.groupby("Risco",as_index=False).size().rename(columns={"size":"Quantidade"}) if not dfm.empty else pd.DataFrame(columns=["Risco","Quantidade"])
         st.plotly_chart(px.bar(risco_counts, x="Risco", y="Quantidade", color="Risco", title="Quantidade de máquinas por risco", color_discrete_map=RISCO_COLOR_MAP, category_orders={"Risco":RISCOS_MAQUINA}).update_layout(template="plotly_white", xaxis_title="Risco", yaxis_title="Máquinas"), use_container_width=True)
     c3,c4=st.columns(2)
     with c3:
@@ -565,8 +644,21 @@ def nr12_dashboard(db,u):
         else:
             empty_state("Sem PACs para os filtros selecionados.")
     with c4:
-        dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":cards[7][1]},{"Tipo":"Próximas","Qtd":cards[8][1]}])
+        dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":cards[10][1]},{"Tipo":"Próximas","Qtd":cards[11][1]}])
         st.plotly_chart(px.bar(dv,x="Tipo",y="Qtd",color="Tipo",title="Verificações vencidas/próximas", color_discrete_map={"Vencidas":"#dc2626","Próximas":"#f59e0b"}).update_layout(template="plotly_white", showlegend=False),use_container_width=True)
+
+    section("Evolução esperada da adequação NR-12")
+    evolucao=montar_evolucao_adequacao_nr12(db,ms)
+    if not evolucao.empty:
+        st.plotly_chart(
+            px.line(evolucao, x="Data", y="% Adequação", color="Série", markers=True,
+                    hover_data=["Quantidade"], title="Evolução esperada da adequação com base na Data Prevista para Adequação")
+              .update_layout(template="plotly_white", yaxis_range=[0,100], xaxis_title="Data", yaxis_title="% de máquinas adequadas"),
+            use_container_width=True
+        )
+    else:
+        empty_state("Sem datas previstas de adequação cadastradas para gerar a evolução esperada.")
+
     section("Máquinas prioritárias")
     pr=dfm[dfm["Status NR-12"].isin(["Bloqueada por desvio crítico","Pendente de ação não crítica","Conforme com observação"])] if not dfm.empty else pd.DataFrame()
     if not pr.empty:
@@ -624,6 +716,11 @@ def nr12_inventario(db,u):
                         risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA)
                         status=st.selectbox("Status NR-12",STATUS_MAQUINA)
                         prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180))
+                        data_prevista_adequacao=None
+                        if status!="Conforme":
+                            data_prevista_adequacao=st.date_input("Data prevista para adequação",value=date.today()+timedelta(days=90),help="Obrigatória para máquinas com Status NR-12 diferente de Conforme.")
+                        else:
+                            st.caption("Máquina conforme: data prevista para adequação não aplicável.")
                     ck=st.columns(5)
                     laudo=ck[0].checkbox("Laudo")
                     art=ck[1].checkbox("ART")
@@ -633,7 +730,7 @@ def nr12_inventario(db,u):
                     obs=st.text_area("Observações")
                     if st.form_submit_button("Salvar",use_container_width=True):
                         if cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
-                            db.add(MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,proxima_auditoria=prox,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs))
+                            db.add(MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,proxima_auditoria=prox,data_prevista_adequacao=data_prevista_adequacao,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs))
                             db.commit()
                             st.success("Máquina cadastrada.")
                             st.rerun()
@@ -648,13 +745,24 @@ def nr12_inventario(db,u):
                 lab=st.selectbox("Máquina",list(opts),key="nr12_editar_maquina_select")
                 m=db.get(MaquinaNR12,opts[lab])
                 with st.form("editmaq"):
-                    m.status_nr12=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(m.status_nr12) if m.status_nr12 in STATUS_MAQUINA else 0)
-                    m.criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1)
+                    novo_status=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(m.status_nr12) if m.status_nr12 in STATUS_MAQUINA else 0)
+                    nova_criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1)
                     risco_atual=m.risco_maquina or "Apreciação de risco não realizada"
-                    m.risco_maquina=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0)
-                    m.proxima_auditoria=st.date_input("Próxima auditoria prevista",value=m.proxima_auditoria or date.today()+timedelta(days=180))
-                    m.observacoes=st.text_area("Observações",m.observacoes or "")
+                    novo_risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0)
+                    nova_proxima_auditoria=st.date_input("Próxima auditoria prevista",value=m.proxima_auditoria or date.today()+timedelta(days=180))
+                    nova_data_prevista=None
+                    if novo_status!="Conforme":
+                        nova_data_prevista=st.date_input("Data prevista para adequação",value=m.data_prevista_adequacao or date.today()+timedelta(days=90),help="Use esta data para compor a meta e a evolução esperada de adequação.")
+                    else:
+                        st.caption("Máquina conforme: data prevista para adequação será limpa ao salvar.")
+                    novas_observacoes=st.text_area("Observações",m.observacoes or "")
                     if st.form_submit_button("Atualizar",use_container_width=True):
+                        m.status_nr12=novo_status
+                        m.criticidade=nova_criticidade
+                        m.risco_maquina=novo_risco
+                        m.proxima_auditoria=nova_proxima_auditoria
+                        m.data_prevista_adequacao=None if novo_status=="Conforme" else nova_data_prevista
+                        m.observacoes=novas_observacoes
                         db.commit()
                         st.success("Atualizado.")
                         st.rerun()
