@@ -58,6 +58,14 @@ RISCO_COLOR_MAP = {
     "Extremo": "#7f1d1d",
     "Apreciação de risco não realizada": "#991b1b",
 }
+RISCO_CARD_STYLE_MAP = {
+    "Desprezível": {"bg": "#16a34a", "fg": "#ffffff", "border": "#15803d"},
+    "Atenção": {"bg": "#facc15", "fg": "#422006", "border": "#ca8a04"},
+    "Significativo": {"bg": "#fb923c", "fg": "#ffffff", "border": "#ea580c"},
+    "Alto": {"bg": "#ef4444", "fg": "#ffffff", "border": "#dc2626"},
+    "Extremo": {"bg": "#b91c1c", "fg": "#ffffff", "border": "#7f1d1d"},
+    "Apreciação de risco não realizada": {"bg": "#475569", "fg": "#ffffff", "border": "#334155"},
+}
 PAC_COLOR_MAP = {"Crítico": "#dc2626", "Maior": "#f97316", "Menor": "#eab308"}
 STATUS_PAC_COLOR_MAP = {"Aberta":"#f97316", "Em andamento":"#3b82f6", "Aguardando validação":"#8b5cf6", "Concluída":"#16a34a", "Vencida":"#dc2626", "Cancelada":"#64748b"}
 DOCUMENTOS_ESSENCIAIS = ["Laudo NR-12","ART","Apreciação de risco"]
@@ -471,6 +479,19 @@ def update_vencidos(db):
 def header(t,s=""): st.markdown(f"<div class='ehs-header'><h1>{t}</h1><p>{s}</p></div>",unsafe_allow_html=True)
 def section(t): st.markdown(f"<div class='section-title'>{t}</div>",unsafe_allow_html=True)
 def kpi_card(l,v,h=""): st.markdown(f"<div class='kpi'><div class='kpi-label'>{l}</div><div class='kpi-value'>{v}</div><div class='muted'>{h}</div></div>",unsafe_allow_html=True)
+def html_escape(v):
+    return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+def kpi_card_colorido(l,v,h="",bg="#ffffff",fg="#111827",border="#e5e7eb"):
+    st.markdown(
+        f"""
+        <div class='kpi' style='background:{bg};border-color:{border};box-shadow:0 10px 25px rgba(15,23,42,.13);'>
+            <div class='kpi-label' style='color:{fg};opacity:.92;'>{html_escape(l)}</div>
+            <div class='kpi-value' style='color:{fg};'>{html_escape(v)}</div>
+            <div class='muted' style='color:{fg};opacity:.88;'>{html_escape(h)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 def module_card(t,d,i): st.markdown(f"<div class='card'><h3>{i} {t}</h3><p class='muted'>{d}</p></div>",unsafe_allow_html=True)
 def empty_state(t): st.markdown(f"<div class='empty'>{t}</div>",unsafe_allow_html=True)
 def alert_card(t): st.markdown(f"<div class='alert'>{t}</div>",unsafe_allow_html=True)
@@ -630,7 +651,8 @@ def nr12_dashboard(db,u):
         cols=st.columns(3)
         for c,risco_nome in zip(cols,RISCOS_MAQUINA[base:base+3]):
             with c:
-                kpi_card(risco_nome,risco_dict.get(risco_nome,0),"Máquinas nesse nível de risco")
+                estilo=RISCO_CARD_STYLE_MAP.get(risco_nome,{"bg":"#ffffff","fg":"#111827","border":"#e5e7eb"})
+                kpi_card_colorido(risco_nome,risco_dict.get(risco_nome,0),"Máquinas nesse nível de risco",estilo["bg"],estilo["fg"],estilo["border"])
 
     section("Gráficos")
     c1,c2=st.columns(2)
