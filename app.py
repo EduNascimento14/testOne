@@ -9,7 +9,7 @@ streamlit run plataforma_ehs_integrada.py
 # ============================================================
 # 1. Imports
 # ============================================================
-import os, io
+import os, io, re, math, unicodedata
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -248,6 +248,58 @@ class PACEHS(Base):
 class EvidenciaEHS(Base):
     __tablename__="evidencias_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer); requisito_id=Column(Integer); pac_id=Column(Integer); descricao=Column(Text); arquivo_nome=Column(String(260)); arquivo_caminho=Column(String(500)); criado_em=Column(DateTime,default=datetime.utcnow)
 
+
+# ============================================================
+# 5B. Modelos SQLAlchemy — Controle de Energia e Emissões
+# ============================================================
+class EnergiaRegistro(Base):
+    __tablename__ = "energia_registros"
+    id = Column(Integer, primary_key=True)
+    mes_ref = Column(Date, nullable=False)
+    site_codigo = Column(String(30), nullable=False)
+    site_nome = Column(String(160))
+    grupo = Column(String(80))
+    divisao = Column(String(160))
+    fonte = Column(String(80))  # Energia elétrica ou Gás natural
+    consumo_original = Column(Float, default=0)
+    unidade_original = Column(String(40))
+    consumo_kwh = Column(Float, default=0)
+    custo_brl = Column(Float, default=0)
+    unit_cost = Column(Float, default=0)
+    emissao_co2_ton = Column(Float, default=0)
+    emissao_escopo = Column(String(40))  # Escopo 1 ou Escopo 2
+    origem_arquivo = Column(String(260))
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+class EnergiaActualHours(Base):
+    __tablename__ = "energia_actual_hours"
+    id = Column(Integer, primary_key=True)
+    mes_ref = Column(Date, nullable=False)
+    site_codigo = Column(String(30), nullable=False)
+    site_nome = Column(String(160))
+    grupo = Column(String(80))
+    actual_hours = Column(Float, default=0)
+    production_capacity_hours = Column(Float, default=0)
+    origem = Column(String(80), default="Manual")
+    criado_em = Column(DateTime, default=datetime.utcnow)
+    atualizado_em = Column(DateTime, default=datetime.utcnow)
+
+class EnergiaUploadHistorico(Base):
+    __tablename__ = "energia_upload_historico"
+    id = Column(Integer, primary_key=True)
+    tipo_base = Column(String(80))
+    nome_arquivo = Column(String(260))
+    data_upload = Column(DateTime, default=datetime.utcnow)
+    usuario = Column(String(120))
+    observacoes = Column(Text)
+
+class EnergiaParametro(Base):
+    __tablename__ = "energia_parametros"
+    id = Column(Integer, primary_key=True)
+    chave = Column(String(120), unique=True, nullable=False)
+    valor = Column(String(120))
+    descricao = Column(Text)
+
 # ============================================================
 # 6. Seed inicial
 # ============================================================
@@ -304,6 +356,7 @@ def init_db():
             if not db.query(Usuario).filter_by(nome=nome).first():
                 stt=db.query(Site).filter_by(codigo=sitecod).first(); db.add(Usuario(nome=nome,perfil=perfil,site_id=stt.id if stt else None))
         sync_checklists_base(db)
+        seed_energia_parametros(db)
         for maq in db.query(MaquinaNR12).all():
             maq.status_nr12 = normalizar_status_nr12(maq.status_nr12)
         db.commit()
@@ -570,9 +623,9 @@ def dashboard_integrado(db,u):
         empty_state("Nenhum alerta crítico ou vencido identificado.")
 
 def home_page(db,u):
-    header("Plataforma Integrada EHS","NR-12 e Auditorias Cruzadas de Diretrizes de EHS em uma única aplicação")
+    header("Plataforma Integrada EHS","NR-12, Auditorias Cruzadas e Controle de Energia e Emissões em uma única aplicação")
     dashboard_integrado(db,u); section("Módulos")
-    c1,c2=st.columns(2)
+    c1,c2,c3=st.columns(3)
     with c1:
         module_card("Sustentação NR-12","Inventário, documentos, checklists, PAC, pendências e relatórios.","⚙️")
         if st.button("Acessar Sustentação NR-12",use_container_width=True):
@@ -586,6 +639,13 @@ def home_page(db,u):
             st.session_state.modulo="ehs"
             st.session_state.page_ehs="Dashboard Auditoria Cruzada"
             st.session_state.nav_ehs="Dashboard Auditoria Cruzada"
+            st.rerun()
+    with c3:
+        module_card("Controle de Energia e Emissões","Consumo de energia, gás natural, CO₂, gastos, eficiência energética, R12, FY e análise I-REC.","⚡")
+        if st.button("Acessar Controle de Energia",use_container_width=True):
+            st.session_state.modulo="energia"
+            st.session_state.page_energia="Dashboard Energia e CO₂"
+            st.session_state.nav_energia="Dashboard Energia e CO₂"
             st.rerun()
 def nr12_dashboard(db,u):
     header("Sustentação da Conformidade NR-12","Dashboard para máquinas submetidas à NR-12")
@@ -1439,6 +1499,875 @@ def ehs_relatorios(db,u):
         pdf=gerar_pdf(f"Relatório de Auditoria Cruzada de Diretrizes de EHS — {site_code(db,a.site_auditado_id)}",f"Auditoria {a.id} | {a.ciclo} | Conformidade {calcular_conformidade_ehs(res)}% | Maturidade {calcular_maturidade_ehs(res)}",[("Dados",pd.DataFrame([{"Ano":a.ano,"Ciclo":a.ciclo,"Site":site_code(db,a.site_auditado_id),"Status":a.status,"Auditor líder":a.auditor_lider}])),("Resultado por item",dfr),("PACs vinculados",dp[dp["Auditoria"]==a.id] if not dp.empty else dp)])
         download_pdf_button("Baixar relatório de auditoria PDF",f"relatorio_auditoria_ehs_{a.id}.pdf",pdf)
 
+
+# ============================================================
+# 14B. Módulo Controle de Energia e Emissões
+# ============================================================
+
+ENERGIA_SITE_INFO = {
+    "CAC": {"nome": "Cachoeirinha", "grupo": "MSG", "linha": "MSG Br CAC"},
+    "JAC": {"nome": "Jacareí", "grupo": "MSG", "linha": "MSG Br JAC"},
+    "SJC": {"nome": "São José dos Campos", "grupo": "Filtration Br", "linha": "Filtration Br"},
+    "DIA": {"nome": "Diadema", "grupo": "FCG Br", "linha": "FCG Br"},
+    "JUN": {"nome": "Jundiaí", "grupo": "EMG", "linha": "EMG Br JU"},
+    "PER": {"nome": "Perus", "grupo": "EMG", "linha": "EMG Br SP"},
+}
+ENERGIA_SITE_ORDER = ["CAC", "JAC", "JUN", "PER", "SJC", "DIA"]
+ENERGIA_GROUP_ORDER = ["MSG", "EMG", "Filtration Br", "FCG Br", "LAG"]
+ENERGIA_LINHAS_EXECUTIVAS = [
+    ("MSG Br CAC", ["CAC"], False),
+    ("MSG Br JAC", ["JAC"], False),
+    ("MSG Br", ["CAC", "JAC"], True),
+    ("EMG Br SP", ["PER"], False),
+    ("EMG Br JU", ["JUN"], False),
+    ("EMG Br", ["JUN", "PER"], True),
+    ("Filtration Br", ["SJC"], True),
+    ("FCG Br", ["DIA"], True),
+    ("Brasil", ["CAC", "JAC", "JUN", "PER", "SJC", "DIA"], True),
+]
+ENERGIA_DEFAULT_PARAMS = {
+    "fator_emissao_eletricidade_kgco2_kwh": ("0", "Fator de emissão da energia elétrica em kgCO₂e/kWh."),
+    "fator_emissao_gas_kgco2_kwh": ("0", "Fator de emissão do gás natural convertido para kWh em kgCO₂e/kWh."),
+    "meta_reducao_co2_percentual": ("5", "Meta percentual de redução para emissões de CO₂."),
+    "meta_reducao_eficiencia_percentual": ("5", "Meta percentual de redução para taxa de eficiência energética."),
+    "conversao_mmbtu_kwh": ("293.071", "Conversão de MMBtu para kWh."),
+    "fy_atual": ("26", "Fiscal Year atual. Exemplo: 26 para FY26."),
+    "mes_referencia_r12": ("2026-04-01", "Mês de referência padrão para R12."),
+}
+ENERGIA_FONTE_MAP = {
+    "electric power": ("Energia elétrica", "Escopo 2"),
+    "electricity": ("Energia elétrica", "Escopo 2"),
+    "energia eletrica": ("Energia elétrica", "Escopo 2"),
+    "energia elétrica": ("Energia elétrica", "Escopo 2"),
+    "natural gas": ("Gás natural", "Escopo 1"),
+    "gas natural": ("Gás natural", "Escopo 1"),
+    "gás natural": ("Gás natural", "Escopo 1"),
+}
+ENERGIA_RESOURCE_SITE_PATTERNS = {
+    "CAC": ["cachoeirinha"],
+    "JAC": ["jacarei", "jacareí"],
+    "SJC": ["sao jose dos campos", "são josé dos campos", "sao jose", "sjc"],
+    "DIA": ["diadema"],
+    "JUN": ["jundiai", "jundiaí"],
+    "PER": ["sao paulo", "são paulo", "perus"],
+}
+ENERGIA_ABSORPTION_SHEETS = {
+    "FCG": "DIA",
+    "PFG": "SJC",
+    "MSG Cachoeirinha": "CAC",
+    "MSG Jacarei": "JAC",
+    "MSG Jacareí": "JAC",
+    "EMG Jundiai": "JUN",
+    "EMG Jundiaí": "JUN",
+    "EMG Perus": "PER",
+}
+
+
+def energia_norm_txt(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    s = str(v).strip().lower()
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+def energia_safe_float(v, default=0.0):
+    if v is None or v == "":
+        return default
+    if isinstance(v, (int, float)) and not pd.isna(v):
+        return float(v)
+    s = str(v).strip()
+    if s in ["-", "—", "nan", "None", ""]:
+        return default
+    s = s.replace("R$", "").replace(" ", "")
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return default
+
+def energia_first_day(v):
+    d = as_date(v)
+    if not d:
+        return None
+    return date(d.year, d.month, 1)
+
+def energia_site_nome(site_codigo):
+    return ENERGIA_SITE_INFO.get(site_codigo, {}).get("nome", site_codigo or "—")
+
+def energia_site_grupo(site_codigo):
+    return ENERGIA_SITE_INFO.get(site_codigo, {}).get("grupo", "LAG")
+
+def energia_map_resource_site(site_value):
+    n = energia_norm_txt(site_value)
+    for codigo, patterns in ENERGIA_RESOURCE_SITE_PATTERNS.items():
+        if any(p in n for p in patterns):
+            return codigo
+    return None
+
+def energia_map_absorption_site(sheet_name):
+    n = energia_norm_txt(sheet_name)
+    for label, codigo in ENERGIA_ABSORPTION_SHEETS.items():
+        if energia_norm_txt(label) in n or n in energia_norm_txt(label):
+            return codigo
+    return None
+
+def energia_map_fonte(service_value):
+    n = energia_norm_txt(service_value)
+    for key, val in ENERGIA_FONTE_MAP.items():
+        if energia_norm_txt(key) in n:
+            return val
+    if "gas" in n:
+        return ("Gás natural", "Escopo 1")
+    if "power" in n or "electric" in n:
+        return ("Energia elétrica", "Escopo 2")
+    return ("Outro", "—")
+
+def energia_fiscal_year(mes_ref):
+    d = as_date(mes_ref)
+    if not d:
+        return None
+    return d.year + 1 if d.month >= 7 else d.year
+
+def energia_intervalo_fy(fy):
+    fy = int(fy)
+    if fy < 100:
+        fy += 2000
+    return date(fy - 1, 7, 1), date(fy, 6, 30)
+
+def energia_fy_label(mes_ref):
+    fy = energia_fiscal_year(mes_ref)
+    return f"FY{str(fy)[-2:]}" if fy else "—"
+
+def energia_r12_start(mes_ref):
+    d = energia_first_day(mes_ref)
+    if not d:
+        return None
+    return (pd.Timestamp(d) - pd.DateOffset(months=11)).date()
+
+def energia_pct_change(atual, base):
+    if base is None or pd.isna(base) or abs(float(base)) < 1e-12:
+        return None
+    if atual is None or pd.isna(atual):
+        return None
+    return (float(atual) - float(base)) / float(base)
+
+def energia_fmt_val(v, metric_kind="numero"):
+    if v is None or pd.isna(v):
+        return "—"
+    if metric_kind == "percent":
+        return f"{v*100:.1f}%".replace(".", ",")
+    if metric_kind == "money":
+        return f"R$ {v:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    if abs(v) >= 1000:
+        return f"{v:,.0f}".replace(",", ".")
+    return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def energia_param(db, chave, default=None):
+    p = db.query(EnergiaParametro).filter_by(chave=chave).first()
+    if p and p.valor not in [None, ""]:
+        return p.valor
+    if default is not None:
+        return default
+    return ENERGIA_DEFAULT_PARAMS.get(chave, ("", ""))[0]
+
+def energia_param_float(db, chave, default=0):
+    return energia_safe_float(energia_param(db, chave, default), default)
+
+def energia_set_param(db, chave, valor, descricao=None):
+    p = db.query(EnergiaParametro).filter_by(chave=chave).first()
+    if not p:
+        p = EnergiaParametro(chave=chave, valor=str(valor), descricao=descricao or "")
+        db.add(p)
+    else:
+        p.valor = str(valor)
+        if descricao is not None:
+            p.descricao = descricao
+    db.commit()
+
+def seed_energia_parametros(db):
+    for chave, (valor, desc) in ENERGIA_DEFAULT_PARAMS.items():
+        if not db.query(EnergiaParametro).filter_by(chave=chave).first():
+            db.add(EnergiaParametro(chave=chave, valor=valor, descricao=desc))
+    db.commit()
+
+def energia_find_header(raw_df, required_terms):
+    for idx in raw_df.index:
+        row_norm = [energia_norm_txt(x) for x in raw_df.loc[idx].tolist()]
+        joined = " | ".join(row_norm)
+        if all(term in joined for term in required_terms):
+            return int(idx)
+    return None
+
+def energia_read_excel_any(uploaded_or_bytes, filename="arquivo.xlsx", sheet_name=0, header=None, nrows=None):
+    data = uploaded_or_bytes.getvalue() if hasattr(uploaded_or_bytes, "getvalue") else uploaded_or_bytes
+    try:
+        return pd.read_excel(io.BytesIO(data), sheet_name=sheet_name, header=header, nrows=nrows)
+    except ImportError as e:
+        if str(filename).lower().endswith(".xls"):
+            raise RuntimeError("Não foi possível ler .xls porque a dependência xlrd não está disponível. Converta o arquivo para .xlsx e tente novamente.") from e
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Não foi possível ler o arquivo Excel: {e}") from e
+
+def energia_parse_base_resource(uploaded_file, db, filename="base_energia.xlsx"):
+    data = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file
+    try:
+        xls = pd.ExcelFile(io.BytesIO(data))
+    except ImportError as e:
+        if str(filename).lower().endswith(".xls"):
+            raise RuntimeError("Não foi possível ler .xls porque a dependência xlrd não está disponível. Converta para .xlsx e tente novamente.") from e
+        raise
+    rows = []
+    f_elec = energia_param_float(db, "fator_emissao_eletricidade_kgco2_kwh", 0)
+    f_gas = energia_param_float(db, "fator_emissao_gas_kgco2_kwh", 0)
+    conv = energia_param_float(db, "conversao_mmbtu_kwh", 293.071)
+
+    for sheet in xls.sheet_names:
+        raw = pd.read_excel(io.BytesIO(data), sheet_name=sheet, header=None, nrows=50)
+        header_idx = energia_find_header(raw, ["service month", "site"])
+        if header_idx is None:
+            continue
+        df = pd.read_excel(io.BytesIO(data), sheet_name=sheet, header=header_idx)
+        df.columns = [str(c).strip() for c in df.columns]
+        colmap = {energia_norm_txt(c): c for c in df.columns}
+        col_month = colmap.get("service month")
+        col_site = colmap.get("site") or colmap.get("site name")
+        col_service = colmap.get("services") or colmap.get("service")
+        col_uom = colmap.get("usage uom") or colmap.get("uom")
+        col_usage = colmap.get("total usage") or colmap.get("total billed usage")
+        col_cost = colmap.get("total cost (brl)") or colmap.get("total cost")
+        col_unit = colmap.get("unit cost")
+        col_div = colmap.get("division")
+        if not all([col_month, col_site, col_service, col_usage]):
+            continue
+
+        for _, r in df.iterrows():
+            mes = energia_first_day(r.get(col_month))
+            site_codigo = energia_map_resource_site(r.get(col_site))
+            fonte, escopo = energia_map_fonte(r.get(col_service))
+            if not mes or not site_codigo or fonte not in ["Energia elétrica", "Gás natural"]:
+                continue
+            consumo_original = energia_safe_float(r.get(col_usage), 0)
+            uom = str(r.get(col_uom) or "").strip()
+            consumo_kwh = consumo_original
+            if fonte == "Gás natural" and energia_norm_txt(uom) in ["mmbtu", "mm btu", "mmbtus"]:
+                consumo_kwh = consumo_original * conv
+            elif energia_norm_txt(uom) in ["mwh"]:
+                consumo_kwh = consumo_original * 1000
+            custo = energia_safe_float(r.get(col_cost), 0) if col_cost else 0
+            unit_cost = energia_safe_float(r.get(col_unit), 0) if col_unit else 0
+            fator = f_elec if fonte == "Energia elétrica" else f_gas
+            rows.append({
+                "mes_ref": mes,
+                "site_codigo": site_codigo,
+                "site_nome": energia_site_nome(site_codigo),
+                "grupo": energia_site_grupo(site_codigo),
+                "divisao": str(r.get(col_div) or ""),
+                "fonte": fonte,
+                "consumo_original": consumo_original,
+                "unidade_original": uom,
+                "consumo_kwh": consumo_kwh,
+                "custo_brl": custo,
+                "unit_cost": unit_cost,
+                "emissao_co2_ton": consumo_kwh * fator / 1000 if fator else 0,
+                "emissao_escopo": escopo,
+                "origem_arquivo": filename,
+            })
+    return pd.DataFrame(rows)
+
+def energia_parse_absorption(uploaded_file, filename="absorption.xlsx"):
+    data = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file
+    try:
+        xls = pd.ExcelFile(io.BytesIO(data))
+    except ImportError as e:
+        if str(filename).lower().endswith(".xls"):
+            raise RuntimeError("Não foi possível ler .xls porque a dependência xlrd não está disponível. Converta o arquivo para .xlsx e tente novamente.") from e
+        raise
+    rows = []
+    for sheet in xls.sheet_names:
+        site_codigo = energia_map_absorption_site(sheet)
+        if not site_codigo:
+            continue
+        raw = pd.read_excel(io.BytesIO(data), sheet_name=sheet, header=None)
+        header_idx = None
+        actual_col = None
+        capacity_col = None
+        for idx in raw.index[:25]:
+            vals = [energia_norm_txt(x) for x in raw.loc[idx].tolist()]
+            if "actual hours" in vals:
+                header_idx = idx
+                actual_col = vals.index("actual hours")
+                if "production capacity (hours)" in vals:
+                    capacity_col = vals.index("production capacity (hours)")
+                break
+        if header_idx is None:
+            continue
+        for ridx in raw.index:
+            if ridx <= header_idx:
+                continue
+            mes = energia_first_day(raw.iat[ridx, 0] if raw.shape[1] > 0 else None)
+            if not mes:
+                continue
+            actual = energia_safe_float(raw.iat[ridx, actual_col], None)
+            if actual is None:
+                continue
+            capacity = energia_safe_float(raw.iat[ridx, capacity_col], 0) if capacity_col is not None else 0
+            rows.append({
+                "mes_ref": mes,
+                "site_codigo": site_codigo,
+                "site_nome": energia_site_nome(site_codigo),
+                "grupo": energia_site_grupo(site_codigo),
+                "actual_hours": actual,
+                "production_capacity_hours": capacity,
+                "origem": "Importado Absorption",
+            })
+    return pd.DataFrame(rows)
+
+def energia_df_registros(db):
+    regs = db.query(EnergiaRegistro).order_by(EnergiaRegistro.mes_ref, EnergiaRegistro.site_codigo, EnergiaRegistro.fonte).all()
+    return pd.DataFrame([{
+        "ID": r.id,
+        "Mês": r.mes_ref,
+        "FY": energia_fy_label(r.mes_ref),
+        "Site": r.site_codigo,
+        "Site nome": r.site_nome,
+        "Grupo": r.grupo,
+        "Divisão": r.divisao,
+        "Fonte": r.fonte,
+        "Consumo original": r.consumo_original,
+        "Unidade original": r.unidade_original,
+        "Consumo kWh": r.consumo_kwh,
+        "Custo BRL": r.custo_brl,
+        "Unit cost": r.unit_cost,
+        "Emissão tCO₂e": r.emissao_co2_ton,
+        "Escopo": r.emissao_escopo,
+        "Origem": r.origem_arquivo,
+    } for r in regs])
+
+def energia_df_actual_hours(db):
+    hrs = db.query(EnergiaActualHours).order_by(EnergiaActualHours.mes_ref, EnergiaActualHours.site_codigo).all()
+    return pd.DataFrame([{
+        "ID": h.id,
+        "Mês": h.mes_ref,
+        "FY": energia_fy_label(h.mes_ref),
+        "Site": h.site_codigo,
+        "Site nome": h.site_nome,
+        "Grupo": h.grupo,
+        "Actual Hours": h.actual_hours,
+        "Production capacity (hours)": h.production_capacity_hours,
+        "Origem": h.origem,
+    } for h in hrs])
+
+def energia_consolidado(db):
+    regs = energia_df_registros(db)
+    hrs = energia_df_actual_hours(db)
+    sites = pd.DataFrame([{"Site": k, "Site nome": v["nome"], "Grupo": v["grupo"]} for k, v in ENERGIA_SITE_INFO.items()])
+    if regs.empty and hrs.empty:
+        return pd.DataFrame()
+    if regs.empty:
+        base = hrs[["Mês", "Site", "Site nome", "Grupo"]].drop_duplicates()
+    else:
+        base = regs[["Mês", "Site", "Site nome", "Grupo"]].drop_duplicates()
+    if not hrs.empty:
+        base = pd.concat([base, hrs[["Mês", "Site", "Site nome", "Grupo"]].drop_duplicates()], ignore_index=True).drop_duplicates()
+    pivot_consumo = pd.DataFrame()
+    pivot_custo = pd.DataFrame()
+    pivot_emissao = pd.DataFrame()
+    gas_original = pd.DataFrame()
+    if not regs.empty:
+        pivot_consumo = regs.pivot_table(index=["Mês", "Site"], columns="Fonte", values="Consumo kWh", aggfunc="sum", fill_value=0).reset_index()
+        pivot_custo = regs.pivot_table(index=["Mês", "Site"], columns="Fonte", values="Custo BRL", aggfunc="sum", fill_value=0).reset_index()
+        pivot_emissao = regs.pivot_table(index=["Mês", "Site"], columns="Escopo", values="Emissão tCO₂e", aggfunc="sum", fill_value=0).reset_index()
+        gas = regs[regs["Fonte"] == "Gás natural"].groupby(["Mês", "Site"], as_index=False).agg({
+            "Consumo original": "sum",
+            "Unidade original": lambda x: ", ".join(sorted(set([str(v) for v in x if str(v) != "nan"]))) if len(x) else "",
+        })
+        gas_original = gas.rename(columns={"Consumo original": "consumo_gas_original", "Unidade original": "consumo_gas_unidade_original"})
+    df = base.copy()
+    if not pivot_consumo.empty:
+        df = df.merge(pivot_consumo, on=["Mês", "Site"], how="left")
+    if not pivot_custo.empty:
+        pivot_custo = pivot_custo.rename(columns={"Energia elétrica": "custo_eletrico_brl", "Gás natural": "custo_gas_brl"})
+        df = df.merge(pivot_custo[["Mês", "Site"] + [c for c in ["custo_eletrico_brl","custo_gas_brl"] if c in pivot_custo.columns]], on=["Mês", "Site"], how="left")
+    if not pivot_emissao.empty:
+        pivot_emissao = pivot_emissao.rename(columns={"Escopo 1": "emissao_escopo1_tco2e", "Escopo 2": "emissao_escopo2_tco2e"})
+        df = df.merge(pivot_emissao[["Mês", "Site"] + [c for c in ["emissao_escopo1_tco2e","emissao_escopo2_tco2e"] if c in pivot_emissao.columns]], on=["Mês", "Site"], how="left")
+    if not gas_original.empty:
+        df = df.merge(gas_original, on=["Mês", "Site"], how="left")
+    if not hrs.empty:
+        h = hrs[["Mês", "Site", "Actual Hours", "Production capacity (hours)"]].copy()
+        df = df.merge(h, on=["Mês", "Site"], how="left")
+    for col in ["Energia elétrica", "Gás natural", "custo_eletrico_brl", "custo_gas_brl", "emissao_escopo1_tco2e", "emissao_escopo2_tco2e", "consumo_gas_original", "Actual Hours", "Production capacity (hours)"]:
+        if col not in df.columns:
+            df[col] = 0
+    df["Mês"] = pd.to_datetime(df["Mês"]).dt.date
+    df["fiscal_year"] = df["Mês"].apply(lambda d: f"FY{str(energia_fiscal_year(d))[-2:]}")
+    df["consumo_eletrico_kwh"] = df["Energia elétrica"].fillna(0)
+    df["consumo_gas_kwh"] = df["Gás natural"].fillna(0)
+    df["consumo_total_kwh"] = df["consumo_eletrico_kwh"] + df["consumo_gas_kwh"]
+    df["custo_total_brl"] = df["custo_eletrico_brl"].fillna(0) + df["custo_gas_brl"].fillna(0)
+    df["emissao_total_tco2e"] = df["emissao_escopo1_tco2e"].fillna(0) + df["emissao_escopo2_tco2e"].fillna(0)
+    df["emissao_total_com_irec_tco2e"] = df["emissao_escopo1_tco2e"].fillna(0)
+    df["actual_hours"] = df["Actual Hours"].fillna(0)
+    df["production_capacity_hours"] = df["Production capacity (hours)"].fillna(0)
+    df["eficiencia_energetica"] = df.apply(lambda r: (r["consumo_total_kwh"] / r["actual_hours"]) if r["actual_hours"] else None, axis=1)
+    df = df.sort_values(["Site", "Mês"]).reset_index(drop=True)
+
+    r12_cols = ["consumo_eletrico_kwh", "consumo_gas_kwh", "consumo_total_kwh", "emissao_total_tco2e", "emissao_total_com_irec_tco2e", "custo_total_brl", "actual_hours"]
+    for col in r12_cols:
+        df[f"{col}_r12"] = df.groupby("Site")[col].transform(lambda s: s.rolling(window=12, min_periods=1).sum())
+    df["eficiencia_energetica_r12"] = df.apply(lambda r: (r["consumo_total_kwh_r12"] / r["actual_hours_r12"]) if r["actual_hours_r12"] else None, axis=1)
+    out_cols = [
+        "Mês", "fiscal_year", "Site", "Site nome", "Grupo",
+        "consumo_eletrico_kwh", "consumo_gas_original", "consumo_gas_unidade_original", "consumo_gas_kwh", "consumo_total_kwh",
+        "custo_eletrico_brl", "custo_gas_brl", "custo_total_brl",
+        "emissao_escopo1_tco2e", "emissao_escopo2_tco2e", "emissao_total_tco2e", "emissao_total_com_irec_tco2e",
+        "actual_hours", "production_capacity_hours", "eficiencia_energetica",
+        "consumo_eletrico_kwh_r12", "consumo_gas_kwh_r12", "consumo_total_kwh_r12",
+        "emissao_total_tco2e_r12", "emissao_total_com_irec_tco2e_r12", "custo_total_brl_r12",
+        "actual_hours_r12", "eficiencia_energetica_r12"
+    ]
+    for col in out_cols:
+        if col not in df.columns:
+            df[col] = None
+    return df[out_cols].copy()
+
+def energia_filtrar(df, sites=None, grupos=None, data_ini=None, data_fim=None, fy=None):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    f = df.copy()
+    if sites:
+        f = f[f["Site"].isin(sites)]
+    if grupos:
+        # Grupo "LAG" significa todos.
+        grupos_validos = [g for g in grupos if g != "LAG"]
+        if grupos_validos:
+            f = f[f["Grupo"].isin(grupos_validos)]
+    if fy and fy != "Custom":
+        f = f[f["fiscal_year"] == fy]
+    if data_ini:
+        f = f[pd.to_datetime(f["Mês"]) >= pd.to_datetime(data_ini)]
+    if data_fim:
+        f = f[pd.to_datetime(f["Mês"]) <= pd.to_datetime(data_fim)]
+    return f
+
+def energia_metric_series(df, metric, usar_irec=False):
+    if df.empty:
+        return pd.Series(dtype=float)
+    if metric == "Consumo de energia elétrica":
+        return df["consumo_eletrico_kwh"]
+    if metric == "Consumo de gás natural":
+        return df["consumo_gas_kwh"]
+    if metric == "Consumo total de energia":
+        return df["consumo_total_kwh"]
+    if metric == "Emissões de CO₂ considerando I-REC":
+        return df["emissao_total_com_irec_tco2e"]
+    if metric == "Emissões de CO₂":
+        return df["emissao_total_com_irec_tco2e"] if usar_irec else df["emissao_total_tco2e"]
+    if metric == "Custo":
+        return df["custo_total_brl"]
+    if metric == "Eficiência energética":
+        return df["eficiencia_energetica"]
+    return df["consumo_total_kwh"]
+
+def energia_agregar_periodo(df, sites, metric, start=None, end=None, usar_irec=False):
+    if df.empty:
+        return 0
+    f = df[df["Site"].isin(sites)].copy()
+    if start:
+        f = f[pd.to_datetime(f["Mês"]) >= pd.to_datetime(start)]
+    if end:
+        f = f[pd.to_datetime(f["Mês"]) <= pd.to_datetime(end)]
+    if f.empty:
+        return 0
+    if metric == "Eficiência energética":
+        energia = f["consumo_total_kwh"].sum()
+        horas = f["actual_hours"].sum()
+        return energia / horas if horas else None
+    return energia_metric_series(f, metric, usar_irec=usar_irec).sum()
+
+def energia_executive_table(db, metric, r12_mes, usar_irec=False):
+    df = energia_consolidado(db)
+    if df.empty:
+        return pd.DataFrame()
+    r12_mes = energia_first_day(r12_mes) or df["Mês"].max()
+    r12_ini = energia_r12_start(r12_mes)
+    fy19 = energia_intervalo_fy(2019)
+    fy24 = energia_intervalo_fy(2024)
+    fy25 = energia_intervalo_fy(2025)
+    rows = []
+    for label, sites, is_group in ENERGIA_LINHAS_EXECUTIVAS:
+        v19 = energia_agregar_periodo(df, sites, metric, fy19[0], fy19[1], usar_irec)
+        v24 = energia_agregar_periodo(df, sites, metric, fy24[0], fy24[1], usar_irec)
+        v25 = energia_agregar_periodo(df, sites, metric, fy25[0], fy25[1], usar_irec)
+        vr12 = energia_agregar_periodo(df, sites, metric, r12_ini, r12_mes, usar_irec)
+        eff_r12 = energia_agregar_periodo(df, sites, "Eficiência energética", r12_ini, r12_mes, usar_irec)
+        eff_25 = energia_agregar_periodo(df, sites, "Eficiência energética", fy25[0], fy25[1], usar_irec)
+        rows.append({
+            "Divisão": label,
+            "FY19": v19,
+            "FY24": v24,
+            "FY25": v25,
+            f"R12 YTD {r12_mes.strftime('%b/%y')}": vr12,
+            "R12 vs FY25": energia_pct_change(vr12, v25),
+            "R12 vs FY19": energia_pct_change(vr12, v19),
+            f"Taxa de eficiência energética R12 {r12_mes.strftime('%b/%y')} vs FY25": energia_pct_change(eff_r12, eff_25),
+            "_grupo": is_group,
+        })
+    return pd.DataFrame(rows)
+
+def energia_table_html(df, metric):
+    if df.empty:
+        return "<div class='empty'>Sem dados para gerar a tabela executiva.</div>"
+    title = "Considerando os Certificados de Energia Renovável (I-REC)"
+    value_cols = [c for c in df.columns if c not in ["Divisão", "_grupo"]]
+    pct_cols = [c for c in value_cols if "vs" in c]
+    num_kind = "money" if metric == "Custo" else "numero"
+    html = """
+    <style>
+    .tbl-energy{border-collapse:collapse;width:100%;font-family:Arial, sans-serif;border:2px solid #111827;}
+    .tbl-energy th,.tbl-energy td{border:1px solid #111827;padding:8px;text-align:center;font-weight:800;}
+    .tbl-energy .title{background:#1f3b68;color:#fff;font-size:20px;text-align:center;}
+    .tbl-energy .head{background:#bfbfbf;color:#000;}
+    .tbl-energy .grp td{background:#ffc000!important;}
+    .tbl-energy .base td{background:#fff2cc;}
+    .tbl-energy .good{background:#00b050!important;color:#000;}
+    .tbl-energy .mid{background:#ffd966!important;color:#000;}
+    .tbl-energy .bad{background:#ff0000!important;color:#000;}
+    </style>
+    """
+    html += f"<table class='tbl-energy'><tr><th class='title' colspan='{len(value_cols)+1}'>{title}</th></tr>"
+    html += "<tr><th class='head'>Divisão</th>" + "".join(f"<th class='head'>{html_escape(c)}</th>" for c in value_cols) + "</tr>"
+    for _, r in df.iterrows():
+        tr_class = "grp" if bool(r.get("_grupo")) else "base"
+        html += f"<tr class='{tr_class}'><td>{html_escape(r['Divisão'])}</td>"
+        for c in value_cols:
+            val = r[c]
+            cls = ""
+            if c in pct_cols:
+                if val is None or pd.isna(val):
+                    txt = "—"
+                else:
+                    txt = energia_fmt_val(val, "percent")
+                    meta = 0.05
+                    if val <= -meta:
+                        cls = "good"
+                    elif val < 0:
+                        cls = "mid"
+                    else:
+                        cls = "bad"
+            else:
+                txt = energia_fmt_val(val, num_kind)
+            html += f"<td class='{cls}'>{txt}</td>"
+        html += "</tr>"
+    html += "</table>"
+    return html
+
+def energia_df_kpis(df, r12_mes, usar_irec=False):
+    if df.empty:
+        return pd.DataFrame()
+    r12_mes = energia_first_day(r12_mes) or df["Mês"].max()
+    r12_ini = energia_r12_start(r12_mes)
+    f = df[(pd.to_datetime(df["Mês"]) >= pd.to_datetime(r12_ini)) & (pd.to_datetime(df["Mês"]) <= pd.to_datetime(r12_mes))]
+    if f.empty:
+        return pd.DataFrame()
+    consumo_eletrico = f["consumo_eletrico_kwh"].sum()
+    consumo_gas = f["consumo_gas_kwh"].sum()
+    consumo_total = f["consumo_total_kwh"].sum()
+    emissao1 = f["emissao_escopo1_tco2e"].sum()
+    emissao2 = f["emissao_escopo2_tco2e"].sum()
+    emissao_total = emissao1 + emissao2
+    emissao_irec = emissao1
+    custo = f["custo_total_brl"].sum()
+    horas = f["actual_hours"].sum()
+    eficiencia = consumo_total / horas if horas else None
+    custo_medio = custo / consumo_total if consumo_total else None
+    rows = [
+        ("Consumo elétrico R12 kWh", consumo_eletrico),
+        ("Consumo de gás R12 kWh", consumo_gas),
+        ("Consumo total R12 kWh", consumo_total),
+        ("Emissões Escopo 1 R12 tCO₂e", emissao1),
+        ("Emissões Escopo 2 R12 tCO₂e", emissao2),
+        ("Emissões CO₂ R12 tCO₂e", emissao_irec if usar_irec else emissao_total),
+        ("Emissões CO₂ R12 com I-REC tCO₂e", emissao_irec),
+        ("Custo total R12 BRL", custo),
+        ("Custo médio BRL/kWh", custo_medio),
+        ("Actual Hours R12", horas),
+        ("Eficiência energética R12", eficiencia),
+    ]
+    return pd.DataFrame(rows, columns=["Indicador", "Valor"])
+
+def energia_dash_filters(df, prefix="energia"):
+    if df.empty:
+        return df, None, False
+    section("Filtros")
+    min_date = min(df["Mês"])
+    max_date = max(df["Mês"])
+    fy_opts = ["Todos", "FY19", "FY24", "FY25", "FY26", "Custom"]
+    c1,c2,c3,c4 = st.columns(4)
+    fy = c1.selectbox("Fiscal Year", fy_opts, index=fy_opts.index("FY26") if "FY26" in set(df["fiscal_year"]) else 0, key=f"{prefix}_fy")
+    data_ini = c2.date_input("Período inicial", min_date, key=f"{prefix}_ini")
+    data_fim = c3.date_input("Período final", max_date, key=f"{prefix}_fim")
+    r12_opts = sorted(df["Mês"].unique())
+    default_r12 = as_date(energia_param(SessionLocal(), "mes_referencia_r12", max_date)) if False else max_date
+    r12_idx = r12_opts.index(default_r12) if default_r12 in r12_opts else len(r12_opts)-1
+    r12_mes = c4.selectbox("Mês de referência R12", r12_opts, index=r12_idx, format_func=lambda d: d.strftime("%b/%Y"), key=f"{prefix}_r12")
+    c5,c6,c7,c8 = st.columns(4)
+    sites = c5.multiselect("Site", ENERGIA_SITE_ORDER, default=[], key=f"{prefix}_sites")
+    grupos = c6.multiselect("Grupo", ENERGIA_GROUP_ORDER, default=[], key=f"{prefix}_grupos")
+    visao = c7.selectbox("Visão", ["Site", "Grupo", "LAG"], key=f"{prefix}_visao")
+    usar_irec = c8.toggle("Considerar I-REC", value=True, key=f"{prefix}_irec")
+    f = df.copy()
+    if fy and fy not in ["Todos", "Custom"]:
+        f = f[f["fiscal_year"] == fy]
+    if data_ini:
+        f = f[pd.to_datetime(f["Mês"]) >= pd.to_datetime(data_ini)]
+    if data_fim:
+        f = f[pd.to_datetime(f["Mês"]) <= pd.to_datetime(data_fim)]
+    if sites:
+        f = f[f["Site"].isin(sites)]
+    if grupos and "LAG" not in grupos:
+        f = f[f["Grupo"].isin(grupos)]
+    return f, r12_mes, usar_irec
+
+def energia_dashboard(db,u):
+    header("Controle de Energia e Emissões", "Consumo elétrico, gás natural, CO₂, custos, Actual Hours, R12, FY e I-REC")
+    df = energia_consolidado(db)
+    if df.empty:
+        empty_state("Nenhuma base de energia carregada. Acesse 'Atualizar Base' para importar o arquivo do Resource Advisor.")
+        return
+    if energia_param_float(db, "fator_emissao_eletricidade_kgco2_kwh", 0) == 0 or energia_param_float(db, "fator_emissao_gas_kgco2_kwh", 0) == 0:
+        alert_card("Os fatores de emissão estão zerados ou incompletos. Configure-os na página Parâmetros para calcular CO₂.")
+    f, r12_mes, usar_irec = energia_dash_filters(df, "energia_dash")
+    if f.empty:
+        empty_state("Sem dados para os filtros selecionados.")
+        return
+    kpis = energia_df_kpis(f, r12_mes, usar_irec)
+    vals = {r["Indicador"]: r["Valor"] for _, r in kpis.iterrows()}
+    cards = [
+        ("Consumo elétrico R12", energia_fmt_val(vals.get("Consumo elétrico R12 kWh"), "numero"), "kWh"),
+        ("Consumo de gás R12", energia_fmt_val(vals.get("Consumo de gás R12 kWh"), "numero"), "kWh"),
+        ("Consumo total R12", energia_fmt_val(vals.get("Consumo total R12 kWh"), "numero"), "kWh"),
+        ("CO₂ R12", energia_fmt_val(vals.get("Emissões CO₂ R12 tCO₂e"), "numero"), "tCO₂e"),
+        ("CO₂ R12 com I-REC", energia_fmt_val(vals.get("Emissões CO₂ R12 com I-REC tCO₂e"), "numero"), "tCO₂e"),
+        ("Custo total R12", energia_fmt_val(vals.get("Custo total R12 BRL"), "money"), ""),
+        ("Actual Hours R12", energia_fmt_val(vals.get("Actual Hours R12"), "numero"), "h"),
+        ("Eficiência energética R12", energia_fmt_val(vals.get("Eficiência energética R12"), "numero"), "kWh/h"),
+    ]
+    for i in range(0, len(cards), 4):
+        cols = st.columns(4)
+        for c, (lab, val, help_) in zip(cols, cards[i:i+4]):
+            with c:
+                kpi_card(lab, val, help_)
+
+    section("Gráficos executivos")
+    c1, c2 = st.columns(2)
+    mensal_site = f.groupby(["Mês", "Site"], as_index=False).agg({
+        "consumo_eletrico_kwh": "sum", "consumo_gas_kwh": "sum", "emissao_total_tco2e": "sum", "emissao_total_com_irec_tco2e": "sum", "custo_total_brl": "sum", "consumo_total_kwh": "sum", "actual_hours": "sum"
+    })
+    mensal_site["eficiencia_energetica"] = mensal_site.apply(lambda r: r["consumo_total_kwh"]/r["actual_hours"] if r["actual_hours"] else None, axis=1)
+    with c1:
+        st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_eletrico_kwh", color="Site", markers=True, title="Consumo elétrico mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+    with c2:
+        st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_gas_kwh", color="Site", markers=True, title="Consumo de gás natural mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+    c3, c4 = st.columns(2)
+    with c3:
+        emis = mensal_site.groupby("Mês", as_index=False)[["emissao_total_tco2e", "emissao_total_com_irec_tco2e"]].sum()
+        emis_long = emis.melt(id_vars="Mês", value_vars=["emissao_total_tco2e", "emissao_total_com_irec_tco2e"], var_name="Cenário", value_name="tCO₂e")
+        emis_long["Cenário"] = emis_long["Cenário"].map({"emissao_total_tco2e": "Sem I-REC", "emissao_total_com_irec_tco2e": "Com I-REC"})
+        st.plotly_chart(px.line(emis_long, x="Mês", y="tCO₂e", color="Cenário", markers=True, title="Emissões mensais de CO₂ — com e sem I-REC").update_layout(template="plotly_white"), use_container_width=True)
+    with c4:
+        ref_ini = energia_r12_start(r12_mes)
+        r12 = f[(pd.to_datetime(f["Mês"]) >= pd.to_datetime(ref_ini)) & (pd.to_datetime(f["Mês"]) <= pd.to_datetime(r12_mes))]
+        r12_site = r12.groupby("Site", as_index=False).agg({"consumo_total_kwh":"sum", "emissao_total_tco2e":"sum", "custo_total_brl":"sum", "actual_hours":"sum"})
+        r12_site["eficiencia_energetica"] = r12_site.apply(lambda r: r["consumo_total_kwh"]/r["actual_hours"] if r["actual_hours"] else None, axis=1)
+        st.plotly_chart(px.bar(r12_site.sort_values("consumo_total_kwh", ascending=False), x="Site", y="consumo_total_kwh", text="consumo_total_kwh", title="Consumo total R12 por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+    c5, c6 = st.columns(2)
+    with c5:
+        st.plotly_chart(px.bar(r12_site.sort_values("custo_total_brl", ascending=False), x="Site", y="custo_total_brl", text="custo_total_brl", title="Custo total R12 por site").update_layout(template="plotly_white", yaxis_title="BRL"), use_container_width=True)
+    with c6:
+        st.plotly_chart(px.bar(r12_site.sort_values("eficiencia_energetica", ascending=True), x="Site", y="eficiencia_energetica", text="eficiencia_energetica", title="Eficiência energética R12 por site — menor é melhor").update_layout(template="plotly_white", yaxis_title="kWh/Actual Hour"), use_container_width=True)
+
+    section("Exportação")
+    tabela_exec = energia_executive_table(db, "Emissões de CO₂ considerando I-REC" if usar_irec else "Emissões de CO₂", r12_mes, usar_irec)
+    download_excel_button("Exportar relatório Excel", "relatorio_energia_co2.xlsx", {
+        "Consolidado_Filtrado": f,
+        "KPIs": kpis,
+        "Tabela_Executiva": tabela_exec.drop(columns=["_grupo"], errors="ignore"),
+        "Base_Energia": energia_df_registros(db),
+        "Base_Actual_Hours": energia_df_actual_hours(db),
+        "Premissas": pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in db.query(EnergiaParametro).all()]),
+    })
+
+def energia_atualizar_base(db,u):
+    header("Atualizar Base de Energia e Gás", "Importe o Excel do Resource Advisor e sobrescreva a base atual do módulo")
+    up = st.file_uploader("Arquivo Excel do Resource Advisor — GAS_ENERGIA_CONTROLE_MENSAL", type=["xlsx","xls"], key="energia_upload_base")
+    if not up:
+        empty_state("Envie o arquivo Excel de energia elétrica e gás natural para iniciar a atualização.")
+        return
+    try:
+        parsed = energia_parse_base_resource(up, db, up.name)
+    except Exception as e:
+        st.error(str(e))
+        return
+    if parsed.empty:
+        st.warning("Nenhum registro produtivo reconhecido no arquivo. Verifique cabeçalho, sites e serviços.")
+        return
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Linhas reconhecidas", len(parsed))
+    c2.metric("Meses", parsed["mes_ref"].nunique())
+    c3.metric("Sites", parsed["site_codigo"].nunique())
+    c4.metric("Serviços", parsed["fonte"].nunique())
+    st.dataframe(parsed.head(100), use_container_width=True, hide_index=True)
+    st.info("Ao confirmar, a base EnergiaRegistro será apagada e substituída pela base acima.")
+    if st.button("Confirmar atualização da base", use_container_width=True):
+        db.query(EnergiaRegistro).delete()
+        for _, r in parsed.iterrows():
+            db.add(EnergiaRegistro(**r.to_dict()))
+        db.add(EnergiaUploadHistorico(tipo_base="Energia/Gás", nome_arquivo=up.name, usuario=u.nome if u else "", observacoes=f"{len(parsed)} linhas importadas"))
+        db.commit()
+        st.success("Base de energia e gás atualizada com sucesso.")
+        st.rerun()
+
+def energia_actual_hours_page(db,u):
+    header("Actual Hours", "Importação, edição manual e manutenção da base de horas trabalhadas")
+    up = st.file_uploader("Importar Brazil Absorption Summary FY26 (.xls ou .xlsx)", type=["xlsx","xls"], key="energia_upload_absorption")
+    if up:
+        try:
+            parsed = energia_parse_absorption(up, up.name)
+            if parsed.empty:
+                st.warning("Nenhum Actual Hours foi reconhecido nas abas mapeadas.")
+            else:
+                st.dataframe(parsed.head(120), use_container_width=True, hide_index=True)
+                if st.button("Confirmar importação de Actual Hours", use_container_width=True):
+                    # Substitui os meses/sites importados para evitar duplicidade.
+                    for _, r in parsed.iterrows():
+                        db.query(EnergiaActualHours).filter(
+                            EnergiaActualHours.mes_ref == r["mes_ref"],
+                            EnergiaActualHours.site_codigo == r["site_codigo"]
+                        ).delete()
+                        db.add(EnergiaActualHours(**r.to_dict()))
+                    db.add(EnergiaUploadHistorico(tipo_base="Actual Hours", nome_arquivo=up.name, usuario=u.nome if u else "", observacoes=f"{len(parsed)} linhas importadas"))
+                    db.commit()
+                    st.success("Actual Hours importado/atualizado.")
+                    st.rerun()
+        except Exception as e:
+            st.error(str(e))
+
+    section("Adicionar novo mês manualmente")
+    with st.form("energia_add_hours"):
+        c1,c2,c3,c4 = st.columns(4)
+        mes = c1.date_input("Mês", value=date.today().replace(day=1))
+        site = c2.selectbox("Site", ENERGIA_SITE_ORDER)
+        actual = c3.number_input("Actual Hours", min_value=0.0, step=100.0)
+        capacity = c4.number_input("Production capacity (hours)", min_value=0.0, step=100.0)
+        if st.form_submit_button("Salvar novo valor", use_container_width=True):
+            mes = energia_first_day(mes)
+            db.query(EnergiaActualHours).filter(EnergiaActualHours.mes_ref==mes, EnergiaActualHours.site_codigo==site).delete()
+            db.add(EnergiaActualHours(mes_ref=mes, site_codigo=site, site_nome=energia_site_nome(site), grupo=energia_site_grupo(site), actual_hours=actual, production_capacity_hours=capacity, origem="Manual", atualizado_em=datetime.utcnow()))
+            db.commit()
+            st.success("Actual Hours salvo.")
+            st.rerun()
+
+    section("Base atual")
+    df = energia_df_actual_hours(db)
+    if df.empty:
+        empty_state("Nenhum Actual Hours cadastrado.")
+        return
+    f1,f2,f3 = st.columns(3)
+    sites = f1.multiselect("Filtrar site", ENERGIA_SITE_ORDER, key="ah_site")
+    grupos = f2.multiselect("Filtrar grupo", ENERGIA_GROUP_ORDER, key="ah_grupo")
+    fys = sorted(df["FY"].dropna().unique().tolist())
+    fy = f3.multiselect("Filtrar FY", fys, key="ah_fy")
+    f = df.copy()
+    if sites: f = f[f["Site"].isin(sites)]
+    if grupos and "LAG" not in grupos: f = f[f["Grupo"].isin(grupos)]
+    if fy: f = f[f["FY"].isin(fy)]
+    st.dataframe(f, use_container_width=True, hide_index=True)
+    download_excel_button("Exportar Actual Hours", "actual_hours.xlsx", {"Actual_Hours": f})
+
+def energia_tabela_executiva_page(db,u):
+    header("Tabela Executiva", "Tabela no padrão executivo para FY, R12, I-REC e eficiência energética")
+    df = energia_consolidado(db)
+    if df.empty:
+        empty_state("Sem base consolidada. Importe energia/gás e Actual Hours.")
+        return
+    metricas = ["Consumo de energia elétrica", "Consumo de gás natural", "Consumo total de energia", "Emissões de CO₂", "Emissões de CO₂ considerando I-REC", "Custo", "Eficiência energética"]
+    c1,c2,c3 = st.columns(3)
+    metrica = c1.selectbox("Métrica", metricas, index=metricas.index("Emissões de CO₂ considerando I-REC"))
+    usar_irec = c2.toggle("Considerar I-REC", value=True)
+    r12_opts = sorted(df["Mês"].unique())
+    r12_mes = c3.selectbox("Mês R12/YTD", r12_opts, index=len(r12_opts)-1, format_func=lambda d: d.strftime("%b/%Y"))
+    tabela = energia_executive_table(db, metrica, r12_mes, usar_irec)
+    subt = "Emissões de energia elétrica zeradas; emissões de gás natural mantidas." if usar_irec else "Sem abatimento de emissões por I-REC."
+    st.caption(subt)
+    st.markdown(energia_table_html(tabela, metrica), unsafe_allow_html=True)
+    download_excel_button("Exportar tabela executiva Excel", "tabela_executiva_energia.xlsx", {"Tabela_Executiva": tabela.drop(columns=["_grupo"], errors="ignore")})
+
+def energia_base_consolidada_page(db,u):
+    header("Base Consolidada", "Tabela mensal consolidada de energia, gás, CO₂, custos, Actual Hours e R12")
+    df = energia_consolidado(db)
+    if df.empty:
+        empty_state("Sem dados consolidados.")
+        return
+    f, r12_mes, usar_irec = energia_dash_filters(df, "energia_base")
+    st.dataframe(f, use_container_width=True, hide_index=True)
+    download_excel_button("Exportar base consolidada", "base_consolidada_energia.xlsx", {"Consolidado": f})
+
+def energia_parametros_page(db,u):
+    header("Parâmetros", "Fatores de emissão, metas, conversões e referência fiscal")
+    seed_energia_parametros(db)
+    ps = db.query(EnergiaParametro).order_by(EnergiaParametro.chave).all()
+    with st.form("energia_parametros_form"):
+        values = {}
+        for p in ps:
+            values[p.chave] = st.text_input(p.chave, value=p.valor or "", help=p.descricao or "")
+        if st.form_submit_button("Salvar parâmetros", use_container_width=True):
+            for chave, valor in values.items():
+                energia_set_param(db, chave, valor)
+            st.success("Parâmetros atualizados.")
+            st.rerun()
+    df = pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in ps])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+def energia_relatorios_page(db,u):
+    header("Relatórios Energia", "Exportações completas do módulo de energia e emissões")
+    df_cons = energia_consolidado(db)
+    df_reg = energia_df_registros(db)
+    df_hrs = energia_df_actual_hours(db)
+    if df_cons.empty:
+        empty_state("Sem dados para exportar.")
+        return
+    r12_mes = max(df_cons["Mês"])
+    tabela = energia_executive_table(db, "Emissões de CO₂ considerando I-REC", r12_mes, True)
+    kpis = energia_df_kpis(df_cons, r12_mes, True)
+    prem = pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in db.query(EnergiaParametro).order_by(EnergiaParametro.chave).all()])
+    dados_graficos = df_cons.groupby(["Mês","Site","Grupo"], as_index=False).agg({
+        "consumo_eletrico_kwh":"sum", "consumo_gas_kwh":"sum", "consumo_total_kwh":"sum",
+        "emissao_total_tco2e":"sum", "emissao_total_com_irec_tco2e":"sum",
+        "custo_total_brl":"sum", "actual_hours":"sum"
+    })
+    download_excel_button("Baixar relatório completo Excel", "relatorio_completo_energia.xlsx", {
+        "Base_Energia": df_reg,
+        "Base_Actual_Hours": df_hrs,
+        "Consolidado": df_cons,
+        "KPIs": kpis,
+        "Tabela_Executiva": tabela.drop(columns=["_grupo"], errors="ignore"),
+        "Premissas": prem,
+        "Dados_Graficos": dados_graficos,
+    })
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        download_excel_button("Base energia", "base_energia.xlsx", {"Base_Energia": df_reg})
+    with c2:
+        download_excel_button("Actual Hours", "actual_hours.xlsx", {"Base_Actual_Hours": df_hrs})
+    with c3:
+        download_excel_button("Consolidado", "consolidado_energia.xlsx", {"Consolidado": df_cons})
+
 # ============================================================
 # 15. Roteamento principal
 # ============================================================
@@ -1472,6 +2401,16 @@ def render_sidebar(db,u):
             st.session_state.nav_ehs=current
         selected=st.sidebar.radio("Auditoria Cruzada de Diretrizes de EHS",pages,key="nav_ehs")
         st.session_state.page_ehs=selected
+    elif mod=="energia":
+        pages=["Dashboard Energia e CO₂","Atualizar Base","Actual Hours","Tabela Executiva","Base Consolidada","Relatórios Energia","Parâmetros"]
+        current=st.session_state.get("page_energia",pages[0])
+        if current not in pages:
+            current=pages[0]
+            st.session_state.page_energia=current
+        if st.session_state.get("nav_energia") not in pages:
+            st.session_state.nav_energia=current
+        selected=st.sidebar.radio("Controle de Energia e Emissões",pages,key="nav_energia")
+        st.session_state.page_energia=selected
 def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod=="home": home_page(db,u)
@@ -1479,6 +2418,8 @@ def route(db,u):
         {"Dashboard NR-12":nr12_dashboard,"Central de Pendências":nr12_central_pendencias,"Inventário de Máquinas":nr12_inventario,"Documentos NR-12":nr12_documentos,"Checklists e Inspeções":nr12_checklists,"PAC NR-12":nr12_pac,"Relatórios NR-12":nr12_relatorios}[st.session_state.get("page_nr12","Dashboard NR-12")](db,u)
     elif mod=="ehs":
         {"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist Diretrizes de EHS":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios}[st.session_state.get("page_ehs","Dashboard Auditoria Cruzada")](db,u)
+    elif mod=="energia":
+        {"Dashboard Energia e CO₂":energia_dashboard,"Atualizar Base":energia_atualizar_base,"Actual Hours":energia_actual_hours_page,"Tabela Executiva":energia_tabela_executiva_page,"Base Consolidada":energia_base_consolidada_page,"Relatórios Energia":energia_relatorios_page,"Parâmetros":energia_parametros_page}[st.session_state.get("page_energia","Dashboard Energia e CO₂")](db,u)
 
 # ============================================================
 # 16. main()
