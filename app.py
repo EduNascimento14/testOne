@@ -615,7 +615,12 @@ def energia_bar_sem_decimal(fig):
     return fig
 
 def energia_tendencia_metas(df_scope, usar_irec=False, db=None):
-    """Gera séries mensais R12 de emissões e eficiência comparadas contra a meta do FY anterior."""
+    """Gera séries mensais R12 de emissões e eficiência comparadas contra a meta.
+
+    Para evitar distorções no início da série, a eficiência só é exibida quando há
+    janela R12 completa com consumo e Actual Hours. Também remove outliers fortes
+    de eficiência por IQR, preservando a tendência operacional.
+    """
     if df_scope is None or df_scope.empty:
         return pd.DataFrame()
     work = df_scope.copy()
@@ -635,14 +640,32 @@ def energia_tendencia_metas(df_scope, usar_irec=False, db=None):
     base_eff = base_energia / base_horas if base_horas else None
     meta_emissoes = base_emissoes * (1 - meta_co2) if base_emissoes is not None else None
     meta_eficiencia = base_eff * (1 - meta_eff) if base_eff is not None else None
+
+    # Só considera meses a partir da primeira janela R12 completa de energia e horas.
+    meses_com_energia = sorted(work.loc[work["consumo_total_kwh"].fillna(0) > 0, "Mês"].dropna().unique())
+    meses_com_horas = sorted(work.loc[work["actual_hours"].fillna(0) > 0, "Mês"].dropna().unique())
+    primeiro_mes_valido = None
+    candidatos = []
+    if meses_com_energia:
+        candidatos.append((pd.Timestamp(min(meses_com_energia)) + pd.DateOffset(months=11)).date())
+    if meses_com_horas:
+        candidatos.append((pd.Timestamp(min(meses_com_horas)) + pd.DateOffset(months=11)).date())
+    if candidatos:
+        primeiro_mes_valido = max(candidatos)
+
     rows = []
     for mes in meses:
+        if primeiro_mes_valido and mes < primeiro_mes_valido:
+            continue
         ini = energia_r12_start(mes)
         f12 = work[(pd.to_datetime(work["Mês"]) >= pd.to_datetime(ini)) & (pd.to_datetime(work["Mês"]) <= pd.to_datetime(mes))]
+        # Exige janela R12 completa. Evita valores iniciais inflados/instáveis por poucas horas ou poucos meses.
+        if f12["Mês"].nunique() < 12:
+            continue
         emissao = f12["emissao_total_com_irec_tco2e"].sum() if usar_irec else f12["emissao_total_tco2e"].sum()
         energia = f12["consumo_total_kwh"].sum()
         horas = f12["actual_hours"].sum()
-        eficiencia = energia / horas if horas else None
+        eficiencia = energia / horas if horas and horas > 0 else None
         rows.append({
             "Mês": mes,
             "Emissões R12": emissao,
@@ -651,7 +674,20 @@ def energia_tendencia_metas(df_scope, usar_irec=False, db=None):
             "Meta eficiência energética": meta_eficiencia,
             "FY base": f"FY{fy_base:02d}",
         })
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    if out.empty or out["Eficiência energética R12"].dropna().empty:
+        return out
+
+    vals = out["Eficiência energética R12"].dropna()
+    if len(vals) >= 6:
+        q1 = vals.quantile(0.25)
+        q3 = vals.quantile(0.75)
+        iqr = q3 - q1
+        if iqr > 0:
+            lim_inf = max(0, q1 - 1.5 * iqr)
+            lim_sup = q3 + 1.5 * iqr
+            out.loc[(out["Eficiência energética R12"] < lim_inf) | (out["Eficiência energética R12"] > lim_sup), "Eficiência energética R12"] = None
+    return out
 
 def energia_pdf_dashboard(db, r12_mes=None, usar_irec=True):
     """Gera um PDF executivo com os principais elementos do dashboard de energia."""
@@ -1723,8 +1759,10 @@ ENERGIA_LINHAS_EXECUTIVAS = [
     ("Brasil", ["CAC", "JAC", "JUN", "PER", "SJC", "DIA"], True),
 ]
 ENERGIA_DEFAULT_PARAMS = {
-    "fator_emissao_eletricidade_kgco2_kwh": ("0", "Fator de emissão da energia elétrica em kgCO₂e/kWh."),
-    "fator_emissao_gas_kgco2_kwh": ("0", "Fator de emissão do gás natural convertido para kWh em kgCO₂e/kWh."),
+    # Eletricidade Brasil/SIN: MCTI, fator médio mensal de abril/2025 = 0,0289 tCO₂/MWh = 0,0289 kgCO₂/kWh.
+    "fator_emissao_eletricidade_kgco2_kwh": ("0.0289", "Fator de emissão da energia elétrica em kgCO₂e/kWh. Default inicial: MCTI/SIN abr-2025, 0,0289 tCO₂/MWh."),
+    # Gás natural: US EPA GHG Emission Factors Hub, 53,06 kgCO₂/MMBtu; convertido por 293,071 kWh/MMBtu = 0,1810 kgCO₂/kWh.
+    "fator_emissao_gas_kgco2_kwh": ("0.1810", "Fator de emissão do gás natural em kgCO₂e/kWh. Default inicial: US EPA 53,06 kgCO₂/MMBtu ÷ 293,071 kWh/MMBtu."),
     "meta_reducao_co2_percentual": ("5", "Meta percentual de redução para emissões de CO₂."),
     "meta_reducao_eficiencia_percentual": ("5", "Meta percentual de redução para taxa de eficiência energética."),
     "conversao_mmbtu_kwh": ("293.071", "Conversão de MMBtu para kWh."),
@@ -3316,9 +3354,16 @@ def energia_set_param(db, chave, valor, descricao=None):
     db.commit()
 
 def seed_energia_parametros(db):
+    """Garante parâmetros iniciais; atualiza fatores antigos zerados para defaults confiáveis."""
     for chave, (valor, desc) in ENERGIA_DEFAULT_PARAMS.items():
-        if not db.query(EnergiaParametro).filter_by(chave=chave).first():
+        p = db.query(EnergiaParametro).filter_by(chave=chave).first()
+        if not p:
             db.add(EnergiaParametro(chave=chave, valor=valor, descricao=desc))
+        else:
+            # Em versões anteriores os fatores vinham zerados, impedindo a tabela executiva de CO₂.
+            if chave in ["fator_emissao_eletricidade_kgco2_kwh", "fator_emissao_gas_kgco2_kwh"] and energia_safe_float(p.valor, 0) == 0:
+                p.valor = valor
+                p.descricao = desc
     db.commit()
 
 def seed_energia_actual_hours_inicial(db):
@@ -3492,24 +3537,33 @@ def energia_parse_absorption(uploaded_file, filename="absorption.xlsx"):
 
 def energia_df_registros(db):
     regs = db.query(EnergiaRegistro).order_by(EnergiaRegistro.mes_ref, EnergiaRegistro.site_codigo, EnergiaRegistro.fonte).all()
-    return pd.DataFrame([{
-        "ID": r.id,
-        "Mês": r.mes_ref,
-        "FY": energia_fy_label(r.mes_ref),
-        "Site": r.site_codigo,
-        "Site nome": r.site_nome,
-        "Grupo": r.grupo,
-        "Divisão": r.divisao,
-        "Fonte": r.fonte,
-        "Consumo original": r.consumo_original,
-        "Unidade original": r.unidade_original,
-        "Consumo kWh": r.consumo_kwh,
-        "Custo BRL": r.custo_brl,
-        "Unit cost": r.unit_cost,
-        "Emissão tCO₂e": r.emissao_co2_ton,
-        "Escopo": r.emissao_escopo,
-        "Origem": r.origem_arquivo,
-    } for r in regs])
+    f_elec = energia_param_float(db, "fator_emissao_eletricidade_kgco2_kwh", 0.0289)
+    f_gas = energia_param_float(db, "fator_emissao_gas_kgco2_kwh", 0.1810)
+    rows = []
+    for r in regs:
+        fator = f_elec if r.fonte == "Energia elétrica" else f_gas if r.fonte == "Gás natural" else 0
+        emissao_recalculada = (energia_safe_float(r.consumo_kwh, 0) * fator / 1000) if fator else energia_safe_float(r.emissao_co2_ton, 0)
+        rows.append({
+            "ID": r.id,
+            "Mês": r.mes_ref,
+            "FY": energia_fy_label(r.mes_ref),
+            "Site": r.site_codigo,
+            "Site nome": r.site_nome,
+            "Grupo": r.grupo,
+            "Divisão": r.divisao,
+            "Fonte": r.fonte,
+            "Consumo original": r.consumo_original,
+            "Unidade original": r.unidade_original,
+            "Consumo kWh": r.consumo_kwh,
+            "Custo BRL": r.custo_brl,
+            "Unit cost": r.unit_cost,
+            # Recalcula dinamicamente para refletir fatores confiáveis carregados em Parâmetros,
+            # inclusive bases importadas quando os fatores estavam zerados.
+            "Emissão tCO₂e": emissao_recalculada,
+            "Escopo": r.emissao_escopo,
+            "Origem": r.origem_arquivo,
+        })
+    return pd.DataFrame(rows)
 
 def energia_df_actual_hours(db):
     hrs = db.query(EnergiaActualHours).order_by(EnergiaActualHours.mes_ref, EnergiaActualHours.site_codigo).all()
