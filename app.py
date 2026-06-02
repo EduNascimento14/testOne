@@ -37,6 +37,16 @@ Base = declarative_base()
 # 3. Constantes
 # ============================================================
 SITES_PADRAO = ["SJC", "DIA", "CAC", "JAC", "JUN", "PER"]
+SITE_INFO_PADRAO = {
+    "CAC": {"nome": "MSG Br CAC - Cachoeirinha", "grupo": "MSG Br"},
+    "JAC": {"nome": "MSG Br JAC - Jacareí", "grupo": "MSG Br"},
+    "JUN": {"nome": "EMG Br JU - Jundiaí", "grupo": "EMG Br"},
+    "PER": {"nome": "EMG Br SP - Perus", "grupo": "EMG Br"},
+    "SJC": {"nome": "Filtration Br - São José dos Campos", "grupo": "Filtration Br"},
+    "DIA": {"nome": "FCG Br - Diadema", "grupo": "FCG Br"},
+}
+SITE_NOMES_PADRAO = {k: v["nome"] for k, v in SITE_INFO_PADRAO.items()}
+SITE_GRUPOS_PADRAO = {k: v["grupo"] for k, v in SITE_INFO_PADRAO.items()}
 PERFIS = ["Admin_LAG","EHS_Local","Auditor","Manutencao","Producao_Operacao","Engenharia","Responsavel_Acao","Visualizador"]
 USUARIOS_PADRAO = [
     ("Eduardo","Admin_LAG","Corporativo"), ("Capitu","Admin_LAG","Corporativo"),
@@ -350,13 +360,19 @@ def init_db():
     try:
         if not db.query(Site).filter_by(codigo="Corporativo").first(): db.add(Site(codigo="Corporativo",nome="Corporativo"))
         for s in SITES_PADRAO:
-            if not db.query(Site).filter_by(codigo=s).first(): db.add(Site(codigo=s,nome=s))
+            site_obj = db.query(Site).filter_by(codigo=s).first()
+            nome_padrao = SITE_NOMES_PADRAO.get(s, s)
+            if not site_obj:
+                db.add(Site(codigo=s, nome=nome_padrao))
+            else:
+                site_obj.nome = nome_padrao
         db.flush()
         for nome,perfil,sitecod in USUARIOS_PADRAO:
             if not db.query(Usuario).filter_by(nome=nome).first():
                 stt=db.query(Site).filter_by(codigo=sitecod).first(); db.add(Usuario(nome=nome,perfil=perfil,site_id=stt.id if stt else None))
         sync_checklists_base(db)
         seed_energia_parametros(db)
+        seed_energia_actual_hours_inicial(db)
         for maq in db.query(MaquinaNR12).all():
             maq.status_nr12 = normalizar_status_nr12(maq.status_nr12)
         db.commit()
@@ -401,7 +417,9 @@ def as_date(v):
     try: return pd.to_datetime(v).date()
     except Exception: return None
 def fmt_date(v): v=as_date(v); return v.strftime("%d/%m/%Y") if v else "—"
-def site_code(db,id): s=db.get(Site,id) if id else None; return s.codigo if s else "—"
+def site_code(db,id):
+    s=db.get(Site,id) if id else None
+    return s.nome if s and s.nome else (s.codigo if s else "—")
 def machine_options(db,ids): return {f"{m.codigo} — {m.nome}":m.id for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo)}
 def identificar_pac_vencido(prazo,status): return bool(as_date(prazo) and as_date(prazo)<date.today() and status not in ["Concluída","Cancelada"])
 def calcular_status_documento(doc):
@@ -528,6 +546,39 @@ def update_vencidos(db):
             if identificar_pac_vencido(p.prazo,p.status): p.status="Vencida"
     db.commit()
 
+def energia_home_kpis(db):
+    """Mostra indicadores sintéticos de energia na tela inicial sem exigir importação prévia."""
+    section("Indicadores de energia e emissões")
+    try:
+        df = energia_consolidado(db)
+        qtd_registros_energia = db.query(EnergiaRegistro).count()
+        qtd_actual_hours = db.query(EnergiaActualHours).count()
+        if df.empty:
+            empty_state("Nenhum dado de energia ou Actual Hours carregado.")
+            return
+        r12_mes = max(df["Mês"])
+        kpis = energia_df_kpis(df, r12_mes, usar_irec=True)
+        vals = {r["Indicador"]: r["Valor"] for _, r in kpis.iterrows()} if not kpis.empty else {}
+        cards = [
+            ("Consumo total R12", energia_fmt_val(vals.get("Consumo total R12 kWh"), "numero"), "kWh"),
+            ("CO₂ R12 com I-REC", energia_fmt_val(vals.get("Emissões CO₂ R12 com I-REC tCO₂e"), "numero"), "tCO₂e"),
+            ("Custo total R12", energia_fmt_val(vals.get("Custo total R12 BRL"), "money"), "BRL"),
+            ("Eficiência energética R12", energia_fmt_val(vals.get("Eficiência energética R12"), "numero"), "kWh/Actual Hour"),
+            ("Actual Hours R12", energia_fmt_val(vals.get("Actual Hours R12"), "numero"), "h"),
+            ("Base de energia", qtd_registros_energia, "registros importados"),
+            ("Base de Actual Hours", qtd_actual_hours, "registros carregados"),
+            ("Mês de referência", r12_mes.strftime("%b/%Y"), "último mês disponível"),
+        ]
+        for base in range(0, len(cards), 4):
+            cols = st.columns(4)
+            for c, (lab, val, help_) in zip(cols, cards[base:base+4]):
+                with c:
+                    kpi_card(lab, val, help_)
+        if qtd_registros_energia == 0 and qtd_actual_hours > 0:
+            alert_card("Actual Hours iniciais já foram carregados no banco. Importe a base de energia e gás para ativar consumo, CO₂, custo e eficiência energética.")
+    except Exception as e:
+        empty_state(f"Indicadores de energia indisponíveis no momento: {e}")
+
 # ============================================================
 # 11. Componentes de UI
 # ============================================================
@@ -577,7 +628,7 @@ def df_maquinas(db,ids):
     rows = []
     for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo):
         risco = m.risco_maquina or ("Desprezível" if m.possui_apreciacao_risco else "Apreciação de risco não realizada")
-        rows.append({"ID":m.id,"Código":m.codigo,"Site":site_code(db,m.site_id),"Área":m.area_setor,"Linha":m.linha_processo,"Máquina":m.nome,"Fabricante":m.fabricante,"Modelo":m.modelo,"Série":m.numero_serie,"Ano":m.ano,"Tipo":m.tipo_equipamento,"Responsável":m.responsavel_area,"Criticidade":m.criticidade,"Risco":risco,"Status NR-12":calcular_status_maquina_nr12(db,m),"Data prevista adequação":fmt_date(getattr(m,"data_prevista_adequacao",None)),"Próxima auditoria":fmt_date(m.proxima_auditoria),"Laudo":"Sim" if m.possui_laudo else "Não","ART":"Sim" if m.possui_art else "Não","Apreciação":"Sim" if m.possui_apreciacao_risco else "Não","Manual":"Sim" if m.possui_manual_atualizado else "Não","Treinamento":"Sim" if m.possui_treinamento else "Não","Observações":m.observacoes})
+        rows.append({"ID":m.id,"Código":m.codigo,"Site":site_code(db,m.site_id),"Área":m.area_setor,"Linha":m.linha_processo,"Máquina":m.nome,"Fabricante":m.fabricante,"Modelo":m.modelo,"Série":m.numero_serie,"Ano":m.ano,"Tipo":m.tipo_equipamento,"Responsável":m.responsavel_area,"Criticidade":m.criticidade,"Risco":risco,"Status de Conformidade":calcular_status_maquina_nr12(db,m),"Data prevista adequação":fmt_date(getattr(m,"data_prevista_adequacao",None)),"Próxima auditoria":fmt_date(m.proxima_auditoria),"Laudo":"Sim" if m.possui_laudo else "Não","ART":"Sim" if m.possui_art else "Não","Apreciação":"Sim" if m.possui_apreciacao_risco else "Não","Manual":"Sim" if m.possui_manual_atualizado else "Não","Treinamento":"Sim" if m.possui_treinamento else "Não","Observações":m.observacoes})
     return pd.DataFrame(rows)
 def df_docs(db,ids):
     return pd.DataFrame([{"ID":d.id,"Site":site_code(db,d.site_id),"Máquina":d.maquina.codigo if d.maquina else "—","Tipo":d.tipo,"Status":calcular_status_documento(d),"Emissão":fmt_date(d.data_emissao),"Validade":fmt_date(d.data_validade),"Arquivo":d.arquivo_nome,"Responsável":d.responsavel,"Descrição":d.descricao,"Observações":d.observacoes} for d in db.query(DocumentoNR12).filter(DocumentoNR12.site_id.in_(ids)).order_by(DocumentoNR12.id.desc())])
@@ -605,7 +656,7 @@ def dashboard_integrado(db,u):
     auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).all()
     conf=[calcular_conformidade_ehs(db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()) for a in auds]
     vals=[len(ms),sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Não conforme"),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count(),db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(),f"{round(sum(conf)/len(conf),1) if conf else 0}%",db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(),db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count()]
-    labs=["Total de máquinas NR-12","Máquinas não conformes","PACs NR-12 vencidos","PACs NR-12 abertos","Auditorias em andamento","Conformidade média EHS","PACs EHS vencidos","NC críticas EHS"]
+    labs=["Total de máquinas","Máquinas não conformes","PACs de máquinas vencidos","PACs de máquinas abertos","Auditorias em andamento","Conformidade média EHS","PACs EHS vencidos","NC críticas EHS"]
     section("Visão geral integrada")
     for chunk in [range(4),range(4,8)]:
         cols=st.columns(4)
@@ -613,7 +664,7 @@ def dashboard_integrado(db,u):
             with c: kpi_card(labs[i],vals[i])
     alerts=[]
     for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Vencida","Aberta","Em andamento"])).limit(5): 
-        if p.status=="Vencida" or p.classificacao=="Crítico": alerts.append({"Módulo":"NR-12","Tipo":p.classificacao,"Site":site_code(db,p.site_id),"Descrição":(p.descricao_desvio or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
+        if p.status=="Vencida" or p.classificacao=="Crítico": alerts.append({"Módulo":"Proteções de Máquinas","Tipo":p.classificacao,"Site":site_code(db,p.site_id),"Descrição":(p.descricao_desvio or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
     for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status.in_(["Vencida","Aberta","Em andamento"])).limit(5):
         if p.status=="Vencida" or p.tipo_achado=="Não conformidade crítica": alerts.append({"Módulo":"Auditoria EHS","Tipo":p.tipo_achado,"Site":site_code(db,p.site_id),"Descrição":(p.descricao or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
     section("Alertas principais")
@@ -621,17 +672,25 @@ def dashboard_integrado(db,u):
         st.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum alerta crítico ou vencido identificado.")
+    energia_home_kpis(db)
 
 def home_page(db,u):
-    header("Plataforma Integrada EHS","NR-12, Auditorias Cruzadas e Controle de Energia e Emissões em uma única aplicação")
-    dashboard_integrado(db,u); section("Módulos")
-    c1,c2,c3=st.columns(3)
+    header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas e Controle de Energia e Emissões em uma única aplicação")
+    dashboard_integrado(db,u)
+    section("Módulos")
+    c1,c2=st.columns(2)
     with c1:
-        module_card("Sustentação NR-12","Inventário, documentos, checklists, PAC, pendências e relatórios.","⚙️")
-        if st.button("Acessar Sustentação NR-12",use_container_width=True):
+        module_card("Sustentação de Proteções de Máquinas","Inventário, documentos, checklists, PAC, pendências e relatórios de proteções de máquinas.","⚙️")
+        if st.button("Acessar Sustentação de Proteções de Máquinas",use_container_width=True):
             st.session_state.modulo="nr12"
-            st.session_state.page_nr12="Dashboard NR-12"
-            st.session_state.nav_nr12="Dashboard NR-12"
+            st.session_state.page_nr12="Dashboard Proteções de Máquinas"
+            st.session_state.nav_nr12="Dashboard Proteções de Máquinas"
+            st.rerun()
+        module_card("Controle de Energia e Emissões","Consumo de energia, gás natural, CO₂, gastos, eficiência energética, R12, FY e análise I-REC.","⚡")
+        if st.button("Acessar Controle de Energia",use_container_width=True):
+            st.session_state.modulo="energia"
+            st.session_state.page_energia="Dashboard Energia e CO₂"
+            st.session_state.nav_energia="Dashboard Energia e CO₂"
             st.rerun()
     with c2:
         module_card("Auditoria Cruzada de Diretrizes de EHS","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.","🧭")
@@ -640,15 +699,8 @@ def home_page(db,u):
             st.session_state.page_ehs="Dashboard Auditoria Cruzada"
             st.session_state.nav_ehs="Dashboard Auditoria Cruzada"
             st.rerun()
-    with c3:
-        module_card("Controle de Energia e Emissões","Consumo de energia, gás natural, CO₂, gastos, eficiência energética, R12, FY e análise I-REC.","⚡")
-        if st.button("Acessar Controle de Energia",use_container_width=True):
-            st.session_state.modulo="energia"
-            st.session_state.page_energia="Dashboard Energia e CO₂"
-            st.session_state.nav_energia="Dashboard Energia e CO₂"
-            st.rerun()
 def nr12_dashboard(db,u):
-    header("Sustentação da Conformidade NR-12","Dashboard para máquinas submetidas à NR-12")
+    header("Sustentação de Proteções de Máquinas","Dashboard para acompanhamento de máquinas, proteções e dispositivos de segurança")
     ids=visible_site_ids(u,db)
     dfm_full=df_maquinas(db,ids)
     if dfm_full.empty:
@@ -659,12 +711,12 @@ def nr12_dashboard(db,u):
     unidades=f1.multiselect("Unidade", sorted(dfm_full["Site"].dropna().unique()))
     riscos=f2.multiselect("Risco da máquina", [r for r in RISCOS_MAQUINA if r in set(dfm_full["Risco"].dropna())])
     crits=f3.multiselect("Criticidade", sorted(dfm_full["Criticidade"].dropna().unique()))
-    status_f=f4.multiselect("Status NR-12", [s for s in STATUS_MAQUINA if s in set(dfm_full["Status NR-12"].dropna())])
+    status_f=f4.multiselect("Status de Conformidade", [s for s in STATUS_MAQUINA if s in set(dfm_full["Status de Conformidade"].dropna())])
     dfm=dfm_full.copy()
     if unidades: dfm=dfm[dfm["Site"].isin(unidades)]
     if riscos: dfm=dfm[dfm["Risco"].isin(riscos)]
     if crits: dfm=dfm[dfm["Criticidade"].isin(crits)]
-    if status_f: dfm=dfm[dfm["Status NR-12"].isin(status_f)]
+    if status_f: dfm=dfm[dfm["Status de Conformidade"].isin(status_f)]
     m_ids=dfm["ID"].astype(int).tolist() if not dfm.empty else []
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.id.in_(m_ids)).all() if m_ids else []
     sts=[calcular_status_maquina_nr12(db,m) for m in ms]
@@ -719,7 +771,7 @@ def nr12_dashboard(db,u):
     section("Gráficos")
     c1,c2=st.columns(2)
     with c1:
-        st.plotly_chart(px.histogram(dfm, x="Site", color="Status NR-12", barmode="group", title="Status NR-12 por site", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
+        st.plotly_chart(px.histogram(dfm, x="Site", color="Status de Conformidade", barmode="group", title="Status de conformidade por unidade", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
     with c2:
         fig_risco = px.bar(
             risco_counts,
@@ -751,7 +803,7 @@ def nr12_dashboard(db,u):
         dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":verificacoes_vencidas},{"Tipo":"Próximas","Qtd":verificacoes_proximas}])
         st.plotly_chart(px.bar(dv,x="Tipo",y="Qtd",color="Tipo",title="Verificações vencidas/próximas", color_discrete_map={"Vencidas":"#dc2626","Próximas":"#f59e0b"}).update_layout(template="plotly_white", showlegend=False),use_container_width=True)
 
-    section("Evolução esperada da adequação NR-12")
+    section("Evolução esperada da adequação de proteções de máquinas")
     evolucao=montar_evolucao_adequacao_nr12(db,ms)
     if not evolucao.empty:
         st.plotly_chart(
@@ -764,7 +816,7 @@ def nr12_dashboard(db,u):
         empty_state("Sem datas previstas de adequação cadastradas para gerar a evolução esperada.")
 
     section("Máquinas prioritárias")
-    pr=dfm[dfm["Status NR-12"]=="Não conforme"] if not dfm.empty else pd.DataFrame()
+    pr=dfm[dfm["Status de Conformidade"]=="Não conforme"] if not dfm.empty else pd.DataFrame()
     if not pr.empty:
         st.dataframe(pr, use_container_width=True, hide_index=True)
     else:
@@ -782,12 +834,12 @@ def nr12_inventario(db,u):
         empty_state("Nenhuma máquina cadastrada.")
     else:
         f1,f2,f3,f4=st.columns(4)
-        fs=f1.multiselect("Filtrar status",sorted(df["Status NR-12"].dropna().unique()))
+        fs=f1.multiselect("Filtrar status",sorted(df["Status de Conformidade"].dropna().unique()))
         fr=f2.multiselect("Filtrar risco",[r for r in RISCOS_MAQUINA if r in set(df["Risco"].dropna())])
         fc=f3.multiselect("Filtrar criticidade",sorted(df["Criticidade"].dropna().unique()))
         fu=f4.multiselect("Filtrar unidade",sorted(df["Site"].dropna().unique()))
         f=df.copy()
-        if fs: f=f[f["Status NR-12"].isin(fs)]
+        if fs: f=f[f["Status de Conformidade"].isin(fs)]
         if fr: f=f[f["Risco"].isin(fr)]
         if fc: f=f[f["Criticidade"].isin(fc)]
         if fu: f=f[f["Site"].isin(fu)]
@@ -818,11 +870,11 @@ def nr12_inventario(db,u):
                         crit=st.selectbox("Criticidade",CRITICIDADES)
                     with c:
                         risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA)
-                        status=st.selectbox("Status NR-12",STATUS_MAQUINA)
+                        status=st.selectbox("Status de Conformidade",STATUS_MAQUINA)
                         prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180))
                         data_prevista_adequacao=None
                         if status!="Conforme":
-                            data_prevista_adequacao=st.date_input("Data prevista para adequação",value=date.today()+timedelta(days=90),help="Obrigatória para máquinas com Status NR-12 diferente de Conforme.")
+                            data_prevista_adequacao=st.date_input("Data prevista para adequação",value=date.today()+timedelta(days=90),help="Obrigatória para máquinas com status diferente de Conforme.")
                         else:
                             st.caption("Máquina conforme: data prevista para adequação não aplicável.")
                     ck=st.columns(5)
@@ -873,7 +925,7 @@ def nr12_inventario(db,u):
                         st.rerun()
 
 def nr12_documentos(db,u):
-    header("Documentos NR-12","Controle de documentos essenciais, validade, evidências e anexos")
+    header("Documentos de Proteções de Máquinas","Controle de documentos essenciais, validade, evidências e anexos")
     ids=visible_site_ids(u,db)
     opts=machine_options(db,ids)
 
@@ -939,7 +991,7 @@ def nr12_documentos(db,u):
                     st.rerun()
 
 def nr12_checklists(db,u):
-    header("Checklists e Inspeções NR-12", "Registro por máquina, pontuação e geração automática de PAC")
+    header("Checklists e Inspeções de Proteções de Máquinas", "Registro por máquina, pontuação e geração automática de PAC")
     ids = visible_site_ids(u, db)
     opts = machine_options(db, ids)
 
@@ -1053,7 +1105,7 @@ def nr12_checklists(db,u):
             st.rerun()
 
 def nr12_pac(db,u):
-    header("PAC NR-12","Planos de ação corretiva")
+    header("PAC de Proteções de Máquinas","Planos de ação corretiva")
     ids=visible_site_ids(u,db)
     sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
     opts=machine_options(db,ids)
@@ -1065,7 +1117,7 @@ def nr12_pac(db,u):
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum PAC.")
-    download_excel_button("Exportar PAC NR-12 Excel","pac_nr12.xlsx",{"PAC":df})
+    download_excel_button("Exportar PAC Proteções de Máquinas Excel","pac_nr12.xlsx",{"PAC":df})
 
     # 2) Cadastrar PAC manual
     if can_edit(u,"nr12_manutencao") and sites:
@@ -1128,7 +1180,7 @@ def prioridade_auditoria_nr12(db,m):
     return score, prioridade, prazo_txt, dias, risco
 
 def nr12_central_pendencias(db,u):
-    header("Central de Pendências NR-12","Próximas auditorias ordenadas por prioridade")
+    header("Central de Pendências de Proteções de Máquinas","Próximas auditorias ordenadas por prioridade")
     ids=visible_site_ids(u,db)
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all()
     rows=[]
@@ -1143,7 +1195,7 @@ def nr12_central_pendencias(db,u):
             "Área":m.area_setor,
             "Risco":risco,
             "Criticidade":m.criticidade,
-            "Status NR-12":calcular_status_maquina_nr12(db,m),
+            "Status de Conformidade":calcular_status_maquina_nr12(db,m),
             "Próxima auditoria":fmt_date(m.proxima_auditoria),
             "Dias para vencer":dias if dias is not None else "—",
             "Situação do prazo":prazo_txt,
@@ -1163,7 +1215,7 @@ def nr12_central_pendencias(db,u):
     download_excel_button("Exportar central de pendências", "central_pendencias_nr12.xlsx", {"Pendências": df.drop(columns=["Score"])})
 
 def nr12_moc(db,u):
-    header("Gestão de Mudanças / MOC NR-12","Mudanças críticas, aprovações e validação")
+    header("Gestão de Mudanças / MOC de Proteções de Máquinas","Mudanças críticas, aprovações e validação")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}; opts=machine_options(db,ids)
     if can_edit(u,"moc"):
         with st.form("moc"):
@@ -1188,24 +1240,24 @@ def nr12_moc(db,u):
         empty_state("Nenhuma MOC.")
     download_excel_button("Exportar MOC Excel", "moc_nr12.xlsx", {"MOC": df})
 def nr12_termo(db,u):
-    header("Termo de Garantia NR-12","Emissão anual por site")
+    header("Termo de Garantia de Proteções de Máquinas","Emissão anual por site")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
     with st.form("termo"):
-        site=st.selectbox("Site",list(sites)); ano=st.number_input("Ano/ciclo",2020,2100,date.today().year); ehs=st.text_input("Responsável EHS"); man=st.text_input("Responsável Manutenção"); prod=st.text_input("Responsável Produção/Operação"); eng=st.text_input("Responsável Engenharia"); lid=st.text_input("Liderança do site"); res=st.text_area("Ressalvas"); pend=st.text_area("Pendências"); dec=st.text_area("Declaração formal","Declaramos que o site acompanha a sustentação da conformidade NR-12 das máquinas já adequadas, mantendo inventário, controles documentais, inspeções, PAC e MOC.")
+        site=st.selectbox("Site",list(sites)); ano=st.number_input("Ano/ciclo",2020,2100,date.today().year); ehs=st.text_input("Responsável EHS"); man=st.text_input("Responsável Manutenção"); prod=st.text_input("Responsável Produção/Operação"); eng=st.text_input("Responsável Engenharia"); lid=st.text_input("Liderança do site"); res=st.text_area("Ressalvas"); pend=st.text_area("Pendências"); dec=st.text_area("Declaração formal","Declaramos que o site acompanha a sustentação de proteções de máquinas já adequadas, mantendo inventário, controles documentais, inspeções, PAC e MOC.")
         if st.form_submit_button("Gerar termo",use_container_width=True):
             sid=sites[site]; ms=db.query(MaquinaNR12).filter_by(site_id=sid).all(); sts=[calcular_status_maquina_nr12(db,m) for m in ms]
             resumo=pd.DataFrame([{"Indicador":"Total de máquinas","Valor":len(ms)},{"Indicador":"Conformes","Valor":sts.count("Conforme")},{"Indicador":"Não conformes","Valor":sts.count("Não conforme")},{"Indicador":"PACs críticos abertos/vencidos","Valor":db.query(PACNR12).filter(PACNR12.site_id==sid,PACNR12.classificacao=="Crítico",PACNR12.status.in_(["Aberta","Em andamento","Vencida"])).count()},{"Indicador":"MOCs críticas sem validação","Valor":db.query(MOCNR12).filter(MOCNR12.site_id==sid,MOCNR12.exige_moc==True,MOCNR12.validacao_final==False).count()}])
             if can_edit(u,"nr12_manutencao"): db.add(TermoGarantiaNR12(site_id=sid,ano_ciclo=ano,responsavel_ehs=ehs,responsavel_manutencao=man,responsavel_producao=prod,responsavel_engenharia=eng,lideranca_site=lid,ressalvas=res,pendencias=pend,declaracao_formal=dec)); db.commit()
-            pdf=gerar_pdf(f"Termo de Garantia de Sustentação NR-12 — {site}",f"Ano/ciclo: {ano} | Emissão: {fmt_date(date.today())}",[("Declaração",dec),("Responsáveis",pd.DataFrame([{"Função":"EHS","Responsável":ehs},{"Função":"Manutenção","Responsável":man},{"Função":"Produção/Operação","Responsável":prod},{"Função":"Engenharia","Responsável":eng},{"Função":"Liderança","Responsável":lid}])),("Consolidação",resumo),("Ressalvas",res or "Sem ressalvas."),("Pendências",pend or "Sem pendências.")])
-            download_pdf_button("Baixar termo NR-12 PDF",f"termo_nr12_{site}_{ano}.pdf",pdf)
+            pdf=gerar_pdf(f"Termo de Garantia de Sustentação de Proteções de Máquinas — {site}",f"Ano/ciclo: {ano} | Emissão: {fmt_date(date.today())}",[("Declaração",dec),("Responsáveis",pd.DataFrame([{"Função":"EHS","Responsável":ehs},{"Função":"Manutenção","Responsável":man},{"Função":"Produção/Operação","Responsável":prod},{"Função":"Engenharia","Responsável":eng},{"Função":"Liderança","Responsável":lid}])),("Consolidação",resumo),("Ressalvas",res or "Sem ressalvas."),("Pendências",pend or "Sem pendências.")])
+            download_pdf_button("Baixar termo Proteções de Máquinas PDF",f"termo_nr12_{site}_{ano}.pdf",pdf)
 def nr12_relatorios(db,u):
-    header("Relatórios NR-12","Exportações em Excel e PDFs")
+    header("Relatórios de Proteções de Máquinas","Exportações em Excel e PDFs")
     ids=visible_site_ids(u,db)
     d={"Inventário":df_maquinas(db,ids),"Documentos":df_docs(db,ids),"Verificações":df_ver(db,ids),"PAC":df_pac_nr12(db,ids)}
     cols=st.columns(4)
     for (name,df),c in zip(d.items(),cols):
         with c: download_excel_button(f"{name} Excel",f"{name.lower()}_nr12.xlsx",{name:df})
-    download_excel_button("Pacote NR-12 Excel","pacote_nr12.xlsx",d)
+    download_excel_button("Pacote Proteções de Máquinas Excel","pacote_nr12.xlsx",d)
     opts=machine_options(db,ids)
     if opts:
         lab=st.selectbox("Relatório PDF por máquina",list(opts)); m=db.get(MaquinaNR12,opts[lab])
@@ -1505,15 +1557,15 @@ def ehs_relatorios(db,u):
 # ============================================================
 
 ENERGIA_SITE_INFO = {
-    "CAC": {"nome": "Cachoeirinha", "grupo": "MSG", "linha": "MSG Br CAC"},
-    "JAC": {"nome": "Jacareí", "grupo": "MSG", "linha": "MSG Br JAC"},
-    "SJC": {"nome": "São José dos Campos", "grupo": "Filtration Br", "linha": "Filtration Br"},
-    "DIA": {"nome": "Diadema", "grupo": "FCG Br", "linha": "FCG Br"},
-    "JUN": {"nome": "Jundiaí", "grupo": "EMG", "linha": "EMG Br JU"},
-    "PER": {"nome": "Perus", "grupo": "EMG", "linha": "EMG Br SP"},
+    "CAC": {"nome": "MSG Br CAC - Cachoeirinha", "grupo": "MSG Br", "linha": "MSG Br CAC"},
+    "JAC": {"nome": "MSG Br JAC - Jacareí", "grupo": "MSG Br", "linha": "MSG Br JAC"},
+    "JUN": {"nome": "EMG Br JU - Jundiaí", "grupo": "EMG Br", "linha": "EMG Br JU"},
+    "PER": {"nome": "EMG Br SP - Perus", "grupo": "EMG Br", "linha": "EMG Br SP"},
+    "SJC": {"nome": "Filtration Br - São José dos Campos", "grupo": "Filtration Br", "linha": "Filtration Br"},
+    "DIA": {"nome": "FCG Br - Diadema", "grupo": "FCG Br", "linha": "FCG Br"},
 }
 ENERGIA_SITE_ORDER = ["CAC", "JAC", "JUN", "PER", "SJC", "DIA"]
-ENERGIA_GROUP_ORDER = ["MSG", "EMG", "Filtration Br", "FCG Br", "LAG"]
+ENERGIA_GROUP_ORDER = ["MSG Br", "EMG Br", "Filtration Br", "FCG Br", "LAG"]
 ENERGIA_LINHAS_EXECUTIVAS = [
     ("MSG Br CAC", ["CAC"], False),
     ("MSG Br JAC", ["JAC"], False),
@@ -1561,6 +1613,1436 @@ ENERGIA_ABSORPTION_SHEETS = {
     "EMG Jundiaí": "JUN",
     "EMG Perus": "PER",
 }
+
+# Carga inicial bruta de Actual Hours extraída da planilha Brazil Absorption Summary FY26.xls.
+ENERGIA_ACTUAL_HOURS_SEED = [{'mes_ref': '2023-07-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4145.0,
+  'production_capacity_hours': 5758.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5576.0,
+  'production_capacity_hours': 6919.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4904.0,
+  'production_capacity_hours': 5955.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6357.0,
+  'production_capacity_hours': 6205.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6088.0,
+  'production_capacity_hours': 6416.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 3536.0,
+  'production_capacity_hours': 3681.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4509.0,
+  'production_capacity_hours': 4039.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6900.0,
+  'production_capacity_hours': 7031.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6988.0,
+  'production_capacity_hours': 6976.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 7481.0,
+  'production_capacity_hours': 7420.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5965.0,
+  'production_capacity_hours': 7110.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6091.0,
+  'production_capacity_hours': 6561.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6364.0,
+  'production_capacity_hours': 7091.38,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 7114.0,
+  'production_capacity_hours': 7598.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6854.0,
+  'production_capacity_hours': 7098.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6877.0,
+  'production_capacity_hours': 7383.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5956.0,
+  'production_capacity_hours': 6792.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5371.0,
+  'production_capacity_hours': 5281.47,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5953.0,
+  'production_capacity_hours': 5893.0255,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5364.0,
+  'production_capacity_hours': 5995.22,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4949.0,
+  'production_capacity_hours': 5000.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6424.0,
+  'production_capacity_hours': 6131.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6257.0,
+  'production_capacity_hours': 6219.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 7005.0,
+  'production_capacity_hours': 6314.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6455.0,
+  'production_capacity_hours': 6503.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6185.0,
+  'production_capacity_hours': 6764.55,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6652.0,
+  'production_capacity_hours': 6248.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4802.0,
+  'production_capacity_hours': 4398.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5139.0,
+  'production_capacity_hours': 5121.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4021.0,
+  'production_capacity_hours': 3751.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5461.0,
+  'production_capacity_hours': 5460.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5354.0,
+  'production_capacity_hours': 5244.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5856.0,
+  'production_capacity_hours': 6394.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5488.0,
+  'production_capacity_hours': 5441.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 9953.0,
+  'production_capacity_hours': 9987.72,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11140.55,
+  'production_capacity_hours': 11157.05,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 9855.5,
+  'production_capacity_hours': 9880.82,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 10555.24,
+  'production_capacity_hours': 10563.07,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 10854.24,
+  'production_capacity_hours': 10883.19,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11580.84,
+  'production_capacity_hours': 11697.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 10744.43,
+  'production_capacity_hours': 10750.53,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11322.93,
+  'production_capacity_hours': 11323.95,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12053.46,
+  'production_capacity_hours': 12090.35,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13711.75,
+  'production_capacity_hours': 13732.55,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12448.44,
+  'production_capacity_hours': 12467.87,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11604.23,
+  'production_capacity_hours': 12101.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13495.72,
+  'production_capacity_hours': 13707.9,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12796.64,
+  'production_capacity_hours': 12799.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11839.0,
+  'production_capacity_hours': 12146.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11728.18,
+  'production_capacity_hours': 11897.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11681.7,
+  'production_capacity_hours': 11806.25,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 9203.82,
+  'production_capacity_hours': 9230.59615384615,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11062.3,
+  'production_capacity_hours': 11299.75,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11511.7,
+  'production_capacity_hours': 11644.6,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11349.18,
+  'production_capacity_hours': 11368.49,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12742.23,
+  'production_capacity_hours': 12861.98,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12106.0,
+  'production_capacity_hours': 12154.6,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12986.89,
+  'production_capacity_hours': 13035.76,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 14230.0,
+  'production_capacity_hours': 14616.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13125.0,
+  'production_capacity_hours': 13160.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 14138.41,
+  'production_capacity_hours': 14438.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13710.0,
+  'production_capacity_hours': 14657.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13304.0,
+  'production_capacity_hours': 13391.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11325.0,
+  'production_capacity_hours': 11389.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11605.0,
+  'production_capacity_hours': 11928.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13018.0,
+  'production_capacity_hours': 13330.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 14185.0,
+  'production_capacity_hours': 14498.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12685.0,
+  'production_capacity_hours': 12786.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7153.11,
+  'production_capacity_hours': 9346.68,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8761.75000000001,
+  'production_capacity_hours': 10560.96,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9501.25000000001,
+  'production_capacity_hours': 10062.89,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 10358.69,
+  'production_capacity_hours': 10773.72,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9612.04347754168,
+  'production_capacity_hours': 10108.67,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 5358.24999999998,
+  'production_capacity_hours': 6316.28,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7360.09,
+  'production_capacity_hours': 9647.05,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8166.5221,
+  'production_capacity_hours': 9032.28,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8096.12000000004,
+  'production_capacity_hours': 8973.51,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9095.0,
+  'production_capacity_hours': 11091.03,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8190.57950000003,
+  'production_capacity_hours': 10884.36,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8833.91,
+  'production_capacity_hours': 9918.96,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9593.24000000003,
+  'production_capacity_hours': 11405.69,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9092.48999999998,
+  'production_capacity_hours': 10939.31,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8223.97,
+  'production_capacity_hours': 10187.69,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9896.48000000002,
+  'production_capacity_hours': 11359.54,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7566.92000000003,
+  'production_capacity_hours': 9750.77,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 4281.35999999999,
+  'production_capacity_hours': 5713.29,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7708.44000000002,
+  'production_capacity_hours': 9508.44,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7973.05,
+  'production_capacity_hours': 9431.28,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8506.77,
+  'production_capacity_hours': 11178.75,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 10065.07,
+  'production_capacity_hours': 12803.73,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 10665.3800000001,
+  'production_capacity_hours': 12407.72,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 10515.83,
+  'production_capacity_hours': 12587.01,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9992.69999999999,
+  'production_capacity_hours': 12545.06,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9410.51,
+  'production_capacity_hours': 11565.77,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8257.44,
+  'production_capacity_hours': 10857.42,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9664.42,
+  'production_capacity_hours': 11235.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8064.97,
+  'production_capacity_hours': 9541.54,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 6581.7,
+  'production_capacity_hours': 6918.72,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 5279.95,
+  'production_capacity_hours': 6811.42,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 6812.63,
+  'production_capacity_hours': 7933.51,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8170.0,
+  'production_capacity_hours': 9425.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8112.0,
+  'production_capacity_hours': 8154.12,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2729.48,
+  'production_capacity_hours': 3377.68,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2428.1,
+  'production_capacity_hours': 3205.41,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2300.95,
+  'production_capacity_hours': 2897.07,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2456.85,
+  'production_capacity_hours': 2929.91,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2340.34,
+  'production_capacity_hours': 2822.42,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1647.21,
+  'production_capacity_hours': 1964.64,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1819.3,
+  'production_capacity_hours': 2310.54,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2415.6,
+  'production_capacity_hours': 3167.4,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1957.1,
+  'production_capacity_hours': 3139.3,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2623.26,
+  'production_capacity_hours': 3049.4,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2343.7,
+  'production_capacity_hours': 2926.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2565.8,
+  'production_capacity_hours': 3102.6,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2727.4,
+  'production_capacity_hours': 3441.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2767.6,
+  'production_capacity_hours': 3237.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2399.1,
+  'production_capacity_hours': 2956.3,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2939.33,
+  'production_capacity_hours': 3544.15,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2603.8,
+  'production_capacity_hours': 3020.9,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2206.1,
+  'production_capacity_hours': 2505.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2045.9,
+  'production_capacity_hours': 2538.1,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2683.7,
+  'production_capacity_hours': 3285.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2433.8,
+  'production_capacity_hours': 3034.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2056.7,
+  'production_capacity_hours': 2624.7,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2223.8,
+  'production_capacity_hours': 2898.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2329.9,
+  'production_capacity_hours': 3054.9,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2338.35,
+  'production_capacity_hours': 3632.04,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1895.0,
+  'production_capacity_hours': 2755.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2198.8,
+  'production_capacity_hours': 2788.1,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2064.2,
+  'production_capacity_hours': 2932.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1918.5,
+  'production_capacity_hours': 2438.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1073.5,
+  'production_capacity_hours': 1107.4,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1514.5,
+  'production_capacity_hours': 1856.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2521.5,
+  'production_capacity_hours': 2738.7,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2803.1,
+  'production_capacity_hours': 2807.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2512.33,
+  'production_capacity_hours': 2710.53,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 771.065116853774,
+  'production_capacity_hours': 815.990432817906,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 864.399752877215,
+  'production_capacity_hours': 698.542821083104,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 576.336793228836,
+  'production_capacity_hours': 512.231117877568,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 657.376562169032,
+  'production_capacity_hours': 566.609087057827,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 676.630269010803,
+  'production_capacity_hours': 597.378344277342,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 451.022666984396,
+  'production_capacity_hours': 429.65105239003,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 954.662964237803,
+  'production_capacity_hours': 770.789147055709,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 897.818686895432,
+  'production_capacity_hours': 810.406857833792,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 736.830192402739,
+  'production_capacity_hours': 685.798700840218,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 771.065116853774,
+  'production_capacity_hours': 679.380798559627,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 662.877621266681,
+  'production_capacity_hours': 713.716575760785,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 921.427398856175,
+  'production_capacity_hours': 842.578885123208,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 1026.86436489444,
+  'production_capacity_hours': 1010.3611876015,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 746.280370142272,
+  'production_capacity_hours': 669.786126334462,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 853.581003318506,
+  'production_capacity_hours': 568.44277342371,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 859.341437352609,
+  'production_capacity_hours': 799.821169812187,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 726.393766451317,
+  'production_capacity_hours': 633.125051452729,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 464.733231626421,
+  'production_capacity_hours': 502.911406922968,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 1002.68977732119,
+  'production_capacity_hours': 1015.74699951105,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 699.307376613359,
+  'production_capacity_hours': 748.565051669844,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 840.40954246805,
+  'production_capacity_hours': 713.555211360587,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 929.46389609193,
+  'production_capacity_hours': 931.103120018711,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 802.191851230318,
+  'production_capacity_hours': 738.613635762198,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 800.511369360305,
+  'production_capacity_hours': 711.884906449904,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 813.9671,
+  'production_capacity_hours': 677.166399999999,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 748.184,
+  'production_capacity_hours': 595.4236,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 924.9167,
+  'production_capacity_hours': 891.825800000002,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 959.783,
+  'production_capacity_hours': 857.6464,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 919.1668,
+  'production_capacity_hours': 765.826500000001,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 774.5327,
+  'production_capacity_hours': 669.9414,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 1025.4669,
+  'production_capacity_hours': 865.9645,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 786.487,
+  'production_capacity_hours': 789.8827,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 1139.01,
+  'production_capacity_hours': 927.1059,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 836.7159,
+  'production_capacity_hours': 694.0899,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8287.6,
+  'production_capacity_hours': 8370.69,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9821.88,
+  'production_capacity_hours': 10499.9145333333,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9532.91,
+  'production_capacity_hours': 9767.38833333333,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8762.74,
+  'production_capacity_hours': 9765.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9229.3,
+  'production_capacity_hours': 9294.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8189.0,
+  'production_capacity_hours': 9016.84583333333,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9556.74,
+  'production_capacity_hours': 10070.4442,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8773.0,
+  'production_capacity_hours': 9606.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8717.24,
+  'production_capacity_hours': 9829.87065,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9136.0,
+  'production_capacity_hours': 9364.11,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8126.0,
+  'production_capacity_hours': 9259.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8781.35,
+  'production_capacity_hours': 8700.17,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9647.99,
+  'production_capacity_hours': 9251.42,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10069.8,
+  'production_capacity_hours': 9274.12,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8458.71,
+  'production_capacity_hours': 8979.65,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10529.0,
+  'production_capacity_hours': 11245.22,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8349.0,
+  'production_capacity_hours': 12326.4828,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7245.34,
+  'production_capacity_hours': 11429.2528,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8571.49,
+  'production_capacity_hours': 13002.962,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8850.09,
+  'production_capacity_hours': 13045.854,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9733.29,
+  'production_capacity_hours': 11425.3,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10104.44,
+  'production_capacity_hours': 10308.46,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8483.47,
+  'production_capacity_hours': 8863.275,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10263.02,
+  'production_capacity_hours': 10212.21,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10199.6,
+  'production_capacity_hours': 11218.66,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10163.56,
+  'production_capacity_hours': 10157.65,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9310.96999999999,
+  'production_capacity_hours': 12950.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10700.44,
+  'production_capacity_hours': 12552.31,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7866.52000000057,
+  'production_capacity_hours': 10737.35,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7570.0,
+  'production_capacity_hours': 8771.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7187.92,
+  'production_capacity_hours': 9883.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7276.51833333333,
+  'production_capacity_hours': 8794.335,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7557.56999999998,
+  'production_capacity_hours': 9425.17,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 6075.21,
+  'production_capacity_hours': 7414.6,
+  'origem': 'Carga inicial Absorption FY26'}]
 
 
 def energia_norm_txt(v):
@@ -1692,6 +3174,42 @@ def seed_energia_parametros(db):
     for chave, (valor, desc) in ENERGIA_DEFAULT_PARAMS.items():
         if not db.query(EnergiaParametro).filter_by(chave=chave).first():
             db.add(EnergiaParametro(chave=chave, valor=valor, descricao=desc))
+    db.commit()
+
+def seed_energia_actual_hours_inicial(db):
+    """Carrega uma base inicial de Actual Hours já mapeada, sem sobrescrever ajustes manuais futuros."""
+    if not ENERGIA_ACTUAL_HOURS_SEED:
+        return
+    adicionados = 0
+    for row in ENERGIA_ACTUAL_HOURS_SEED:
+        mes = as_date(row.get("mes_ref"))
+        site = row.get("site_codigo")
+        if not mes or not site:
+            continue
+        existente = db.query(EnergiaActualHours).filter(
+            EnergiaActualHours.mes_ref == mes,
+            EnergiaActualHours.site_codigo == site
+        ).first()
+        if existente:
+            continue
+        db.add(EnergiaActualHours(
+            mes_ref=mes,
+            site_codigo=site,
+            site_nome=row.get("site_nome") or energia_site_nome(site),
+            grupo=row.get("grupo") or energia_site_grupo(site),
+            actual_hours=energia_safe_float(row.get("actual_hours"), 0),
+            production_capacity_hours=energia_safe_float(row.get("production_capacity_hours"), 0),
+            origem=row.get("origem") or "Carga inicial Absorption FY26",
+            atualizado_em=datetime.utcnow(),
+        ))
+        adicionados += 1
+    if adicionados:
+        db.add(EnergiaUploadHistorico(
+            tipo_base="Actual Hours",
+            nome_arquivo="Brazil Absorption Summary FY26.xls",
+            usuario="Sistema",
+            observacoes=f"Carga inicial bruta de {adicionados} registros de Actual Hours."
+        ))
     db.commit()
 
 def energia_find_header(raw_df, required_terms):
@@ -2382,14 +3900,14 @@ def render_sidebar(db,u):
         st.rerun()
     st.sidebar.divider()
     if mod=="nr12":
-        pages=["Dashboard NR-12","Central de Pendências","Inventário de Máquinas","Documentos NR-12","Checklists e Inspeções","PAC NR-12","Relatórios NR-12"]
+        pages=["Dashboard Proteções de Máquinas","Central de Pendências","Inventário de Máquinas","Documentos de Proteções de Máquinas","Checklists e Inspeções","PAC Proteções de Máquinas","Relatórios Proteções de Máquinas"]
         current=st.session_state.get("page_nr12",pages[0])
         if current not in pages:
             current=pages[0]
             st.session_state.page_nr12=current
         if st.session_state.get("nav_nr12") not in pages:
             st.session_state.nav_nr12=current
-        selected=st.sidebar.radio("Sustentação NR-12",pages,key="nav_nr12")
+        selected=st.sidebar.radio("Sustentação de Proteções de Máquinas",pages,key="nav_nr12")
         st.session_state.page_nr12=selected
     elif mod=="ehs":
         pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist Diretrizes de EHS","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"]
@@ -2415,7 +3933,7 @@ def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod=="home": home_page(db,u)
     elif mod=="nr12":
-        {"Dashboard NR-12":nr12_dashboard,"Central de Pendências":nr12_central_pendencias,"Inventário de Máquinas":nr12_inventario,"Documentos NR-12":nr12_documentos,"Checklists e Inspeções":nr12_checklists,"PAC NR-12":nr12_pac,"Relatórios NR-12":nr12_relatorios}[st.session_state.get("page_nr12","Dashboard NR-12")](db,u)
+        {"Dashboard Proteções de Máquinas":nr12_dashboard,"Central de Pendências":nr12_central_pendencias,"Inventário de Máquinas":nr12_inventario,"Documentos de Proteções de Máquinas":nr12_documentos,"Checklists e Inspeções":nr12_checklists,"PAC Proteções de Máquinas":nr12_pac,"Relatórios Proteções de Máquinas":nr12_relatorios}[st.session_state.get("page_nr12","Dashboard Proteções de Máquinas")](db,u)
     elif mod=="ehs":
         {"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist Diretrizes de EHS":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios}[st.session_state.get("page_ehs","Dashboard Auditoria Cruzada")](db,u)
     elif mod=="energia":
