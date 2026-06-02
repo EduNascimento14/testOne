@@ -546,38 +546,173 @@ def update_vencidos(db):
             if identificar_pac_vencido(p.prazo,p.status): p.status="Vencida"
     db.commit()
 
-def energia_home_kpis(db):
-    """Mostra indicadores sintéticos de energia na tela inicial sem exigir importação prévia."""
-    section("Indicadores de energia e emissões")
+
+def energia_default_r12_mes(df):
+    """Usa o mês vigente como padrão; se não existir na base, usa o mês mais próximo anterior."""
+    if df is None or df.empty or "Mês" not in df.columns:
+        return None
+    opts = sorted([energia_first_day(x) for x in df["Mês"].dropna().unique() if energia_first_day(x)])
+    if not opts:
+        return None
+    hoje = date.today().replace(day=1)
+    if hoje in opts:
+        return hoje
+    anteriores = [d for d in opts if d <= hoje]
+    if anteriores:
+        return max(anteriores)
+    return max(opts)
+
+def energia_variacao_periodos(df, metric, r12_mes, fy_base, usar_irec=False):
+    """Calcula variação percentual do R12 selecionado contra um FY base."""
+    if df is None or df.empty or not r12_mes:
+        return None
+    sites = ENERGIA_SITE_ORDER
+    r12_ini = energia_r12_start(r12_mes)
+    base_ini, base_fim = energia_intervalo_fy(fy_base)
+    atual = energia_agregar_periodo(df, sites, metric, r12_ini, r12_mes, usar_irec)
+    base = energia_agregar_periodo(df, sites, metric, base_ini, base_fim, usar_irec)
+    return energia_pct_change(atual, base)
+
+def energia_home_kpi_cards(db):
+    """Cards sintéticos de energia para aparecerem dentro da Visão geral integrada."""
     try:
+        if db.query(EnergiaRegistro).count() == 0:
+            return [
+                ("Energia • CO₂ R12 vs FY anterior", "—", "Importe a base de energia"),
+                ("Energia • CO₂ R12 vs FY19", "—", "Importe a base de energia"),
+                ("Energia • Eficiência R12 vs FY anterior", "—", "Importe a base de energia"),
+                ("Energia • Eficiência R12 vs FY19", "—", "Importe a base de energia"),
+            ]
         df = energia_consolidado(db)
-        qtd_registros_energia = db.query(EnergiaRegistro).count()
-        qtd_actual_hours = db.query(EnergiaActualHours).count()
         if df.empty:
-            empty_state("Nenhum dado de energia ou Actual Hours carregado.")
-            return
-        r12_mes = max(df["Mês"])
-        kpis = energia_df_kpis(df, r12_mes, usar_irec=True)
-        vals = {r["Indicador"]: r["Valor"] for _, r in kpis.iterrows()} if not kpis.empty else {}
-        cards = [
-            ("Consumo total R12", energia_fmt_val(vals.get("Consumo total R12 kWh"), "numero"), "kWh"),
-            ("CO₂ R12 com I-REC", energia_fmt_val(vals.get("Emissões CO₂ R12 com I-REC tCO₂e"), "numero"), "tCO₂e"),
-            ("Custo total R12", energia_fmt_val(vals.get("Custo total R12 BRL"), "money"), "BRL"),
-            ("Eficiência energética R12", energia_fmt_val(vals.get("Eficiência energética R12"), "numero"), "kWh/Actual Hour"),
-            ("Actual Hours R12", energia_fmt_val(vals.get("Actual Hours R12"), "numero"), "h"),
-            ("Base de energia", qtd_registros_energia, "registros importados"),
-            ("Base de Actual Hours", qtd_actual_hours, "registros carregados"),
-            ("Mês de referência", r12_mes.strftime("%b/%Y"), "último mês disponível"),
+            return []
+        r12_mes = energia_default_r12_mes(df)
+        fy_atual = int(energia_param_float(db, "fy_atual", 26))
+        fy_passado = fy_atual - 1
+        co2_vs_passado = energia_variacao_periodos(df, "Emissões de CO₂ considerando I-REC", r12_mes, fy_passado, True)
+        co2_vs_fy19 = energia_variacao_periodos(df, "Emissões de CO₂ considerando I-REC", r12_mes, 19, True)
+        eff_vs_passado = energia_variacao_periodos(df, "Eficiência energética", r12_mes, fy_passado, True)
+        eff_vs_fy19 = energia_variacao_periodos(df, "Eficiência energética", r12_mes, 19, True)
+        ref = r12_mes.strftime("%b/%Y") if r12_mes else "mês vigente"
+        return [
+            ("Energia • CO₂ R12 vs FY anterior", energia_fmt_val(co2_vs_passado, "percent"), f"R12 {ref} vs FY{fy_passado:02d}"),
+            ("Energia • CO₂ R12 vs FY19", energia_fmt_val(co2_vs_fy19, "percent"), f"R12 {ref} vs FY19"),
+            ("Energia • Eficiência R12 vs FY anterior", energia_fmt_val(eff_vs_passado, "percent"), f"R12 {ref} vs FY{fy_passado:02d}"),
+            ("Energia • Eficiência R12 vs FY19", energia_fmt_val(eff_vs_fy19, "percent"), f"R12 {ref} vs FY19"),
         ]
-        for base in range(0, len(cards), 4):
-            cols = st.columns(4)
-            for c, (lab, val, help_) in zip(cols, cards[base:base+4]):
-                with c:
-                    kpi_card(lab, val, help_)
-        if qtd_registros_energia == 0 and qtd_actual_hours > 0:
-            alert_card("Actual Hours iniciais já foram carregados no banco. Importe a base de energia e gás para ativar consumo, CO₂, custo e eficiência energética.")
-    except Exception as e:
-        empty_state(f"Indicadores de energia indisponíveis no momento: {e}")
+    except Exception:
+        return [
+            ("Energia • CO₂ R12 vs FY anterior", "—", "Indicador indisponível"),
+            ("Energia • CO₂ R12 vs FY19", "—", "Indicador indisponível"),
+            ("Energia • Eficiência R12 vs FY anterior", "—", "Indicador indisponível"),
+            ("Energia • Eficiência R12 vs FY19", "—", "Indicador indisponível"),
+        ]
+
+def energia_bar_sem_decimal(fig):
+    """Padroniza rótulos de gráficos de coluna sem casas decimais."""
+    fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside", cliponaxis=False)
+    fig.update_layout(uniformtext_minsize=8, uniformtext_mode="hide")
+    return fig
+
+def energia_tendencia_metas(df_scope, usar_irec=False, db=None):
+    """Gera séries mensais R12 de emissões e eficiência comparadas contra a meta do FY anterior."""
+    if df_scope is None or df_scope.empty:
+        return pd.DataFrame()
+    work = df_scope.copy()
+    work["Mês"] = pd.to_datetime(work["Mês"]).dt.date
+    meses = sorted(work["Mês"].dropna().unique())
+    if not meses:
+        return pd.DataFrame()
+    fy_atual = int(energia_param_float(db, "fy_atual", 26)) if db is not None else 26
+    fy_base = fy_atual - 1
+    meta_co2 = energia_param_float(db, "meta_reducao_co2_percentual", 5) / 100 if db is not None else 0.05
+    meta_eff = energia_param_float(db, "meta_reducao_eficiencia_percentual", 5) / 100 if db is not None else 0.05
+    base_ini, base_fim = energia_intervalo_fy(fy_base)
+    base = work[(pd.to_datetime(work["Mês"]) >= pd.to_datetime(base_ini)) & (pd.to_datetime(work["Mês"]) <= pd.to_datetime(base_fim))]
+    base_emissoes = base["emissao_total_com_irec_tco2e"].sum() if usar_irec else base["emissao_total_tco2e"].sum()
+    base_energia = base["consumo_total_kwh"].sum()
+    base_horas = base["actual_hours"].sum()
+    base_eff = base_energia / base_horas if base_horas else None
+    meta_emissoes = base_emissoes * (1 - meta_co2) if base_emissoes is not None else None
+    meta_eficiencia = base_eff * (1 - meta_eff) if base_eff is not None else None
+    rows = []
+    for mes in meses:
+        ini = energia_r12_start(mes)
+        f12 = work[(pd.to_datetime(work["Mês"]) >= pd.to_datetime(ini)) & (pd.to_datetime(work["Mês"]) <= pd.to_datetime(mes))]
+        emissao = f12["emissao_total_com_irec_tco2e"].sum() if usar_irec else f12["emissao_total_tco2e"].sum()
+        energia = f12["consumo_total_kwh"].sum()
+        horas = f12["actual_hours"].sum()
+        eficiencia = energia / horas if horas else None
+        rows.append({
+            "Mês": mes,
+            "Emissões R12": emissao,
+            "Meta emissões": meta_emissoes,
+            "Eficiência energética R12": eficiencia,
+            "Meta eficiência energética": meta_eficiencia,
+            "FY base": f"FY{fy_base:02d}",
+        })
+    return pd.DataFrame(rows)
+
+def energia_pdf_dashboard(db, r12_mes=None, usar_irec=True):
+    """Gera um PDF executivo com os principais elementos do dashboard de energia."""
+    df = energia_consolidado(db)
+    if df.empty:
+        return gerar_pdf("Dashboard Energia e CO₂", "Sem dados disponíveis.", [("Resumo", "Sem dados para gerar o dashboard.")])
+    r12_mes = energia_first_day(r12_mes) or energia_default_r12_mes(df) or max(df["Mês"])
+    kpis = energia_df_kpis(df, r12_mes, usar_irec)
+    tabela = energia_executive_table(db, "Emissões de CO₂ considerando I-REC" if usar_irec else "Emissões de CO₂", r12_mes, usar_irec)
+    r12_ini = energia_r12_start(r12_mes)
+    r12 = df[(pd.to_datetime(df["Mês"]) >= pd.to_datetime(r12_ini)) & (pd.to_datetime(df["Mês"]) <= pd.to_datetime(r12_mes))]
+    por_site = r12.groupby("Site nome", as_index=False).agg({
+        "consumo_total_kwh": "sum",
+        "emissao_total_tco2e": "sum",
+        "emissao_total_com_irec_tco2e": "sum",
+        "custo_total_brl": "sum",
+        "actual_hours": "sum"
+    }) if not r12.empty else pd.DataFrame()
+    if not por_site.empty:
+        por_site["eficiencia_energetica"] = por_site.apply(lambda r: r["consumo_total_kwh"] / r["actual_hours"] if r["actual_hours"] else None, axis=1)
+        por_site = por_site.rename(columns={
+            "Site nome": "Site",
+            "consumo_total_kwh": "Consumo total kWh",
+            "emissao_total_tco2e": "CO₂ sem I-REC",
+            "emissao_total_com_irec_tco2e": "CO₂ com I-REC",
+            "custo_total_brl": "Custo BRL",
+            "actual_hours": "Actual Hours",
+            "eficiencia_energetica": "Eficiência"
+        })
+    metas = energia_tendencia_metas(df, usar_irec, db)
+    if not metas.empty:
+        metas_pdf = metas.tail(12).rename(columns={
+            "Mês": "Mês",
+            "Emissões R12": "Emissões R12",
+            "Meta emissões": "Meta emissões",
+            "Eficiência energética R12": "Eficiência R12",
+            "Meta eficiência energética": "Meta eficiência"
+        })
+    else:
+        metas_pdf = pd.DataFrame()
+    return gerar_pdf(
+        "Dashboard Energia e CO₂",
+        f"Referência R12: {r12_mes.strftime('%m/%Y')} | I-REC: {'considerado' if usar_irec else 'não considerado'}",
+        [
+            ("KPIs principais", kpis),
+            ("Resultado R12 por site", por_site),
+            ("Evolução de metas — últimos 12 pontos", metas_pdf),
+            ("Tabela executiva", tabela.drop(columns=["_grupo"], errors="ignore")),
+        ],
+    )
+
+
+
+def energia_home_kpis(db):
+    """Mostra apenas as variações executivas de energia na tela inicial."""
+    section("Indicadores de energia e emissões")
+    for base in range(0, 4, 4):
+        cols = st.columns(4)
+        for c, (lab, val, help_) in zip(cols, energia_home_kpi_cards(db)[base:base+4]):
+            with c:
+                kpi_card(lab, val, help_)
 
 # ============================================================
 # 11. Componentes de UI
@@ -650,18 +785,29 @@ def df_pac_ehs(db,ids):
 # ============================================================
 # 12. Páginas comuns
 # ============================================================
+
 def dashboard_integrado(db,u):
     ids=visible_site_ids(u,db); update_vencidos(db)
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all()
     auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).all()
     conf=[calcular_conformidade_ehs(db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()) for a in auds]
-    vals=[len(ms),sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Não conforme"),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count(),db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(),f"{round(sum(conf)/len(conf),1) if conf else 0}%",db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(),db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count()]
-    labs=["Total de máquinas","Máquinas não conformes","PACs de máquinas vencidos","PACs de máquinas abertos","Auditorias em andamento","Conformidade média EHS","PACs EHS vencidos","NC críticas EHS"]
+    cards = [
+        ("Máquinas • Total de máquinas", len(ms), "Sustentação de Proteções de Máquinas"),
+        ("Máquinas • Não conformes", sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Não conforme"), "Sustentação de Proteções de Máquinas"),
+        ("Máquinas • PACs vencidos", db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(), "Sustentação de Proteções de Máquinas"),
+        ("Máquinas • PACs abertos", db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count(), "Sustentação de Proteções de Máquinas"),
+        ("Auditoria EHS • Em andamento", db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(), "Auditoria Cruzada"),
+        ("Auditoria EHS • Conformidade média", f"{round(sum(conf)/len(conf),1) if conf else 0}%", "Auditoria Cruzada"),
+        ("Auditoria EHS • PACs vencidos", db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(), "Auditoria Cruzada"),
+        ("Auditoria EHS • NC críticas", db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count(), "Auditoria Cruzada"),
+    ]
+    cards.extend(energia_home_kpi_cards(db))
     section("Visão geral integrada")
-    for chunk in [range(4),range(4,8)]:
+    for base in range(0,len(cards),4):
         cols=st.columns(4)
-        for c,i in zip(cols,chunk):
-            with c: kpi_card(labs[i],vals[i])
+        for c,(lab,val,help_) in zip(cols,cards[base:base+4]):
+            with c:
+                kpi_card(lab,val,help_)
     alerts=[]
     for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Vencida","Aberta","Em andamento"])).limit(5): 
         if p.status=="Vencida" or p.classificacao=="Crítico": alerts.append({"Módulo":"Proteções de Máquinas","Tipo":p.classificacao,"Site":site_code(db,p.site_id),"Descrição":(p.descricao_desvio or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
@@ -672,7 +818,6 @@ def dashboard_integrado(db,u):
         st.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum alerta crítico ou vencido identificado.")
-    energia_home_kpis(db)
 
 def home_page(db,u):
     header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas e Controle de Energia e Emissões em uma única aplicação")
@@ -3619,19 +3764,22 @@ def energia_df_kpis(df, r12_mes, usar_irec=False):
     ]
     return pd.DataFrame(rows, columns=["Indicador", "Valor"])
 
+
 def energia_dash_filters(df, prefix="energia"):
     if df.empty:
         return df, None, False
     section("Filtros")
     min_date = min(df["Mês"])
     max_date = max(df["Mês"])
-    fy_opts = ["Todos", "FY19", "FY24", "FY25", "FY26", "Custom"]
+    fy_data = sorted(df["fiscal_year"].dropna().unique().tolist(), key=lambda x: int(str(x).replace("FY","")) if str(x).replace("FY","").isdigit() else 999)
+    fy_opts = ["Todos"] + fy_data + ["Custom"]
     c1,c2,c3,c4 = st.columns(4)
-    fy = c1.selectbox("Fiscal Year", fy_opts, index=fy_opts.index("FY26") if "FY26" in set(df["fiscal_year"]) else 0, key=f"{prefix}_fy")
+    default_fy = ["FY26"] if "FY26" in fy_data else (["Todos"] if fy_data else [])
+    fys = c1.multiselect("Fiscal Year", fy_opts, default=default_fy, key=f"{prefix}_fy")
     data_ini = c2.date_input("Período inicial", min_date, key=f"{prefix}_ini")
     data_fim = c3.date_input("Período final", max_date, key=f"{prefix}_fim")
     r12_opts = sorted(df["Mês"].unique())
-    default_r12 = as_date(energia_param(SessionLocal(), "mes_referencia_r12", max_date)) if False else max_date
+    default_r12 = energia_default_r12_mes(df) or max_date
     r12_idx = r12_opts.index(default_r12) if default_r12 in r12_opts else len(r12_opts)-1
     r12_mes = c4.selectbox("Mês de referência R12", r12_opts, index=r12_idx, format_func=lambda d: d.strftime("%b/%Y"), key=f"{prefix}_r12")
     c5,c6,c7,c8 = st.columns(4)
@@ -3640,8 +3788,9 @@ def energia_dash_filters(df, prefix="energia"):
     visao = c7.selectbox("Visão", ["Site", "Grupo", "LAG"], key=f"{prefix}_visao")
     usar_irec = c8.toggle("Considerar I-REC", value=True, key=f"{prefix}_irec")
     f = df.copy()
-    if fy and fy not in ["Todos", "Custom"]:
-        f = f[f["fiscal_year"] == fy]
+    selected_fys = [fy for fy in (fys or []) if fy not in ["Todos", "Custom"]]
+    if selected_fys and "Todos" not in (fys or []):
+        f = f[f["fiscal_year"].isin(selected_fys)]
     if data_ini:
         f = f[pd.to_datetime(f["Mês"]) >= pd.to_datetime(data_ini)]
     if data_fim:
@@ -3651,6 +3800,7 @@ def energia_dash_filters(df, prefix="energia"):
     if grupos and "LAG" not in grupos:
         f = f[f["Grupo"].isin(grupos)]
     return f, r12_mes, usar_irec
+
 
 def energia_dashboard(db,u):
     header("Controle de Energia e Emissões", "Consumo elétrico, gás natural, CO₂, custos, Actual Hours, R12, FY e I-REC")
@@ -3703,12 +3853,35 @@ def energia_dashboard(db,u):
         r12 = f[(pd.to_datetime(f["Mês"]) >= pd.to_datetime(ref_ini)) & (pd.to_datetime(f["Mês"]) <= pd.to_datetime(r12_mes))]
         r12_site = r12.groupby("Site", as_index=False).agg({"consumo_total_kwh":"sum", "emissao_total_tco2e":"sum", "custo_total_brl":"sum", "actual_hours":"sum"})
         r12_site["eficiencia_energetica"] = r12_site.apply(lambda r: r["consumo_total_kwh"]/r["actual_hours"] if r["actual_hours"] else None, axis=1)
-        st.plotly_chart(px.bar(r12_site.sort_values("consumo_total_kwh", ascending=False), x="Site", y="consumo_total_kwh", text="consumo_total_kwh", title="Consumo total R12 por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+        fig = px.bar(r12_site.sort_values("consumo_total_kwh", ascending=False), x="Site", y="consumo_total_kwh", text="consumo_total_kwh", title="Consumo total R12 por site").update_layout(template="plotly_white", yaxis_title="kWh")
+        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
     c5, c6 = st.columns(2)
     with c5:
-        st.plotly_chart(px.bar(r12_site.sort_values("custo_total_brl", ascending=False), x="Site", y="custo_total_brl", text="custo_total_brl", title="Custo total R12 por site").update_layout(template="plotly_white", yaxis_title="BRL"), use_container_width=True)
+        fig = px.bar(r12_site.sort_values("custo_total_brl", ascending=False), x="Site", y="custo_total_brl", text="custo_total_brl", title="Custo total R12 por site").update_layout(template="plotly_white", yaxis_title="BRL")
+        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
     with c6:
-        st.plotly_chart(px.bar(r12_site.sort_values("eficiencia_energetica", ascending=True), x="Site", y="eficiencia_energetica", text="eficiencia_energetica", title="Eficiência energética R12 por site — menor é melhor").update_layout(template="plotly_white", yaxis_title="kWh/Actual Hour"), use_container_width=True)
+        fig = px.bar(r12_site.sort_values("eficiencia_energetica", ascending=True), x="Site", y="eficiencia_energetica", text="eficiencia_energetica", title="Eficiência energética R12 por site — menor é melhor").update_layout(template="plotly_white", yaxis_title="kWh/Actual Hour")
+        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+
+    section("Metas ao longo do tempo")
+    df_scope = df.copy()
+    sites_sel = st.session_state.get("energia_dash_sites", [])
+    grupos_sel = st.session_state.get("energia_dash_grupos", [])
+    if sites_sel:
+        df_scope = df_scope[df_scope["Site"].isin(sites_sel)]
+    if grupos_sel and "LAG" not in grupos_sel:
+        df_scope = df_scope[df_scope["Grupo"].isin(grupos_sel)]
+    metas = energia_tendencia_metas(df_scope, usar_irec, db)
+    if metas.empty:
+        empty_state("Sem dados suficientes para gerar a tendência de metas.")
+    else:
+        c7, c8 = st.columns(2)
+        with c7:
+            emis_meta = metas[["Mês","Emissões R12","Meta emissões"]].melt(id_vars="Mês", var_name="Série", value_name="tCO₂e")
+            st.plotly_chart(px.line(emis_meta, x="Mês", y="tCO₂e", color="Série", markers=True, title="Emissões R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
+        with c8:
+            eff_meta = metas[["Mês","Eficiência energética R12","Meta eficiência energética"]].melt(id_vars="Mês", var_name="Série", value_name="kWh/Actual Hour")
+            st.plotly_chart(px.line(eff_meta, x="Mês", y="kWh/Actual Hour", color="Série", markers=True, title="Eficiência energética R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
 
     section("Exportação")
     tabela_exec = energia_executive_table(db, "Emissões de CO₂ considerando I-REC" if usar_irec else "Emissões de CO₂", r12_mes, usar_irec)
@@ -3819,7 +3992,9 @@ def energia_tabela_executiva_page(db,u):
     metrica = c1.selectbox("Métrica", metricas, index=metricas.index("Emissões de CO₂ considerando I-REC"))
     usar_irec = c2.toggle("Considerar I-REC", value=True)
     r12_opts = sorted(df["Mês"].unique())
-    r12_mes = c3.selectbox("Mês R12/YTD", r12_opts, index=len(r12_opts)-1, format_func=lambda d: d.strftime("%b/%Y"))
+    default_r12 = energia_default_r12_mes(df) or max(r12_opts)
+    r12_idx = r12_opts.index(default_r12) if default_r12 in r12_opts else len(r12_opts)-1
+    r12_mes = c3.selectbox("Mês R12/YTD", r12_opts, index=r12_idx, format_func=lambda d: d.strftime("%b/%Y"))
     tabela = energia_executive_table(db, metrica, r12_mes, usar_irec)
     subt = "Emissões de energia elétrica zeradas; emissões de gás natural mantidas." if usar_irec else "Sem abatimento de emissões por I-REC."
     st.caption(subt)
@@ -3852,6 +4027,7 @@ def energia_parametros_page(db,u):
     df = pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in ps])
     st.dataframe(df, use_container_width=True, hide_index=True)
 
+
 def energia_relatorios_page(db,u):
     header("Relatórios Energia", "Exportações completas do módulo de energia e emissões")
     df_cons = energia_consolidado(db)
@@ -3860,7 +4036,7 @@ def energia_relatorios_page(db,u):
     if df_cons.empty:
         empty_state("Sem dados para exportar.")
         return
-    r12_mes = max(df_cons["Mês"])
+    r12_mes = energia_default_r12_mes(df_cons) or max(df_cons["Mês"])
     tabela = energia_executive_table(db, "Emissões de CO₂ considerando I-REC", r12_mes, True)
     kpis = energia_df_kpis(df_cons, r12_mes, True)
     prem = pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in db.query(EnergiaParametro).order_by(EnergiaParametro.chave).all()])
@@ -3869,6 +4045,7 @@ def energia_relatorios_page(db,u):
         "emissao_total_tco2e":"sum", "emissao_total_com_irec_tco2e":"sum",
         "custo_total_brl":"sum", "actual_hours":"sum"
     })
+    section("Relatório completo")
     download_excel_button("Baixar relatório completo Excel", "relatorio_completo_energia.xlsx", {
         "Base_Energia": df_reg,
         "Base_Actual_Hours": df_hrs,
@@ -3878,6 +4055,10 @@ def energia_relatorios_page(db,u):
         "Premissas": prem,
         "Dados_Graficos": dados_graficos,
     })
+    pdf_dashboard = energia_pdf_dashboard(db, r12_mes, True)
+    download_pdf_button("Baixar todo o dashboard em PDF", "dashboard_energia_co2.pdf", pdf_dashboard)
+
+    section("Bases individuais")
     c1,c2,c3 = st.columns(3)
     with c1:
         download_excel_button("Base energia", "base_energia.xlsx", {"Base_Energia": df_reg})
