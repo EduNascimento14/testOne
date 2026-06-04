@@ -114,6 +114,34 @@ NR12_SUBMODULOS = {
         "paginas": ["Logs do Sistema", "Base de Checklists de Proteções", "Regras de Frequência de Inspeções"],
     },
 }
+EHS_HOME_PAGE = "Submódulos da Auditoria Cruzada"
+EHS_SUBMODULOS = {
+    "Gestão e Performance": {
+        "icone": "📊",
+        "descricao": "Indicadores executivos, maturidade, conformidade e relatórios consolidados da auditoria cruzada.",
+        "cor": "#7c3aed",
+        "paginas": ["Dashboard Auditoria Cruzada", "Relatórios Auditoria Cruzada"],
+    },
+    "Planejamento e Execução": {
+        "icone": "📋",
+        "descricao": "Planejamento dos ciclos de auditoria, execução do checklist e registro das evidências.",
+        "cor": "#2563eb",
+        "paginas": ["Planejamento de Auditorias", "Checklist Diretrizes de EHS"],
+    },
+    "Gestão de Gaps e Planos de Ação": {
+        "icone": "⚠️",
+        "descricao": "Tratamento dos gaps encontrados, planos de ação, prazos, responsáveis e eficácia.",
+        "cor": "#dc2626",
+        "paginas": ["PAC Auditoria Cruzada"],
+    },
+    "Administração e Governança": {
+        "icone": "⚙️",
+        "descricao": "Base editável do checklist EHS, versionamento e trilha de auditoria do sistema.",
+        "cor": "#475569",
+        "paginas": ["Base do Checklist EHS", "Logs do Sistema"],
+    },
+}
+
 RISCOS_MAQUINA = ["Apreciação de risco não realizada", "Desprezível", "Atenção", "Significativo", "Alto", "Extremo"]
 STATUS_COLOR_MAP = {
     "Conforme": "#16a34a",
@@ -305,7 +333,12 @@ def hide_sidebar_on_home():
     """
     mod = st.session_state.get("modulo", "home")
     page_nr12 = st.session_state.get("page_nr12", NR12_HOME_PAGE if "NR12_HOME_PAGE" in globals() else "Submódulos da Sustentação")
-    ocultar = (mod == "home") or (mod == "nr12" and page_nr12 == (NR12_HOME_PAGE if "NR12_HOME_PAGE" in globals() else "Submódulos da Sustentação"))
+    page_ehs = st.session_state.get("page_ehs", EHS_HOME_PAGE if "EHS_HOME_PAGE" in globals() else "Submódulos da Auditoria Cruzada")
+    ocultar = (
+        (mod == "home")
+        or (mod == "nr12" and page_nr12 == (NR12_HOME_PAGE if "NR12_HOME_PAGE" in globals() else "Submódulos da Sustentação"))
+        or (mod == "ehs" and page_ehs == (EHS_HOME_PAGE if "EHS_HOME_PAGE" in globals() else "Submódulos da Auditoria Cruzada"))
+    )
     if ocultar:
         st.markdown("""
         <style>
@@ -1270,8 +1303,9 @@ def home_page(db,u):
         module_card("Auditoria Cruzada de Diretrizes de EHS","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.",ac["icon"],ac["border"],ac["bg"])
         if st.button("Acessar Auditoria Cruzada",use_container_width=True):
             st.session_state.modulo="ehs"
-            st.session_state.page_ehs="Dashboard Auditoria Cruzada"
-            st.session_state.nav_ehs="Dashboard Auditoria Cruzada"
+            st.session_state.page_ehs=EHS_HOME_PAGE
+            st.session_state.nav_ehs=EHS_HOME_PAGE
+            st.session_state.submodulo_ehs=""
             st.rerun()
 
 def nr12_submodulos_home(db,u):
@@ -2232,6 +2266,38 @@ def gerar_checklist_automatico_ehs(db,auditoria_id,commit=True):
             if not db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=auditoria_id,requisito_id=r.id).first():
                 db.add(RespostaAuditoriaEHS(auditoria_id=auditoria_id,requisito_id=r.id,aplicavel=True,status="Conforme",nota_maturidade=3,versao_checklist_id=None,pergunta_snapshot=r.pergunta,criticidade_snapshot=r.criticidade,evidencia_esperada_snapshot=r.evidencia_esperada,gera_pac_automatico_snapshot=getattr(r,"gera_pac_automatico",False)))
     if commit: db.commit()
+
+def ehs_submodulos_home(db,u):
+    header("Auditoria Cruzada de Diretrizes EHS", "Escolha um submódulo para planejar, executar, tratar gaps ou governar a auditoria cruzada.")
+    top_back_col, top_spacer_col = st.columns([1.1, 5])
+    with top_back_col:
+        if st.button("⬅️ Voltar para página inicial", key="ehs_home_voltar_inicio", use_container_width=True):
+            st.session_state.modulo = "home"
+            st.rerun()
+    section("Submódulos")
+    nomes = list(EHS_SUBMODULOS.keys())
+    for base in range(0, len(nomes), 2):
+        cols = st.columns(2)
+        for col, nome in zip(cols, nomes[base:base+2]):
+            cfg = EHS_SUBMODULOS[nome]
+            with col:
+                submodule_card(nome, cfg["descricao"], cfg["icone"], cfg["cor"])
+                if st.button(f"Acessar {nome}", key=f"btn_submodulo_ehs_{nome}", use_container_width=True):
+                    paginas_validas = [p for p in cfg["paginas"] if p != "Logs do Sistema" or can_admin(u)]
+                    destino = paginas_validas[0] if paginas_validas else EHS_HOME_PAGE
+                    st.session_state.submodulo_ehs = nome
+                    st.session_state.page_ehs = destino
+                    st.session_state.nav_ehs = destino
+                    st.rerun()
+    section("Resumo rápido")
+    ids = visible_site_ids(u, db)
+    da = df_aud(db, ids)
+    dp = df_pac_ehs(db, ids)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Auditorias", 0 if da.empty else len(da))
+    c2.metric("Em andamento", 0 if da.empty else int((da["Status"] == "Em andamento").sum()))
+    c3.metric("PACs abertos", 0 if dp.empty else int(dp["Status"].isin(["Aberta", "Em andamento", "Aguardando validação"]).sum()))
+    c4.metric("PACs vencidos", 0 if dp.empty else int((dp["Status"] == "Vencida").sum()))
 
 def ehs_dashboard(db,u):
     header("Auditoria Cruzada de Diretrizes de EHS","Dashboard de planejamento, conformidade, maturidade e PAC")
@@ -4988,7 +5054,11 @@ def render_sidebar(db,u):
     mod=st.session_state.get("modulo","home")
     # A tela inicial e a tela intermediária de Sustentação funcionam como landing pages.
     # Nelas, a navegação deve ocorrer pelos cards centrais, mantendo a barra lateral oculta.
-    if mod=="home" or (mod=="nr12" and st.session_state.get("page_nr12",NR12_HOME_PAGE)==NR12_HOME_PAGE):
+    if (
+        mod=="home"
+        or (mod=="nr12" and st.session_state.get("page_nr12",NR12_HOME_PAGE)==NR12_HOME_PAGE)
+        or (mod=="ehs" and st.session_state.get("page_ehs",EHS_HOME_PAGE)==EHS_HOME_PAGE)
+    ):
         return
     st.sidebar.markdown("### Navegação")
     if st.sidebar.button("🏠 Voltar para a tela inicial",use_container_width=True):
@@ -5032,17 +5102,41 @@ def render_sidebar(db,u):
                 st.session_state.page_nr12=NR12_HOME_PAGE
                 st.rerun()
     elif mod=="ehs":
-        pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist Diretrizes de EHS","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"]
-        if can_admin(u):
-            pages.append("Logs do Sistema")
-        current=st.session_state.get("page_ehs",pages[0])
-        if current not in pages:
-            current=pages[0]
+        all_pages=[EHS_HOME_PAGE]
+        for nome,cfg in EHS_SUBMODULOS.items():
+            for p in cfg["paginas"]:
+                if p=="Logs do Sistema" and not can_admin(u):
+                    continue
+                if p not in all_pages:
+                    all_pages.append(p)
+        current=st.session_state.get("page_ehs",EHS_HOME_PAGE)
+        if current not in all_pages:
+            current=EHS_HOME_PAGE
             st.session_state.page_ehs=current
-        if st.session_state.get("nav_ehs") not in pages:
-            st.session_state.nav_ehs=current
-        selected=st.sidebar.radio("Auditoria Cruzada de Diretrizes de EHS",pages,key="nav_ehs")
-        st.session_state.page_ehs=selected
+        if current==EHS_HOME_PAGE:
+            st.sidebar.info("Selecione um submódulo na tela principal.")
+            selected=st.sidebar.radio("Auditoria Cruzada de Diretrizes EHS",[EHS_HOME_PAGE],key="nav_ehs_home")
+            st.session_state.page_ehs=selected
+        else:
+            sub_atual=None
+            for nome,cfg in EHS_SUBMODULOS.items():
+                if current in cfg["paginas"]:
+                    sub_atual=nome
+                    break
+            sub_opcoes=list(EHS_SUBMODULOS.keys())
+            idx=sub_opcoes.index(sub_atual) if sub_atual in sub_opcoes else 0
+            sub=st.sidebar.selectbox("Submódulo",sub_opcoes,index=idx,key="submodulo_ehs")
+            pages=[p for p in EHS_SUBMODULOS[sub]["paginas"] if p!="Logs do Sistema" or can_admin(u)]
+            if current not in pages:
+                current=pages[0] if pages else EHS_HOME_PAGE
+                st.session_state.page_ehs=current
+            selected=st.sidebar.radio(sub,pages,key="nav_ehs")
+            st.session_state.page_ehs=selected
+            if st.sidebar.button("⬅️ Voltar aos submódulos",use_container_width=True,key="btn_voltar_submodulos_ehs"):
+                # Não atualizar st.session_state.nav_ehs aqui: essa chave pertence a um widget
+                # já instanciado nesta execução e causaria StreamlitAPIException.
+                st.session_state.page_ehs=EHS_HOME_PAGE
+                st.rerun()
     elif mod=="energia":
         pages=["Dashboard Energia e CO₂","Atualizar Base","Actual Hours","Tabela Executiva","Base Consolidada","Relatórios Energia","Parâmetros"]
         current=st.session_state.get("page_energia",pages[0])
@@ -5075,7 +5169,18 @@ def route(db,u):
         page=st.session_state.get("page_nr12",NR12_HOME_PAGE)
         paginas.get(page,nr12_submodulos_home)(db,u)
     elif mod=="ehs":
-        {"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist Diretrizes de EHS":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios,"Logs do Sistema":logs_sistema_page}[st.session_state.get("page_ehs","Dashboard Auditoria Cruzada")](db,u)
+        paginas={
+            EHS_HOME_PAGE: ehs_submodulos_home,
+            "Dashboard Auditoria Cruzada": ehs_dashboard,
+            "Planejamento de Auditorias": ehs_planejamento,
+            "Checklist Diretrizes de EHS": ehs_checklist,
+            "PAC Auditoria Cruzada": ehs_pac,
+            "Base do Checklist EHS": ehs_base_checklist,
+            "Relatórios Auditoria Cruzada": ehs_relatorios,
+            "Logs do Sistema": logs_sistema_page,
+        }
+        page=st.session_state.get("page_ehs",EHS_HOME_PAGE)
+        paginas.get(page,ehs_submodulos_home)(db,u)
     elif mod=="energia":
         {"Dashboard Energia e CO₂":energia_dashboard,"Atualizar Base":energia_atualizar_base,"Actual Hours":energia_actual_hours_page,"Tabela Executiva":energia_tabela_executiva_page,"Base Consolidada":energia_base_consolidada_page,"Relatórios Energia":energia_relatorios_page,"Parâmetros":energia_parametros_page}[st.session_state.get("page_energia","Dashboard Energia e CO₂")](db,u)
 
@@ -5089,7 +5194,12 @@ def main():
     try:
         mod_atual = st.session_state.get("modulo", "home")
         page_nr12_atual = st.session_state.get("page_nr12", NR12_HOME_PAGE)
-        tela_landing = (mod_atual == "home") or (mod_atual == "nr12" and page_nr12_atual == NR12_HOME_PAGE)
+        page_ehs_atual = st.session_state.get("page_ehs", EHS_HOME_PAGE)
+        tela_landing = (
+            (mod_atual == "home")
+            or (mod_atual == "nr12" and page_nr12_atual == NR12_HOME_PAGE)
+            or (mod_atual == "ehs" and page_ehs_atual == EHS_HOME_PAGE)
+        )
         location="main" if tela_landing else "sidebar"
         u=user_selector(db,location=location)
         render_sidebar(db,u)
