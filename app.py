@@ -142,6 +142,41 @@ EHS_SUBMODULOS = {
     },
 }
 
+ENERGIA_HOME_PAGE = "Submódulos de Energia e Emissões"
+ENERGIA_SUBMODULOS = {
+    "Gestão e Performance": {
+        "icone": "📊",
+        "descricao": "Dashboard executivo, indicadores, CO₂, eficiência energética e tabela executiva.",
+        "cor": "#16a34a",
+        "paginas": ["Dashboard Energia e CO₂", "Tabela Executiva"],
+    },
+    "Atualização de Bases": {
+        "icone": "📥",
+        "descricao": "Importação da base de energia/gás e manutenção dos Actual Hours.",
+        "cor": "#2563eb",
+        "paginas": ["Atualizar Base", "Actual Hours"],
+    },
+    "Análise e Consolidação": {
+        "icone": "🔎",
+        "descricao": "Consulta da base consolidada mensal com consumo, emissões, custos, horas e R12.",
+        "cor": "#0f766e",
+        "paginas": ["Base Consolidada"],
+    },
+    "Relatórios e Exportações": {
+        "icone": "📤",
+        "descricao": "Exportações do módulo, relatório completo em Excel e dashboard em PDF.",
+        "cor": "#ea580c",
+        "paginas": ["Relatórios Energia"],
+    },
+    "Administração e Parâmetros": {
+        "icone": "⚙️",
+        "descricao": "Fatores de emissão, metas, conversões, FY atual e mês de referência padrão.",
+        "cor": "#475569",
+        "paginas": ["Parâmetros"],
+    },
+}
+
+
 RISCOS_MAQUINA = ["Apreciação de risco não realizada", "Desprezível", "Atenção", "Significativo", "Alto", "Extremo"]
 STATUS_COLOR_MAP = {
     "Conforme": "#16a34a",
@@ -334,10 +369,12 @@ def hide_sidebar_on_home():
     mod = st.session_state.get("modulo", "home")
     page_nr12 = st.session_state.get("page_nr12", NR12_HOME_PAGE if "NR12_HOME_PAGE" in globals() else "Submódulos da Sustentação")
     page_ehs = st.session_state.get("page_ehs", EHS_HOME_PAGE if "EHS_HOME_PAGE" in globals() else "Submódulos da Auditoria Cruzada")
+    page_energia = st.session_state.get("page_energia", ENERGIA_HOME_PAGE if "ENERGIA_HOME_PAGE" in globals() else "Submódulos de Energia e Emissões")
     ocultar = (
         (mod == "home")
         or (mod == "nr12" and page_nr12 == (NR12_HOME_PAGE if "NR12_HOME_PAGE" in globals() else "Submódulos da Sustentação"))
         or (mod == "ehs" and page_ehs == (EHS_HOME_PAGE if "EHS_HOME_PAGE" in globals() else "Submódulos da Auditoria Cruzada"))
+        or (mod == "energia" and page_energia == (ENERGIA_HOME_PAGE if "ENERGIA_HOME_PAGE" in globals() else "Submódulos de Energia e Emissões"))
     )
     if ocultar:
         st.markdown("""
@@ -1295,8 +1332,9 @@ def home_page(db,u):
         module_card("Controle de Energia e Emissões","Consumo de energia, gás natural, CO₂, gastos, eficiência energética, R12, FY e análise I-REC.",ec["icon"],ec["border"],ec["bg"])
         if st.button("Acessar Controle de Energia",use_container_width=True):
             st.session_state.modulo="energia"
-            st.session_state.page_energia="Dashboard Energia e CO₂"
-            st.session_state.nav_energia="Dashboard Energia e CO₂"
+            st.session_state.page_energia=ENERGIA_HOME_PAGE
+            st.session_state.nav_energia=ENERGIA_HOME_PAGE
+            st.session_state.submodulo_energia=""
             st.rerun()
     with c2:
         ac=MODULO_COLOR_MAP["auditoria"]
@@ -4926,6 +4964,48 @@ def energia_dash_filters(df, prefix="energia"):
     return f, r12_mes, usar_irec
 
 
+def energia_submodulos_home(db,u):
+    header("Controle de Energia e Emissões", "Escolha um submódulo para analisar, atualizar bases, consolidar dados, exportar relatórios ou configurar parâmetros.")
+    top_back_col, top_spacer_col = st.columns([1.1, 5])
+    with top_back_col:
+        if st.button("⬅️ Voltar para página inicial", key="energia_home_voltar_inicio", use_container_width=True):
+            st.session_state.modulo = "home"
+            st.rerun()
+    section("Submódulos")
+    nomes = list(ENERGIA_SUBMODULOS.keys())
+    for base in range(0, len(nomes), 2):
+        cols = st.columns(2)
+        for col, nome in zip(cols, nomes[base:base+2]):
+            cfg = ENERGIA_SUBMODULOS[nome]
+            with col:
+                submodule_card(nome, cfg["descricao"], cfg["icone"], cfg["cor"])
+                if st.button(f"Acessar {nome}", key=f"btn_submodulo_energia_{nome}", use_container_width=True):
+                    destino = cfg["paginas"][0] if cfg["paginas"] else ENERGIA_HOME_PAGE
+                    st.session_state.submodulo_energia = nome
+                    st.session_state.page_energia = destino
+                    st.session_state.nav_energia = destino
+                    st.rerun()
+    section("Resumo rápido")
+    try:
+        df = energia_consolidado(db)
+        c1, c2, c3, c4 = st.columns(4)
+        if df.empty:
+            c1.metric("Meses consolidados", 0)
+            c2.metric("Sites com dados", 0)
+            c3.metric("CO₂ R12", "—")
+            c4.metric("Eficiência R12", "—")
+        else:
+            r12_mes = energia_default_r12_mes(df) or max(df["Mês"])
+            kpis = energia_df_kpis(df, r12_mes, True)
+            vals = dict(zip(kpis["Indicador"], kpis["Valor"])) if not kpis.empty else {}
+            c1.metric("Meses consolidados", df["Mês"].nunique())
+            c2.metric("Sites com dados", df["Site"].nunique())
+            c3.metric("CO₂ R12 com I-REC", energia_fmt_val(vals.get("Emissões CO₂ R12 com I-REC tCO₂e"), "numero"))
+            c4.metric("Eficiência R12", energia_fmt_val(vals.get("Eficiência energética R12"), "numero"))
+    except Exception:
+        empty_state("Resumo de energia indisponível no momento.")
+
+
 def energia_dashboard(db,u):
     header("Controle de Energia e Emissões", "Consumo elétrico, gás natural, CO₂, custos, Actual Hours, R12, FY e I-REC")
     df = energia_consolidado(db)
@@ -5203,6 +5283,7 @@ def render_sidebar(db,u):
         mod=="home"
         or (mod=="nr12" and st.session_state.get("page_nr12",NR12_HOME_PAGE)==NR12_HOME_PAGE)
         or (mod=="ehs" and st.session_state.get("page_ehs",EHS_HOME_PAGE)==EHS_HOME_PAGE)
+        or (mod=="energia" and st.session_state.get("page_energia",ENERGIA_HOME_PAGE)==ENERGIA_HOME_PAGE)
     ):
         return
     st.sidebar.markdown("### Navegação")
@@ -5283,15 +5364,39 @@ def render_sidebar(db,u):
                 st.session_state.page_ehs=EHS_HOME_PAGE
                 st.rerun()
     elif mod=="energia":
-        pages=["Dashboard Energia e CO₂","Atualizar Base","Actual Hours","Tabela Executiva","Base Consolidada","Relatórios Energia","Parâmetros"]
-        current=st.session_state.get("page_energia",pages[0])
-        if current not in pages:
-            current=pages[0]
+        all_pages=[ENERGIA_HOME_PAGE]
+        for nome,cfg in ENERGIA_SUBMODULOS.items():
+            for p in cfg["paginas"]:
+                if p not in all_pages:
+                    all_pages.append(p)
+        current=st.session_state.get("page_energia",ENERGIA_HOME_PAGE)
+        if current not in all_pages:
+            current=ENERGIA_HOME_PAGE
             st.session_state.page_energia=current
-        if st.session_state.get("nav_energia") not in pages:
-            st.session_state.nav_energia=current
-        selected=st.sidebar.radio("Controle de Energia e Emissões",pages,key="nav_energia")
-        st.session_state.page_energia=selected
+        if current==ENERGIA_HOME_PAGE:
+            st.sidebar.info("Selecione um submódulo na tela principal.")
+            selected=st.sidebar.radio("Controle de Energia e Emissões",[ENERGIA_HOME_PAGE],key="nav_energia_home")
+            st.session_state.page_energia=selected
+        else:
+            sub_atual=None
+            for nome,cfg in ENERGIA_SUBMODULOS.items():
+                if current in cfg["paginas"]:
+                    sub_atual=nome
+                    break
+            sub_opcoes=list(ENERGIA_SUBMODULOS.keys())
+            idx=sub_opcoes.index(sub_atual) if sub_atual in sub_opcoes else 0
+            sub=st.sidebar.selectbox("Submódulo",sub_opcoes,index=idx,key="submodulo_energia")
+            pages=ENERGIA_SUBMODULOS[sub]["paginas"]
+            if current not in pages:
+                current=pages[0] if pages else ENERGIA_HOME_PAGE
+                st.session_state.page_energia=current
+            selected=st.sidebar.radio(sub,pages,key="nav_energia")
+            st.session_state.page_energia=selected
+            if st.sidebar.button("⬅️ Voltar aos submódulos",use_container_width=True,key="btn_voltar_submodulos_energia"):
+                # Não atualizar st.session_state.nav_energia aqui: essa chave pertence a um widget
+                # já instanciado nesta execução e causaria StreamlitAPIException.
+                st.session_state.page_energia=ENERGIA_HOME_PAGE
+                st.rerun()
 
 def route(db,u):
     mod=st.session_state.get("modulo","home")
@@ -5328,7 +5433,18 @@ def route(db,u):
         page=st.session_state.get("page_ehs",EHS_HOME_PAGE)
         paginas.get(page,ehs_submodulos_home)(db,u)
     elif mod=="energia":
-        {"Dashboard Energia e CO₂":energia_dashboard,"Atualizar Base":energia_atualizar_base,"Actual Hours":energia_actual_hours_page,"Tabela Executiva":energia_tabela_executiva_page,"Base Consolidada":energia_base_consolidada_page,"Relatórios Energia":energia_relatorios_page,"Parâmetros":energia_parametros_page}[st.session_state.get("page_energia","Dashboard Energia e CO₂")](db,u)
+        paginas={
+            ENERGIA_HOME_PAGE: energia_submodulos_home,
+            "Dashboard Energia e CO₂": energia_dashboard,
+            "Atualizar Base": energia_atualizar_base,
+            "Actual Hours": energia_actual_hours_page,
+            "Tabela Executiva": energia_tabela_executiva_page,
+            "Base Consolidada": energia_base_consolidada_page,
+            "Relatórios Energia": energia_relatorios_page,
+            "Parâmetros": energia_parametros_page,
+        }
+        page=st.session_state.get("page_energia",ENERGIA_HOME_PAGE)
+        paginas.get(page,energia_submodulos_home)(db,u)
 
 # ============================================================
 # 16. main()
@@ -5341,10 +5457,12 @@ def main():
         mod_atual = st.session_state.get("modulo", "home")
         page_nr12_atual = st.session_state.get("page_nr12", NR12_HOME_PAGE)
         page_ehs_atual = st.session_state.get("page_ehs", EHS_HOME_PAGE)
+        page_energia_atual = st.session_state.get("page_energia", ENERGIA_HOME_PAGE)
         tela_landing = (
             (mod_atual == "home")
             or (mod_atual == "nr12" and page_nr12_atual == NR12_HOME_PAGE)
             or (mod_atual == "ehs" and page_ehs_atual == EHS_HOME_PAGE)
+            or (mod_atual == "energia" and page_energia_atual == ENERGIA_HOME_PAGE)
         )
         location="main" if tela_landing else "sidebar"
         u=user_selector(db,location=location)
