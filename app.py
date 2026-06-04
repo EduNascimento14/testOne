@@ -231,32 +231,54 @@ def apply_theme():
     section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"]{color:#f8fafc!important;}
     section[data-testid="stSidebar"] .stCaptionContainer,
     section[data-testid="stSidebar"] small{color:#cbd5e1!important;}
-    section[data-testid="stSidebar"] [data-baseweb="select"] *{color:#111827!important;}
+    /* Controles da sidebar — fundo geral mantido, componentes em azul-slate para melhor contraste */
+    section[data-testid="stSidebar"] [data-baseweb="select"] *{color:#e5edf7!important;}
     section[data-testid="stSidebar"] div[role="radiogroup"] label{
-        background:#e2e8f0!important; border:1px solid #cbd5e1!important;
-        border-radius:14px; padding:.55rem .7rem; margin:.18rem 0;
-        transition:all .18s ease; box-shadow:0 8px 20px rgba(0,0,0,.14);
+        background:linear-gradient(135deg,rgba(30,41,59,.92),rgba(15,23,42,.88))!important;
+        border:1px solid rgba(148,163,184,.30)!important;
+        border-radius:14px; padding:.58rem .72rem; margin:.22rem 0;
+        transition:all .18s ease; box-shadow:0 8px 22px rgba(0,0,0,.20);
     }
     section[data-testid="stSidebar"] div[role="radiogroup"] label *,
     section[data-testid="stSidebar"] div[role="radiogroup"] label p,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label span{color:#0f172a!important;font-weight:800!important;}
+    section[data-testid="stSidebar"] div[role="radiogroup"] label span{
+        color:#e5edf7!important;font-weight:800!important;
+    }
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover{
-        background:#fef3c7!important; border-color:#d9a514!important; transform:translateX(2px);
+        background:linear-gradient(135deg,rgba(51,65,85,.98),rgba(30,41,59,.96))!important;
+        border-color:rgba(245,197,66,.70)!important; transform:translateX(2px);
+        box-shadow:0 10px 24px rgba(0,0,0,.25),0 0 0 1px rgba(245,197,66,.20)!important;
     }
     section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked){
-        background:#fde68a!important; border-color:#d9a514!important; box-shadow:0 0 0 2px rgba(217,165,20,.18),0 10px 24px rgba(0,0,0,.16)!important;
+        background:linear-gradient(135deg,#f5c542,#d9a514)!important;
+        border-color:#f8d96b!important;
+        box-shadow:0 0 0 2px rgba(245,197,66,.20),0 12px 28px rgba(0,0,0,.24)!important;
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) *,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) span{
+        color:#182235!important;font-weight:900!important;
     }
     section[data-testid="stSidebar"] [data-testid="stSelectbox"] label p,
-    section[data-testid="stSidebar"] [data-testid="stRadio"] label p{color:#f8fafc!important;}
-    section[data-testid="stSidebar"] [data-baseweb="select"] > div{background:#f8fafc!important;border-color:#cbd5e1!important;}
-    section[data-testid="stSidebar"] [data-baseweb="select"] *{color:#0f172a!important;}
+    section[data-testid="stSidebar"] [data-testid="stRadio"] label p{color:#dbeafe!important;font-weight:850!important;}
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div{
+        background:linear-gradient(135deg,rgba(30,41,59,.96),rgba(15,23,42,.92))!important;
+        border-color:rgba(148,163,184,.38)!important;
+        box-shadow:0 8px 22px rgba(0,0,0,.20)!important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"] svg{color:#cbd5e1!important;fill:#cbd5e1!important;}
+    section[data-testid="stSidebar"] [data-baseweb="select"] input{color:#e5edf7!important;}
     section[data-testid="stSidebar"] div.stButton>button{
-        background:linear-gradient(135deg,#f8fafc,#ffffff)!important; color:#0f172a!important;
-        border:1px solid rgba(148,163,184,.45)!important; box-shadow:0 10px 24px rgba(0,0,0,.18)!important;
+        background:linear-gradient(135deg,rgba(30,41,59,.96),rgba(15,23,42,.92))!important;
+        color:#e5edf7!important;
+        border:1px solid rgba(148,163,184,.35)!important; box-shadow:0 10px 24px rgba(0,0,0,.22)!important;
+    }
+    section[data-testid="stSidebar"] div.stButton>button:hover{
+        border-color:#f5c542!important;background:linear-gradient(135deg,rgba(51,65,85,.98),rgba(30,41,59,.96))!important;
     }
     section[data-testid="stSidebar"] div.stButton>button *,
     section[data-testid="stSidebar"] div.stButton>button p,
-    section[data-testid="stSidebar"] div.stButton>button span{color:#0f172a!important;}
+    section[data-testid="stSidebar"] div.stButton>button span{color:#e5edf7!important;font-weight:800!important;}
     div.stButton>button,div.stDownloadButton>button{
         border-radius:14px;border:1px solid #d7dde8;background:#fff;font-weight:750;
         box-shadow:0 6px 18px rgba(31,41,55,.07); transition:all .15s ease;
