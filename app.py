@@ -233,13 +233,23 @@ def apply_theme():
     section[data-testid="stSidebar"] small{color:#cbd5e1!important;}
     section[data-testid="stSidebar"] [data-baseweb="select"] *{color:#111827!important;}
     section[data-testid="stSidebar"] div[role="radiogroup"] label{
-        background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.10);
+        background:#e2e8f0!important; border:1px solid #cbd5e1!important;
         border-radius:14px; padding:.55rem .7rem; margin:.18rem 0;
-        transition:all .18s ease; box-shadow:0 8px 20px rgba(0,0,0,.08);
+        transition:all .18s ease; box-shadow:0 8px 20px rgba(0,0,0,.14);
     }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label *,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label p,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label span{color:#0f172a!important;font-weight:800!important;}
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover{
-        background:rgba(245,197,66,.18); border-color:rgba(245,197,66,.45); transform:translateX(2px);
+        background:#fef3c7!important; border-color:#d9a514!important; transform:translateX(2px);
     }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked){
+        background:#fde68a!important; border-color:#d9a514!important; box-shadow:0 0 0 2px rgba(217,165,20,.18),0 10px 24px rgba(0,0,0,.16)!important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSelectbox"] label p,
+    section[data-testid="stSidebar"] [data-testid="stRadio"] label p{color:#f8fafc!important;}
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div{background:#f8fafc!important;border-color:#cbd5e1!important;}
+    section[data-testid="stSidebar"] [data-baseweb="select"] *{color:#0f172a!important;}
     section[data-testid="stSidebar"] div.stButton>button{
         background:linear-gradient(135deg,#f8fafc,#ffffff)!important; color:#0f172a!important;
         border:1px solid rgba(148,163,184,.45)!important; box-shadow:0 10px 24px rgba(0,0,0,.18)!important;
@@ -1244,6 +1254,11 @@ def home_page(db,u):
 
 def nr12_submodulos_home(db,u):
     header(NOME_MODULO_MAQUINAS, "Escolha um submódulo para visualizar, editar ou governar as informações de sustentação.")
+    top_back_col, top_spacer_col = st.columns([1.1, 5])
+    with top_back_col:
+        if st.button("⬅️ Voltar para página inicial", key="nr12_home_voltar_inicio", use_container_width=True):
+            st.session_state.modulo = "home"
+            st.rerun()
     section("Submódulos")
     nomes=list(NR12_SUBMODULOS.keys())
     for base in range(0, len(nomes), 2):
@@ -4990,8 +5005,9 @@ def render_sidebar(db,u):
             selected=st.sidebar.radio(sub,pages,key="nav_nr12")
             st.session_state.page_nr12=selected
             if st.sidebar.button("⬅️ Voltar aos submódulos",use_container_width=True):
+                # Não atualizar st.session_state.nav_nr12 aqui: essa chave pertence a um widget
+                # já instanciado nesta execução e causaria StreamlitAPIException.
                 st.session_state.page_nr12=NR12_HOME_PAGE
-                st.session_state.nav_nr12=NR12_HOME_PAGE
                 st.rerun()
     elif mod=="ehs":
         pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist Diretrizes de EHS","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"]
