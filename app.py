@@ -264,8 +264,17 @@ def apply_theme():
     .check-category{margin:1rem 0 .35rem;padding:.55rem .8rem;border-radius:14px;background:#eef2ff;color:#1e293b;font-weight:900;border:1px solid #dbe3ff}
     </style>""", unsafe_allow_html=True)
 def hide_sidebar_on_home():
-    """Na tela inicial, a plataforma se comporta como landing page, sem menu lateral."""
-    if st.session_state.get("modulo", "home") == "home":
+    """Oculta a barra lateral nas telas de escolha principal.
+
+    A tela inicial geral e a tela intermediária de submódulos da Sustentação de
+    Proteções de Máquinas devem se comportar como landing pages, sem menu lateral.
+    Depois que o usuário escolhe um submódulo/página interna, a barra lateral volta
+    a aparecer normalmente.
+    """
+    mod = st.session_state.get("modulo", "home")
+    page_nr12 = st.session_state.get("page_nr12", NR12_HOME_PAGE if "NR12_HOME_PAGE" in globals() else "Submódulos da Sustentação")
+    ocultar = (mod == "home") or (mod == "nr12" and page_nr12 == (NR12_HOME_PAGE if "NR12_HOME_PAGE" in globals() else "Submódulos da Sustentação"))
+    if ocultar:
         st.markdown("""
         <style>
         section[data-testid="stSidebar"]{display:none!important;}
@@ -4940,7 +4949,9 @@ def energia_relatorios_page(db,u):
 
 def render_sidebar(db,u):
     mod=st.session_state.get("modulo","home")
-    if mod=="home":
+    # A tela inicial e a tela intermediária de Sustentação funcionam como landing pages.
+    # Nelas, a navegação deve ocorrer pelos cards centrais, mantendo a barra lateral oculta.
+    if mod=="home" or (mod=="nr12" and st.session_state.get("page_nr12",NR12_HOME_PAGE)==NR12_HOME_PAGE):
         return
     st.sidebar.markdown("### Navegação")
     if st.sidebar.button("🏠 Voltar para a tela inicial",use_container_width=True):
@@ -5038,7 +5049,10 @@ def main():
         st.session_state.modulo="home"
     apply_theme(); hide_sidebar_on_home(); init_db(); db=SessionLocal()
     try:
-        location="main" if st.session_state.get("modulo","home")=="home" else "sidebar"
+        mod_atual = st.session_state.get("modulo", "home")
+        page_nr12_atual = st.session_state.get("page_nr12", NR12_HOME_PAGE)
+        tela_landing = (mod_atual == "home") or (mod_atual == "nr12" and page_nr12_atual == NR12_HOME_PAGE)
+        location="main" if tela_landing else "sidebar"
         u=user_selector(db,location=location)
         render_sidebar(db,u)
         route(db,u)
