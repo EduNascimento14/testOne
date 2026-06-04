@@ -1,7 +1,7 @@
 
 # -*- coding: utf-8 -*-
 """
-Plataforma Integrada EHS — Proteções de Máquinas e Auditorias Cruzadas
+Plataforma Integrada EHS — NR-12 e Auditorias Cruzadas
 Arquivo monolítico Streamlit. Renomeie para plataforma_ehs_integrada.py e rode:
 streamlit run plataforma_ehs_integrada.py
 """
@@ -9,7 +9,7 @@ streamlit run plataforma_ehs_integrada.py
 # ============================================================
 # 1. Imports
 # ============================================================
-import os, io, logging
+import os, io, re, math, unicodedata, logging
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -32,11 +32,11 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///plataforma_ehs_integrada.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
 # ============================================================
 # 3. Constantes
 # ============================================================
+# Camada de nomenclatura visual — mantém nomes técnicos internos para compatibilidade de banco/código.
 NOME_MODULO_MAQUINAS = "Sustentação de Proteções de Máquinas"
 NOME_DASH_MAQUINAS = "Dashboard de Proteções de Máquinas"
 NOME_STATUS_MAQUINA = "Status de Proteção"
@@ -46,15 +46,20 @@ NOME_CHECKLISTS_MAQUINAS = "Checklists e Inspeções de Proteções de Máquinas
 NOME_RELATORIOS_MAQUINAS = "Relatórios de Proteções de Máquinas"
 NOME_TERMO_MAQUINAS = "Termo de Garantia de Proteções de Máquinas"
 
+SITES_PADRAO = ["SJC", "DIA", "CAC", "JAC", "JUN", "PER"]
 SITES_LAG = {
-    "CAC": {"nome_curto": "Cachoeirinha", "nome": "MSG Br CAC - Cachoeirinha", "grupo": "MSG", "divisao": "MSG Br"},
-    "JAC": {"nome_curto": "Jacareí", "nome": "MSG Br JAC - Jacareí", "grupo": "MSG", "divisao": "MSG Br"},
-    "JUN": {"nome_curto": "Jundiaí", "nome": "EMG Br JU - Jundiaí", "grupo": "EMG", "divisao": "EMG Br"},
-    "PER": {"nome_curto": "Perus", "nome": "EMG Br SP - Perus", "grupo": "EMG", "divisao": "EMG Br"},
-    "SJC": {"nome_curto": "São José dos Campos", "nome": "Filtration Br - São José dos Campos", "grupo": "Filtration", "divisao": "Filtration Br"},
-    "DIA": {"nome_curto": "Diadema", "nome": "FCG Br - Diadema", "grupo": "FCG", "divisao": "FCG Br"},
+    "CAC": {"nome": "MSG Br CAC - Cachoeirinha", "nome_curto": "Cachoeirinha", "grupo": "MSG", "divisao": "MSG Br"},
+    "JAC": {"nome": "MSG Br JAC - Jacareí", "nome_curto": "Jacareí", "grupo": "MSG", "divisao": "MSG Br"},
+    "JUN": {"nome": "EMG Br JU - Jundiaí", "nome_curto": "Jundiaí", "grupo": "EMG", "divisao": "EMG Br"},
+    "PER": {"nome": "EMG Br SP - Perus", "nome_curto": "Perus", "grupo": "EMG", "divisao": "EMG Br"},
+    "SJC": {"nome": "Filtration Br - São José dos Campos", "nome_curto": "São José dos Campos", "grupo": "Filtration", "divisao": "Filtration Br"},
+    "DIA": {"nome": "FCG Br - Diadema", "nome_curto": "Diadema", "grupo": "FCG", "divisao": "FCG Br"},
+    "Corporativo": {"nome": "Corporativo", "nome_curto": "Corporativo", "grupo": "Corporativo", "divisao": "Corporativo"},
 }
-SITES_PADRAO = list(SITES_LAG.keys())
+SITE_INFO_PADRAO = SITES_LAG
+SITE_NOMES_PADRAO = {k: v["nome"] for k, v in SITE_INFO_PADRAO.items()}
+SITE_GRUPOS_PADRAO = {k: v["grupo"] for k, v in SITE_INFO_PADRAO.items()}
+SITE_DIVISOES_PADRAO = {k: v.get("divisao", v.get("grupo", k)) for k, v in SITE_INFO_PADRAO.items()}
 PERFIS = ["Admin_LAG","EHS_Local","Auditor","Manutencao","Producao_Operacao","Engenharia","Responsavel_Acao","Visualizador"]
 USUARIOS_PADRAO = [
     ("Eduardo","Admin_LAG","Corporativo"), ("Capitu","Admin_LAG","Corporativo"),
@@ -241,31 +246,18 @@ class DocumentoNR12(Base):
     __tablename__="documentos_nr12"; id=Column(Integer,primary_key=True); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); site_id=Column(Integer,ForeignKey("sites.id")); tipo=Column(String(120)); descricao=Column(Text); data_emissao=Column(Date); data_validade=Column(Date); arquivo_nome=Column(String(260)); arquivo_caminho=Column(String(500)); arquivo_bytes=Column(LargeBinary); responsavel=Column(String(120)); observacoes=Column(Text); criado_em=Column(DateTime,default=datetime.utcnow); maquina=relationship("MaquinaNR12"); site=relationship("Site")
 class VerificacaoNR12(Base):
     __tablename__="verificacoes_nr12"
-    id=Column(Integer,primary_key=True); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); site_id=Column(Integer,ForeignKey("sites.id")); tipo=Column(String(120))
-    data_verificacao=Column(Date); responsavel=Column(String(120)); resultado=Column(String(80)); pontuacao=Column(Float,default=0); possui_nc_critica=Column(Boolean,default=False)
-    observacoes=Column(Text); proxima_verificacao=Column(Date); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_maquinas.id")); criado_em=Column(DateTime,default=datetime.utcnow)
-    maquina=relationship("MaquinaNR12")
+    id=Column(Integer,primary_key=True); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); site_id=Column(Integer,ForeignKey("sites.id")); tipo=Column(String(120)); data_verificacao=Column(Date); responsavel=Column(String(120)); resultado=Column(String(80)); pontuacao=Column(Float,default=0); possui_nc_critica=Column(Boolean,default=False); observacoes=Column(Text); proxima_verificacao=Column(Date); criado_em=Column(DateTime,default=datetime.utcnow); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_maquinas.id")); maquina=relationship("MaquinaNR12")
 class ChecklistItemNR12(Base):
-    __tablename__="checklist_itens_nr12"; id=Column(Integer,primary_key=True); tipo_checklist=Column(String(120)); ordem=Column(Integer); pergunta=Column(Text); item_critico=Column(Boolean,default=False); ativo=Column(Boolean,default=True); __table_args__=(UniqueConstraint("tipo_checklist","ordem",name="uq_nr12_tipo_ordem"),)
-class RespostaNR12(Base):
-    __tablename__="respostas_nr12"
-    id=Column(Integer,primary_key=True); verificacao_id=Column(Integer,ForeignKey("verificacoes_nr12.id")); item_id=Column(Integer,ForeignKey("checklist_itens_nr12.id"))
-    checklist_versao_id=Column(Integer,ForeignKey("checklist_versoes_maquinas.id")); pergunta_snapshot=Column(Text); item_critico_snapshot=Column(Boolean,default=False)
-    aplicavel=Column(Boolean,default=True); resultado=Column(String(60)); comentario_evidencia=Column(Text); gerar_pac=Column(Boolean,default=False); item=relationship("ChecklistItemNR12")
+    __tablename__="checklist_itens_nr12"; id=Column(Integer,primary_key=True); tipo_checklist=Column(String(120)); ordem=Column(Integer); pergunta=Column(Text); item_critico=Column(Boolean,default=False); gera_pac_automatico=Column(Boolean,default=False); ativo=Column(Boolean,default=True); __table_args__=(UniqueConstraint("tipo_checklist","ordem",name="uq_nr12_tipo_ordem"),)
 class ChecklistVersaoMaquinas(Base):
     __tablename__="checklist_versoes_maquinas"
-    id=Column(Integer,primary_key=True); tipo_checklist=Column(String(120),nullable=False); versao=Column(Integer,default=1); descricao=Column(Text)
-    ativo=Column(Boolean,default=True); criado_em=Column(DateTime,default=datetime.utcnow); criado_por=Column(String(120))
-    __table_args__=(UniqueConstraint("tipo_checklist","versao",name="uq_checklist_maquinas_tipo_versao"),)
-class ChecklistPerguntaMaquinas(Base):
-    __tablename__="checklist_perguntas_maquinas"
-    id=Column(Integer,primary_key=True); checklist_versao_id=Column(Integer,ForeignKey("checklist_versoes_maquinas.id")); ordem=Column(Integer); pergunta=Column(Text)
-    item_critico=Column(Boolean,default=False); gera_pac_automatico=Column(Boolean,default=False); ativo=Column(Boolean,default=True); criticidade=Column(String(40),default="Média")
-    versao=relationship("ChecklistVersaoMaquinas")
-class LogAuditoriaSistema(Base):
-    __tablename__="logs_auditoria_sistema"
-    id=Column(Integer,primary_key=True); usuario=Column(String(120)); perfil=Column(String(60)); modulo=Column(String(120)); entidade=Column(String(120)); entidade_id=Column(Integer)
-    acao=Column(String(120)); campo=Column(String(120)); valor_anterior=Column(Text); valor_novo=Column(Text); data_hora=Column(DateTime,default=datetime.utcnow); observacao=Column(Text)
+    id=Column(Integer,primary_key=True); tipo_checklist=Column(String(120),nullable=False); versao=Column(Integer,default=1); descricao=Column(Text); ativo=Column(Boolean,default=True); criado_em=Column(DateTime,default=datetime.utcnow); criado_por=Column(String(120));
+    perguntas=relationship("ChecklistPerguntaVersaoMaquinas", cascade="all, delete-orphan")
+class ChecklistPerguntaVersaoMaquinas(Base):
+    __tablename__="checklist_perguntas_versoes_maquinas"
+    id=Column(Integer,primary_key=True); checklist_versao_id=Column(Integer,ForeignKey("checklist_versoes_maquinas.id")); item_base_id=Column(Integer,ForeignKey("checklist_itens_nr12.id")); ordem=Column(Integer); pergunta=Column(Text); item_critico=Column(Boolean,default=False); gera_pac_automatico=Column(Boolean,default=False); ativo=Column(Boolean,default=True)
+class RespostaNR12(Base):
+    __tablename__="respostas_nr12"; id=Column(Integer,primary_key=True); verificacao_id=Column(Integer,ForeignKey("verificacoes_nr12.id")); item_id=Column(Integer,ForeignKey("checklist_itens_nr12.id")); aplicavel=Column(Boolean,default=True); resultado=Column(String(60)); comentario_evidencia=Column(Text); gerar_pac=Column(Boolean,default=False); ordem_snapshot=Column(Integer); pergunta_snapshot=Column(Text); item_critico_snapshot=Column(Boolean,default=False); gera_pac_automatico_snapshot=Column(Boolean,default=False); item=relationship("ChecklistItemNR12")
 class PACNR12(Base):
     __tablename__="pac_nr12"; id=Column(Integer,primary_key=True); origem=Column(String(120)); site_id=Column(Integer,ForeignKey("sites.id")); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); verificacao_id=Column(Integer,ForeignKey("verificacoes_nr12.id")); item_checklist=Column(Text); descricao_desvio=Column(Text); classificacao=Column(String(40)); responsavel=Column(String(120)); area_responsavel=Column(String(120)); prazo=Column(Date); status=Column(String(60)); evidencia_conclusao=Column(Text); validacao_ehs=Column(Boolean,default=False); data_conclusao=Column(Date); comentarios=Column(Text); verificacao_eficacia=Column(Text); criado_em=Column(DateTime,default=datetime.utcnow); maquina=relationship("MaquinaNR12")
 class MOCNR12(Base):
@@ -277,21 +269,98 @@ class AnexoArquivo(Base):
 class DiretivaEHS(Base):
     __tablename__="diretivas_ehs"; id=Column(Integer,primary_key=True); categoria=Column(String(180),unique=True); descricao=Column(Text); ativo=Column(Boolean,default=True)
 class RequisitoEHS(Base):
-    __tablename__="requisitos_ehs"; id=Column(Integer,primary_key=True); diretiva_id=Column(Integer,ForeignKey("diretivas_ehs.id")); ordem=Column(Integer); pergunta=Column(Text); criticidade=Column(String(40),default="Média"); evidencia_esperada=Column(Text); ativo=Column(Boolean,default=True); diretiva=relationship("DiretivaEHS"); __table_args__=(UniqueConstraint("diretiva_id","ordem",name="uq_ehs_diretiva_ordem"),)
+    __tablename__="requisitos_ehs"; id=Column(Integer,primary_key=True); diretiva_id=Column(Integer,ForeignKey("diretivas_ehs.id")); ordem=Column(Integer); pergunta=Column(Text); criticidade=Column(String(40),default="Média"); evidencia_esperada=Column(Text); gera_pac_automatico=Column(Boolean,default=False); ativo=Column(Boolean,default=True); diretiva=relationship("DiretivaEHS"); __table_args__=(UniqueConstraint("diretiva_id","ordem",name="uq_ehs_diretiva_ordem"),)
+class ChecklistVersaoEHS(Base):
+    __tablename__="checklist_versoes_ehs"
+    id=Column(Integer,primary_key=True); descricao=Column(Text); versao=Column(Integer,default=1); ativo=Column(Boolean,default=True); criado_em=Column(DateTime,default=datetime.utcnow); criado_por=Column(String(120))
+class ChecklistPerguntaVersaoEHS(Base):
+    __tablename__="checklist_perguntas_versoes_ehs"
+    id=Column(Integer,primary_key=True); checklist_versao_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); categoria=Column(String(180)); ordem=Column(Integer); pergunta=Column(Text); criticidade=Column(String(40)); evidencia_esperada=Column(Text); gera_pac_automatico=Column(Boolean,default=False); ativo=Column(Boolean,default=True)
 class AuditoriaCruzada(Base):
-    __tablename__="auditorias_cruzadas"; id=Column(Integer,primary_key=True); ano=Column(Integer); ciclo=Column(String(80)); site_auditado_id=Column(Integer,ForeignKey("sites.id")); site_auditor_lider_id=Column(Integer,ForeignKey("sites.id")); site_auditor_apoio_id=Column(Integer,ForeignKey("sites.id")); auditor_lider=Column(String(120)); auditor_apoio=Column(String(120)); data_planejada=Column(Date); data_inicio=Column(Date); data_fim=Column(Date); status=Column(String(60)); escopo=Column(Text); observacoes=Column(Text); conformidade_percentual=Column(Float,default=0); maturidade_media=Column(Float,default=0); criado_em=Column(DateTime,default=datetime.utcnow)
+    __tablename__="auditorias_cruzadas"; id=Column(Integer,primary_key=True); ano=Column(Integer); ciclo=Column(String(80)); site_auditado_id=Column(Integer,ForeignKey("sites.id")); site_auditor_lider_id=Column(Integer,ForeignKey("sites.id")); site_auditor_apoio_id=Column(Integer,ForeignKey("sites.id")); auditor_lider=Column(String(120)); auditor_apoio=Column(String(120)); data_planejada=Column(Date); data_inicio=Column(Date); data_fim=Column(Date); status=Column(String(60)); escopo=Column(Text); observacoes=Column(Text); conformidade_percentual=Column(Float,default=0); maturidade_media=Column(Float,default=0); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); criado_em=Column(DateTime,default=datetime.utcnow)
 class RespostaAuditoriaEHS(Base):
-    __tablename__="respostas_auditoria_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); aplicavel=Column(Boolean,default=True); status=Column(String(60)); nota_maturidade=Column(Float,default=3); evidencia_verificada=Column(Text); comentario_auditor=Column(Text); necessita_pac=Column(Boolean,default=False); requisito=relationship("RequisitoEHS"); __table_args__=(UniqueConstraint("auditoria_id","requisito_id",name="uq_resp_auditoria_requisito"),)
+    __tablename__="respostas_auditoria_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); aplicavel=Column(Boolean,default=True); status=Column(String(60)); nota_maturidade=Column(Float,default=3); evidencia_verificada=Column(Text); comentario_auditor=Column(Text); necessita_pac=Column(Boolean,default=False); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); pergunta_snapshot=Column(Text); criticidade_snapshot=Column(String(40)); evidencia_esperada_snapshot=Column(Text); gera_pac_automatico_snapshot=Column(Boolean,default=False); requisito=relationship("RequisitoEHS"); __table_args__=(UniqueConstraint("auditoria_id","requisito_id",name="uq_resp_auditoria_requisito"),)
 class PACEHS(Base):
     __tablename__="pac_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); site_id=Column(Integer,ForeignKey("sites.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); tipo_achado=Column(String(80)); descricao=Column(Text); evidencia=Column(Text); risco=Column(Text); causa_raiz=Column(Text); acao_imediata=Column(Text); acao_corretiva=Column(Text); responsavel=Column(String(120)); area_responsavel=Column(String(120)); prazo=Column(Date); status=Column(String(60)); prioridade_criticidade=Column(String(40)); evidencia_conclusao=Column(Text); validacao_ehs=Column(Boolean,default=False); data_conclusao=Column(Date); verificacao_eficacia=Column(Text); status_eficacia=Column(String(80)); criado_em=Column(DateTime,default=datetime.utcnow); requisito=relationship("RequisitoEHS")
 class EvidenciaEHS(Base):
     __tablename__="evidencias_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer); requisito_id=Column(Integer); pac_id=Column(Integer); descricao=Column(Text); arquivo_nome=Column(String(260)); arquivo_caminho=Column(String(500)); criado_em=Column(DateTime,default=datetime.utcnow)
+class LogAuditoriaSistema(Base):
+    __tablename__="logs_auditoria_sistema"
+    id=Column(Integer,primary_key=True)
+    usuario=Column(String(120))
+    perfil=Column(String(60))
+    modulo=Column(String(120))
+    entidade=Column(String(120))
+    entidade_id=Column(Integer)
+    campo=Column(String(160))
+    valor_anterior=Column(Text)
+    valor_novo=Column(Text)
+    acao=Column(String(120))
+    data_hora=Column(DateTime,default=datetime.utcnow)
+    observacao=Column(Text)
+
+
+
+# ============================================================
+# 5B. Modelos SQLAlchemy — Controle de Energia e Emissões
+# ============================================================
+class EnergiaRegistro(Base):
+    __tablename__ = "energia_registros"
+    id = Column(Integer, primary_key=True)
+    mes_ref = Column(Date, nullable=False)
+    site_codigo = Column(String(30), nullable=False)
+    site_nome = Column(String(160))
+    grupo = Column(String(80))
+    divisao = Column(String(160))
+    fonte = Column(String(80))  # Energia elétrica ou Gás natural
+    consumo_original = Column(Float, default=0)
+    unidade_original = Column(String(40))
+    consumo_kwh = Column(Float, default=0)
+    custo_brl = Column(Float, default=0)
+    unit_cost = Column(Float, default=0)
+    emissao_co2_ton = Column(Float, default=0)
+    emissao_escopo = Column(String(40))  # Escopo 1 ou Escopo 2
+    origem_arquivo = Column(String(260))
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+class EnergiaActualHours(Base):
+    __tablename__ = "energia_actual_hours"
+    id = Column(Integer, primary_key=True)
+    mes_ref = Column(Date, nullable=False)
+    site_codigo = Column(String(30), nullable=False)
+    site_nome = Column(String(160))
+    grupo = Column(String(80))
+    actual_hours = Column(Float, default=0)
+    production_capacity_hours = Column(Float, default=0)
+    origem = Column(String(80), default="Manual")
+    criado_em = Column(DateTime, default=datetime.utcnow)
+    atualizado_em = Column(DateTime, default=datetime.utcnow)
+
+class EnergiaUploadHistorico(Base):
+    __tablename__ = "energia_upload_historico"
+    id = Column(Integer, primary_key=True)
+    tipo_base = Column(String(80))
+    nome_arquivo = Column(String(260))
+    data_upload = Column(DateTime, default=datetime.utcnow)
+    usuario = Column(String(120))
+    observacoes = Column(Text)
+
+class EnergiaParametro(Base):
+    __tablename__ = "energia_parametros"
+    id = Column(Integer, primary_key=True)
+    chave = Column(String(120), unique=True, nullable=False)
+    valor = Column(String(120))
+    descricao = Column(Text)
 
 # ============================================================
 # 6. Seed inicial
 # ============================================================
 def table_exists(table_name):
-    return table_name in inspect(engine).get_table_names()
+    try:
+        return table_name in inspect(engine).get_table_names()
+    except Exception as e:
+        logging.exception("Falha ao verificar tabela %s", table_name)
+        return False
 
 def column_exists(table_name, column_name):
     try:
@@ -312,30 +381,63 @@ def safe_add_column(table_name, column_name, sql_definition):
         logging.exception("Falha ao adicionar coluna %s.%s", table_name, column_name)
 
 def ensure_schema_updates():
-    Base.metadata.create_all(engine)
+    # Migrações idempotentes para bancos SQLite já existentes.
     safe_add_column("maquinas_nr12", "risco_maquina", "VARCHAR(80) DEFAULT 'Apreciação de risco não realizada'")
     safe_add_column("maquinas_nr12", "data_prevista_adequacao", "DATE")
     safe_add_column("documentos_nr12", "arquivo_bytes", "BLOB")
+    safe_add_column("checklist_itens_nr12", "gera_pac_automatico", "BOOLEAN DEFAULT 0")
     safe_add_column("verificacoes_nr12", "versao_checklist_id", "INTEGER")
-    safe_add_column("respostas_nr12", "checklist_versao_id", "INTEGER")
+    safe_add_column("respostas_nr12", "ordem_snapshot", "INTEGER")
     safe_add_column("respostas_nr12", "pergunta_snapshot", "TEXT")
     safe_add_column("respostas_nr12", "item_critico_snapshot", "BOOLEAN DEFAULT 0")
+    safe_add_column("respostas_nr12", "gera_pac_automatico_snapshot", "BOOLEAN DEFAULT 0")
+    safe_add_column("requisitos_ehs", "gera_pac_automatico", "BOOLEAN DEFAULT 0")
+    safe_add_column("auditorias_cruzadas", "versao_checklist_id", "INTEGER")
+    safe_add_column("respostas_auditoria_ehs", "versao_checklist_id", "INTEGER")
+    safe_add_column("respostas_auditoria_ehs", "pergunta_snapshot", "TEXT")
+    safe_add_column("respostas_auditoria_ehs", "criticidade_snapshot", "VARCHAR(40)")
+    safe_add_column("respostas_auditoria_ehs", "evidencia_esperada_snapshot", "TEXT")
+    safe_add_column("respostas_auditoria_ehs", "gera_pac_automatico_snapshot", "BOOLEAN DEFAULT 0")
+
+def get_versao_ativa_maquinas(db, tipo_checklist):
+    return db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo_checklist, ativo=True).order_by(ChecklistVersaoMaquinas.versao.desc(), ChecklistVersaoMaquinas.id.desc()).first()
+
+def criar_versao_checklist_maquinas(db, tipo_checklist, criado_por="Sistema", descricao=None, base_version=None):
+    atual = db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo_checklist).order_by(ChecklistVersaoMaquinas.versao.desc()).first()
+    nova_num = (atual.versao if atual and atual.versao else 0) + 1
+    for v in db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo_checklist, ativo=True).all():
+        v.ativo = False
+    v = ChecklistVersaoMaquinas(tipo_checklist=tipo_checklist, versao=nova_num, descricao=descricao or f"Versão {nova_num} de {tipo_checklist}", ativo=True, criado_por=criado_por)
+    db.add(v); db.flush()
+    if base_version:
+        perguntas = db.query(ChecklistPerguntaVersaoMaquinas).filter_by(checklist_versao_id=base_version.id).order_by(ChecklistPerguntaVersaoMaquinas.ordem).all()
+        for p in perguntas:
+            db.add(ChecklistPerguntaVersaoMaquinas(checklist_versao_id=v.id, item_base_id=p.item_base_id, ordem=p.ordem, pergunta=p.pergunta, item_critico=p.item_critico, gera_pac_automatico=p.gera_pac_automatico, ativo=p.ativo))
+    else:
+        itens = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo_checklist).order_by(ChecklistItemNR12.ordem).all()
+        for it in itens:
+            db.add(ChecklistPerguntaVersaoMaquinas(checklist_versao_id=v.id, item_base_id=it.id, ordem=it.ordem, pergunta=it.pergunta, item_critico=it.item_critico, gera_pac_automatico=getattr(it, "gera_pac_automatico", False), ativo=it.ativo))
+    db.flush()
+    return v
+
+def seed_checklist_versions(db):
+    tipos = {t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()}
+    for tipo in sorted(tipos):
+        if not db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo).first():
+            criar_versao_checklist_maquinas(db, tipo, "Sistema", "Versão inicial migrada do checklist padrão")
+    if not db.query(ChecklistVersaoEHS).first():
+        v = ChecklistVersaoEHS(descricao="Versão inicial migrada do checklist de Diretrizes EHS", versao=1, ativo=True, criado_por="Sistema")
+        db.add(v); db.flush()
+        for r in db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all():
+            db.add(ChecklistPerguntaVersaoEHS(checklist_versao_id=v.id, requisito_id=r.id, categoria=r.diretiva.categoria, ordem=r.ordem, pergunta=r.pergunta, criticidade=r.criticidade, evidencia_esperada=r.evidencia_esperada, gera_pac_automatico=getattr(r, "gera_pac_automatico", False), ativo=r.ativo))
 
 def sync_checklists_base(db):
-    # Checklists de máquinas: o dicionário hardcoded é usado apenas como seed.
-    # Depois disso, a fonte de verdade passa a ser o banco.
+    # Usa CHECKLIST_NR12/CHECKLIST_EHS apenas como seed inicial. Não sobrescreve perguntas editadas no app.
     for tipo, itens in CHECKLIST_NR12.items():
-        versao = db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo, versao=1).first()
-        if not versao:
-            versao = ChecklistVersaoMaquinas(tipo_checklist=tipo, versao=1, descricao="Seed inicial do sistema", ativo=True, criado_por="Sistema")
-            db.add(versao); db.flush()
-            for i, (pergunta, critico) in enumerate(itens, 1):
-                db.add(ChecklistPerguntaMaquinas(checklist_versao_id=versao.id, ordem=i, pergunta=pergunta, item_critico=critico, gera_pac_automatico=critico, ativo=True, criticidade="Alta" if critico else "Média"))
         for i, (pergunta, critico) in enumerate(itens, 1):
             item = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ordem=i).first()
             if not item:
-                db.add(ChecklistItemNR12(tipo_checklist=tipo, ordem=i, pergunta=pergunta, item_critico=critico, ativo=True))
-    # Diretrizes EHS: também são seed inicial. Alterações feitas pela tela Base do Checklist EHS são preservadas.
+                db.add(ChecklistItemNR12(tipo_checklist=tipo, ordem=i, pergunta=pergunta, item_critico=critico, gera_pac_automatico=False, ativo=True))
     for cat, pergs in CHECKLIST_EHS.items():
         d = db.query(DiretivaEHS).filter_by(categoria=cat).first()
         if not d:
@@ -345,19 +447,28 @@ def sync_checklists_base(db):
         for i, p in enumerate(pergs, 1):
             req = db.query(RequisitoEHS).filter_by(diretiva_id=d.id, ordem=i).first()
             if not req:
-                db.add(RequisitoEHS(diretiva_id=d.id, ordem=i, pergunta=p, criticidade="Alta" if i in [1,3,7] else "Média", evidencia_esperada="Evidência documental, registros, entrevistas e/ou verificação em campo.", ativo=True))
+                db.add(RequisitoEHS(diretiva_id=d.id, ordem=i, pergunta=p, criticidade="Alta" if i in [1,3,7] else "Média", evidencia_esperada="Evidência documental, registros, entrevistas e/ou verificação em campo.", gera_pac_automatico=False, ativo=True))
+    db.flush()
+    seed_checklist_versions(db)
 
 def init_db():
     Base.metadata.create_all(engine); ensure_schema_updates(); db=SessionLocal()
     try:
         if not db.query(Site).filter_by(codigo="Corporativo").first(): db.add(Site(codigo="Corporativo",nome="Corporativo"))
         for s in SITES_PADRAO:
-            if not db.query(Site).filter_by(codigo=s).first(): db.add(Site(codigo=s,nome=site_nome_padrao(s)))
+            site_obj = db.query(Site).filter_by(codigo=s).first()
+            nome_padrao = SITE_NOMES_PADRAO.get(s, s)
+            if not site_obj:
+                db.add(Site(codigo=s, nome=nome_padrao))
+            else:
+                site_obj.nome = nome_padrao
         db.flush()
         for nome,perfil,sitecod in USUARIOS_PADRAO:
             if not db.query(Usuario).filter_by(nome=nome).first():
                 stt=db.query(Site).filter_by(codigo=sitecod).first(); db.add(Usuario(nome=nome,perfil=perfil,site_id=stt.id if stt else None))
         sync_checklists_base(db)
+        seed_energia_parametros(db)
+        seed_energia_actual_hours_inicial(db)
         for maq in db.query(MaquinaNR12).all():
             maq.status_nr12 = normalizar_status_nr12(maq.status_nr12)
         db.commit()
@@ -392,6 +503,29 @@ def visible_site_ids(u,db):
         return [s.id for s in db.query(Site).filter(Site.codigo!="Corporativo",Site.ativo==True).all()]
     return [u.site_id] if u.site_id else []
 
+def registrar_log(db, usuario, modulo, entidade, entidade_id, acao, campo=None, valor_anterior=None, valor_novo=None, observacao=None):
+    try:
+        nome = usuario.nome if hasattr(usuario, "nome") else str(usuario or "Sistema")
+        perfil = getattr(usuario, "perfil", None) if usuario is not None else None
+        db.add(LogAuditoriaSistema(
+            usuario=nome, perfil=perfil, modulo=modulo, entidade=entidade, entidade_id=entidade_id,
+            acao=acao, campo=campo, valor_anterior=None if valor_anterior is None else str(valor_anterior),
+            valor_novo=None if valor_novo is None else str(valor_novo), observacao=observacao, data_hora=datetime.utcnow()
+        ))
+    except Exception:
+        logging.exception("Falha ao registrar log de auditoria do sistema")
+
+def df_logs(db):
+    rows=[]
+    for l in db.query(LogAuditoriaSistema).order_by(LogAuditoriaSistema.data_hora.desc()).limit(2000):
+        rows.append({
+            "ID": l.id, "Data/hora": l.data_hora.strftime("%d/%m/%Y %H:%M") if l.data_hora else "—",
+            "Usuário": l.usuario, "Perfil": l.perfil, "Módulo": l.modulo, "Entidade": l.entidade,
+            "ID entidade": l.entidade_id, "Ação": l.acao, "Campo": l.campo,
+            "Valor anterior": l.valor_anterior, "Valor novo": l.valor_novo, "Observação": l.observacao
+        })
+    return pd.DataFrame(rows)
+
 # ============================================================
 # 8. Utilitários, 9. Cálculos, 10. Exportação
 # ============================================================
@@ -402,54 +536,57 @@ def as_date(v):
     try: return pd.to_datetime(v).date()
     except Exception: return None
 def fmt_date(v): v=as_date(v); return v.strftime("%d/%m/%Y") if v else "—"
-
-def normalize_site_code(valor):
-    txt = str(valor or "").strip().upper()
-    aliases = {
-        "SÃO JOSÉ DOS CAMPOS": "SJC", "SAO JOSE DOS CAMPOS": "SJC", "PFG": "SJC",
-        "DIADEMA": "DIA", "FCG": "DIA",
-        "CACHOEIRINHA": "CAC", "JACAREI": "JAC", "JACAREÍ": "JAC",
-        "JUNDIAI": "JUN", "JUNDIAÍ": "JUN", "PERUS": "PER", "SAO PAULO": "PER", "SÃO PAULO": "PER",
-    }
-    if txt in SITES_LAG or txt == "CORPORATIVO":
-        return txt
-    for k, v in aliases.items():
-        if k in txt:
-            return v
-    return txt
-
 def site_nome_padrao(codigo):
-    codigo = normalize_site_code(codigo)
-    if codigo == "CORPORATIVO":
-        return "Corporativo"
-    return SITES_LAG.get(codigo, {}).get("nome", codigo or "—")
+    cod = normalize_site_code(codigo)
+    return SITES_LAG.get(cod, {}).get("nome", str(codigo) if codigo else "—")
 
 def site_nome_curto(codigo):
-    codigo = normalize_site_code(codigo)
-    if codigo == "CORPORATIVO":
-        return "Corporativo"
-    return SITES_LAG.get(codigo, {}).get("nome_curto", codigo or "—")
+    cod = normalize_site_code(codigo)
+    return SITES_LAG.get(cod, {}).get("nome_curto", str(codigo) if codigo else "—")
 
 def site_grupo(codigo):
-    codigo = normalize_site_code(codigo)
-    return SITES_LAG.get(codigo, {}).get("grupo", "Corporativo" if codigo == "CORPORATIVO" else "—")
+    cod = normalize_site_code(codigo)
+    return SITES_LAG.get(cod, {}).get("grupo", "—")
 
 def site_divisao(codigo):
-    codigo = normalize_site_code(codigo)
-    return SITES_LAG.get(codigo, {}).get("divisao", "Corporativo" if codigo == "CORPORATIVO" else "—")
+    cod = normalize_site_code(codigo)
+    return SITES_LAG.get(cod, {}).get("divisao", site_grupo(cod))
 
 def site_label(codigo, formato="padrao"):
+    cod = normalize_site_code(codigo)
     if formato == "curto":
-        return site_nome_curto(codigo)
+        return site_nome_curto(cod)
+    if formato == "grupo":
+        return site_grupo(cod)
+    if formato == "divisao":
+        return site_divisao(cod)
     if formato == "codigo_nome":
-        cod = normalize_site_code(codigo)
-        return f"{cod} - {site_nome_curto(cod)}" if cod != "CORPORATIVO" else "Corporativo"
-    return site_nome_padrao(codigo)
+        return f"{cod} — {site_nome_padrao(cod)}" if cod and cod != "—" else "—"
+    return site_nome_padrao(cod)
 
-def site_display(db,id):
+def normalize_site_code(valor):
+    if valor is None:
+        return "—"
+    raw = str(valor).strip()
+    if raw in SITES_LAG:
+        return raw
+    norm = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii").lower()
+    aliases = {
+        "cac": ["cac", "cachoeirinha"],
+        "jac": ["jac", "jacarei", "jacarei sp"],
+        "jun": ["jun", "jundiai", "jundiai sp"],
+        "per": ["per", "perus", "sao paulo", "sao paulo bra"],
+        "sjc": ["sjc", "sao jose dos campos", "sao jose"],
+        "dia": ["dia", "diadema", "diadema sp"],
+        "corporativo": ["corporativo", "corp", "lag"],
+    }
+    for cod, pats in aliases.items():
+        if any(p in norm for p in pats):
+            return cod.upper() if cod != "corporativo" else "Corporativo"
+    return raw
+def site_code(db,id):
     s=db.get(Site,id) if id else None
-    return site_label(s.codigo if s else None) if s else "—"
-def site_code(db,id): s=db.get(Site,id) if id else None; return s.codigo if s else "—"
+    return site_label(s.codigo) if s else "—"
 def machine_options(db,ids): return {f"{m.codigo} — {m.nome}":m.id for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo)}
 def identificar_pac_vencido(prazo,status): return bool(as_date(prazo) and as_date(prazo)<date.today() and status not in ["Concluída","Cancelada"])
 def calcular_status_documento(doc):
@@ -528,7 +665,7 @@ def calcular_resultado_verificacao_nr12(resps):
     if not ap:
         return "Não conforme",0,False
     pct=round(sum(1 for r in ap if r.resultado=="Conforme")/len(ap)*100,1)
-    crit=any(r.resultado=="Não conforme" and ((getattr(r,"item_critico_snapshot",False)) or (r.item and r.item.item_critico)) for r in ap)
+    crit=any(r.resultado=="Não conforme" and (bool(getattr(r,"item_critico_snapshot",False)) or (r.item and r.item.item_critico)) for r in ap)
     if crit or pct < 90:
         return "Não conforme",pct,crit
     return "Conforme",pct,False
@@ -542,7 +679,8 @@ def calcular_maturidade_ehs(resps):
 def gerar_pac_automatico_nr12(db,ver,r,resp=""):
     pergunta = getattr(r, "pergunta_snapshot", None) or (r.item.pergunta if r.item else "Item de checklist")
     if db.query(PACNR12).filter_by(verificacao_id=ver.id,item_checklist=pergunta).first(): return
-    clas="Crítico" if ((getattr(r,"item_critico_snapshot",False)) or (r.item and r.item.item_critico)) else "Maior"
+    critico = bool(getattr(r,"item_critico_snapshot",False)) or bool(r.item and r.item.item_critico)
+    clas="Crítico" if critico else "Maior"
     db.add(PACNR12(origem=ver.tipo,site_id=ver.site_id,maquina_id=ver.maquina_id,verificacao_id=ver.id,item_checklist=pergunta,descricao_desvio=r.comentario_evidencia or pergunta,classificacao=clas,responsavel=resp,area_responsavel="A definir",prazo=date.today()+timedelta(days=15 if clas=="Crítico" else 30),status="Aberta"))
 def gerar_pac_automatico_ehs(db,a,r,resp=""):
     if db.query(PACEHS).filter_by(auditoria_id=a.id,requisito_id=r.requisito_id).first(): return
@@ -577,46 +715,209 @@ def update_vencidos(db):
             if identificar_pac_vencido(p.prazo,p.status): p.status="Vencida"
     db.commit()
 
-def registrar_log(db, usuario, modulo, entidade, entidade_id, acao, campo=None, valor_anterior=None, valor_novo=None, observacao=None):
+
+def energia_default_r12_mes(df):
+    """Usa o mês vigente como padrão; se não existir na base, usa o mês mais próximo anterior."""
+    if df is None or df.empty or "Mês" not in df.columns:
+        return None
+    opts = sorted([energia_first_day(x) for x in df["Mês"].dropna().unique() if energia_first_day(x)])
+    if not opts:
+        return None
+    hoje = date.today().replace(day=1)
+    if hoje in opts:
+        return hoje
+    anteriores = [d for d in opts if d <= hoje]
+    if anteriores:
+        return max(anteriores)
+    return max(opts)
+
+def energia_variacao_periodos(df, metric, r12_mes, fy_base, usar_irec=False):
+    """Calcula variação percentual do R12 selecionado contra um FY base."""
+    if df is None or df.empty or not r12_mes:
+        return None
+    sites = ENERGIA_SITE_ORDER
+    r12_ini = energia_r12_start(r12_mes)
+    base_ini, base_fim = energia_intervalo_fy(fy_base)
+    atual = energia_agregar_periodo(df, sites, metric, r12_ini, r12_mes, usar_irec)
+    base = energia_agregar_periodo(df, sites, metric, base_ini, base_fim, usar_irec)
+    return energia_pct_change(atual, base)
+
+def energia_home_kpi_cards(db):
+    """Cards sintéticos de energia para aparecerem dentro da Visão geral integrada."""
     try:
-        db.add(LogAuditoriaSistema(
-            usuario=getattr(usuario, "nome", None) or "Sistema", perfil=getattr(usuario, "perfil", None), modulo=modulo, entidade=entidade, entidade_id=entidade_id,
-            acao=acao, campo=campo, valor_anterior=None if valor_anterior is None else str(valor_anterior), valor_novo=None if valor_novo is None else str(valor_novo), observacao=observacao
-        ))
+        if db.query(EnergiaRegistro).count() == 0:
+            return [
+                ("Energia • CO₂ R12 vs FY anterior", "—", "Importe a base de energia"),
+                ("Energia • CO₂ R12 vs FY19", "—", "Importe a base de energia"),
+                ("Energia • Eficiência R12 vs FY anterior", "—", "Importe a base de energia"),
+                ("Energia • Eficiência R12 vs FY19", "—", "Importe a base de energia"),
+            ]
+        df = energia_consolidado(db)
+        if df.empty:
+            return []
+        r12_mes = energia_default_r12_mes(df)
+        fy_atual = int(energia_param_float(db, "fy_atual", 26))
+        fy_passado = fy_atual - 1
+        co2_vs_passado = energia_variacao_periodos(df, "Emissões de CO₂ considerando I-REC", r12_mes, fy_passado, True)
+        co2_vs_fy19 = energia_variacao_periodos(df, "Emissões de CO₂ considerando I-REC", r12_mes, 19, True)
+        eff_vs_passado = energia_variacao_periodos(df, "Eficiência energética", r12_mes, fy_passado, True)
+        eff_vs_fy19 = energia_variacao_periodos(df, "Eficiência energética", r12_mes, 19, True)
+        ref = r12_mes.strftime("%b/%Y") if r12_mes else "mês vigente"
+        return [
+            ("Energia • CO₂ R12 vs FY anterior", energia_fmt_val(co2_vs_passado, "percent"), f"R12 {ref} vs FY{fy_passado:02d}"),
+            ("Energia • CO₂ R12 vs FY19", energia_fmt_val(co2_vs_fy19, "percent"), f"R12 {ref} vs FY19"),
+            ("Energia • Eficiência R12 vs FY anterior", energia_fmt_val(eff_vs_passado, "percent"), f"R12 {ref} vs FY{fy_passado:02d}"),
+            ("Energia • Eficiência R12 vs FY19", energia_fmt_val(eff_vs_fy19, "percent"), f"R12 {ref} vs FY19"),
+        ]
     except Exception:
-        logging.exception("Falha ao registrar log do sistema")
+        return [
+            ("Energia • CO₂ R12 vs FY anterior", "—", "Indicador indisponível"),
+            ("Energia • CO₂ R12 vs FY19", "—", "Indicador indisponível"),
+            ("Energia • Eficiência R12 vs FY anterior", "—", "Indicador indisponível"),
+            ("Energia • Eficiência R12 vs FY19", "—", "Indicador indisponível"),
+        ]
 
-def checklist_tipos_ativos_maquinas(db):
-    tipos=[v.tipo_checklist for v in db.query(ChecklistVersaoMaquinas).filter_by(ativo=True).order_by(ChecklistVersaoMaquinas.tipo_checklist).all()]
-    return sorted(set(tipos)) or TIPOS_VERIFICACAO_NR12
+def energia_bar_sem_decimal(fig):
+    """Padroniza rótulos de gráficos de coluna sem casas decimais."""
+    fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside", cliponaxis=False)
+    fig.update_layout(uniformtext_minsize=8, uniformtext_mode="hide")
+    return fig
 
-def obter_versao_ativa_checklist_maquinas(db, tipo):
-    versao = db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo, ativo=True).order_by(ChecklistVersaoMaquinas.versao.desc()).first()
-    if not versao:
-        versao = ChecklistVersaoMaquinas(tipo_checklist=tipo, versao=1, descricao="Criada automaticamente", ativo=True, criado_por="Sistema")
-        db.add(versao); db.flush()
-    return versao
+def energia_tendencia_metas(df_scope, usar_irec=False, db=None):
+    """Gera séries mensais R12 de emissões e eficiência comparadas contra a meta.
 
-def itens_versao_checklist_maquinas(db, versao_id):
-    return db.query(ChecklistPerguntaMaquinas).filter_by(checklist_versao_id=versao_id, ativo=True).order_by(ChecklistPerguntaMaquinas.ordem).all()
+    Para evitar distorções no início da série, a eficiência só é exibida quando há
+    janela R12 completa com consumo e Actual Hours. Também remove outliers fortes
+    de eficiência por IQR, preservando a tendência operacional.
+    """
+    if df_scope is None or df_scope.empty:
+        return pd.DataFrame()
+    work = df_scope.copy()
+    work["Mês"] = pd.to_datetime(work["Mês"]).dt.date
+    meses = sorted(work["Mês"].dropna().unique())
+    if not meses:
+        return pd.DataFrame()
+    fy_atual = int(energia_param_float(db, "fy_atual", 26)) if db is not None else 26
+    fy_base = fy_atual - 1
+    meta_co2 = energia_param_float(db, "meta_reducao_co2_percentual", 5) / 100 if db is not None else 0.05
+    meta_eff = energia_param_float(db, "meta_reducao_eficiencia_percentual", 5) / 100 if db is not None else 0.05
+    base_ini, base_fim = energia_intervalo_fy(fy_base)
+    base = work[(pd.to_datetime(work["Mês"]) >= pd.to_datetime(base_ini)) & (pd.to_datetime(work["Mês"]) <= pd.to_datetime(base_fim))]
+    base_emissoes = base["emissao_total_com_irec_tco2e"].sum() if usar_irec else base["emissao_total_tco2e"].sum()
+    base_energia = base["consumo_total_kwh"].sum()
+    base_horas = base["actual_hours"].sum()
+    base_eff = base_energia / base_horas if base_horas else None
+    meta_emissoes = base_emissoes * (1 - meta_co2) if base_emissoes is not None else None
+    meta_eficiencia = base_eff * (1 - meta_eff) if base_eff is not None else None
 
-def ensure_legacy_item_for_version(db, tipo, it):
-    item = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ordem=it.ordem).first()
-    if not item:
-        item = ChecklistItemNR12(tipo_checklist=tipo, ordem=it.ordem, pergunta=it.pergunta, item_critico=it.item_critico, ativo=it.ativo)
-        db.add(item); db.flush()
-    return item
+    # Só considera meses a partir da primeira janela R12 completa de energia e horas.
+    meses_com_energia = sorted(work.loc[work["consumo_total_kwh"].fillna(0) > 0, "Mês"].dropna().unique())
+    meses_com_horas = sorted(work.loc[work["actual_hours"].fillna(0) > 0, "Mês"].dropna().unique())
+    primeiro_mes_valido = None
+    candidatos = []
+    if meses_com_energia:
+        candidatos.append((pd.Timestamp(min(meses_com_energia)) + pd.DateOffset(months=11)).date())
+    if meses_com_horas:
+        candidatos.append((pd.Timestamp(min(meses_com_horas)) + pd.DateOffset(months=11)).date())
+    if candidatos:
+        primeiro_mes_valido = max(candidatos)
 
-def criar_nova_versao_checklist_maquinas(db, tipo, usuario, descricao=""):
-    atual = obter_versao_ativa_checklist_maquinas(db, tipo)
-    nova_num = (db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo).order_by(ChecklistVersaoMaquinas.versao.desc()).first().versao or 0) + 1
-    nova = ChecklistVersaoMaquinas(tipo_checklist=tipo, versao=nova_num, descricao=descricao or f"Nova versão baseada na v{atual.versao}", ativo=True, criado_por=getattr(usuario,"nome",None))
-    db.add(nova); db.flush()
-    for it in db.query(ChecklistPerguntaMaquinas).filter_by(checklist_versao_id=atual.id).order_by(ChecklistPerguntaMaquinas.ordem).all():
-        db.add(ChecklistPerguntaMaquinas(checklist_versao_id=nova.id, ordem=it.ordem, pergunta=it.pergunta, item_critico=it.item_critico, gera_pac_automatico=it.gera_pac_automatico, ativo=it.ativo, criticidade=it.criticidade))
-    atual.ativo=False
-    registrar_log(db, usuario, NOME_MODULO_MAQUINAS, "ChecklistVersaoMaquinas", nova.id, "Criar nova versão", valor_anterior=atual.versao, valor_novo=nova_num, observacao=descricao)
-    return nova
+    rows = []
+    for mes in meses:
+        if primeiro_mes_valido and mes < primeiro_mes_valido:
+            continue
+        ini = energia_r12_start(mes)
+        f12 = work[(pd.to_datetime(work["Mês"]) >= pd.to_datetime(ini)) & (pd.to_datetime(work["Mês"]) <= pd.to_datetime(mes))]
+        # Exige janela R12 completa. Evita valores iniciais inflados/instáveis por poucas horas ou poucos meses.
+        if f12["Mês"].nunique() < 12:
+            continue
+        emissao = f12["emissao_total_com_irec_tco2e"].sum() if usar_irec else f12["emissao_total_tco2e"].sum()
+        energia = f12["consumo_total_kwh"].sum()
+        horas = f12["actual_hours"].sum()
+        eficiencia = energia / horas if horas and horas > 0 else None
+        rows.append({
+            "Mês": mes,
+            "Emissões R12": emissao,
+            "Meta emissões": meta_emissoes,
+            "Eficiência energética R12": eficiencia,
+            "Meta eficiência energética": meta_eficiencia,
+            "FY base": f"FY{fy_base:02d}",
+        })
+    out = pd.DataFrame(rows)
+    if out.empty or out["Eficiência energética R12"].dropna().empty:
+        return out
+
+    vals = out["Eficiência energética R12"].dropna()
+    if len(vals) >= 6:
+        q1 = vals.quantile(0.25)
+        q3 = vals.quantile(0.75)
+        iqr = q3 - q1
+        if iqr > 0:
+            lim_inf = max(0, q1 - 1.5 * iqr)
+            lim_sup = q3 + 1.5 * iqr
+            out.loc[(out["Eficiência energética R12"] < lim_inf) | (out["Eficiência energética R12"] > lim_sup), "Eficiência energética R12"] = None
+    return out
+
+def energia_pdf_dashboard(db, r12_mes=None, usar_irec=True):
+    """Gera um PDF executivo com os principais elementos do dashboard de energia."""
+    df = energia_consolidado(db)
+    if df.empty:
+        return gerar_pdf("Dashboard Energia e CO₂", "Sem dados disponíveis.", [("Resumo", "Sem dados para gerar o dashboard.")])
+    r12_mes = energia_first_day(r12_mes) or energia_default_r12_mes(df) or max(df["Mês"])
+    kpis = energia_df_kpis(df, r12_mes, usar_irec)
+    tabela = energia_executive_table(db, "Emissões de CO₂ considerando I-REC" if usar_irec else "Emissões de CO₂", r12_mes, usar_irec)
+    r12_ini = energia_r12_start(r12_mes)
+    r12 = df[(pd.to_datetime(df["Mês"]) >= pd.to_datetime(r12_ini)) & (pd.to_datetime(df["Mês"]) <= pd.to_datetime(r12_mes))]
+    por_site = r12.groupby("Site nome", as_index=False).agg({
+        "consumo_total_kwh": "sum",
+        "emissao_total_tco2e": "sum",
+        "emissao_total_com_irec_tco2e": "sum",
+        "custo_total_brl": "sum",
+        "actual_hours": "sum"
+    }) if not r12.empty else pd.DataFrame()
+    if not por_site.empty:
+        por_site["eficiencia_energetica"] = por_site.apply(lambda r: r["consumo_total_kwh"] / r["actual_hours"] if r["actual_hours"] else None, axis=1)
+        por_site = por_site.rename(columns={
+            "Site nome": "Site",
+            "consumo_total_kwh": "Consumo total kWh",
+            "emissao_total_tco2e": "CO₂ sem I-REC",
+            "emissao_total_com_irec_tco2e": "CO₂ com I-REC",
+            "custo_total_brl": "Custo BRL",
+            "actual_hours": "Actual Hours",
+            "eficiencia_energetica": "Eficiência"
+        })
+    metas = energia_tendencia_metas(df, usar_irec, db)
+    if not metas.empty:
+        metas_pdf = metas.tail(12).rename(columns={
+            "Mês": "Mês",
+            "Emissões R12": "Emissões R12",
+            "Meta emissões": "Meta emissões",
+            "Eficiência energética R12": "Eficiência R12",
+            "Meta eficiência energética": "Meta eficiência"
+        })
+    else:
+        metas_pdf = pd.DataFrame()
+    return gerar_pdf(
+        "Dashboard Energia e CO₂",
+        f"Referência R12: {r12_mes.strftime('%m/%Y')} | I-REC: {'considerado' if usar_irec else 'não considerado'}",
+        [
+            ("KPIs principais", kpis),
+            ("Resultado R12 por site", por_site),
+            ("Evolução de metas — últimos 12 pontos", metas_pdf),
+            ("Tabela executiva", tabela.drop(columns=["_grupo"], errors="ignore")),
+        ],
+    )
+
+
+
+def energia_home_kpis(db):
+    """Mostra apenas as variações executivas de energia na tela inicial."""
+    section("Indicadores de energia e emissões")
+    for base in range(0, 4, 4):
+        cols = st.columns(4)
+        for c, (lab, val, help_) in zip(cols, energia_home_kpi_cards(db)[base:base+4]):
+            with c:
+                kpi_card(lab, val, help_)
 
 # ============================================================
 # 11. Componentes de UI
@@ -652,11 +953,11 @@ def user_selector(db, location="sidebar"):
         with c2:
             sel=st.selectbox("Usuário",nomes,index=idx,key="usuario_home_select")
             u=db.query(Usuario).filter_by(nome=sel).first()
-            st.caption(f"Perfil: {u.perfil} | Site: {site_label(u.site.codigo) if u and u.site else '—'}")
+            st.caption(f"Perfil: {u.perfil} | Site: {u.site.codigo if u and u.site else '—'}")
     else:
         sel=st.sidebar.selectbox("Usuário",nomes,index=idx,key="usuario_sidebar_select")
         u=db.query(Usuario).filter_by(nome=sel).first()
-        st.sidebar.caption(f"Perfil: {u.perfil} | Site: {site_label(u.site.codigo) if u and u.site else '—'}")
+        st.sidebar.caption(f"Perfil: {u.perfil} | Site: {u.site.codigo if u and u.site else '—'}")
     st.session_state.usuario_nome=sel
     return u
 def download_excel_button(label,file,sheets): st.download_button(label,gerar_excel(sheets),file,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
@@ -667,45 +968,56 @@ def df_maquinas(db,ids):
     rows = []
     for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo):
         risco = m.risco_maquina or ("Desprezível" if m.possui_apreciacao_risco else "Apreciação de risco não realizada")
-        rows.append({"ID":m.id,"Código":m.codigo,"Site":site_display(db,m.site_id),"Área":m.area_setor,"Linha":m.linha_processo,"Máquina":m.nome,"Fabricante":m.fabricante,"Modelo":m.modelo,"Série":m.numero_serie,"Ano":m.ano,"Tipo":m.tipo_equipamento,"Responsável":m.responsavel_area,"Criticidade":m.criticidade,"Risco":risco,NOME_STATUS_MAQUINA:calcular_status_maquina_nr12(db,m),"Grupo":site_grupo(site_code(db,m.site_id)),"Divisão":site_divisao(site_code(db,m.site_id)),"Data prevista adequação":fmt_date(getattr(m,"data_prevista_adequacao",None)),"Próxima auditoria":fmt_date(m.proxima_auditoria),"Laudo":"Sim" if m.possui_laudo else "Não","ART":"Sim" if m.possui_art else "Não","Apreciação":"Sim" if m.possui_apreciacao_risco else "Não","Manual":"Sim" if m.possui_manual_atualizado else "Não","Treinamento":"Sim" if m.possui_treinamento else "Não","Observações":m.observacoes})
+        rows.append({"ID":m.id,"Código":m.codigo,"Site":site_code(db,m.site_id),"Área":m.area_setor,"Linha":m.linha_processo,"Máquina":m.nome,"Fabricante":m.fabricante,"Modelo":m.modelo,"Série":m.numero_serie,"Ano":m.ano,"Tipo":m.tipo_equipamento,"Responsável":m.responsavel_area,"Criticidade":m.criticidade,"Risco":risco,"Status de Proteção":calcular_status_maquina_nr12(db,m),"Data prevista adequação":fmt_date(getattr(m,"data_prevista_adequacao",None)),"Próxima auditoria":fmt_date(m.proxima_auditoria),"Laudo":"Sim" if m.possui_laudo else "Não","ART":"Sim" if m.possui_art else "Não","Apreciação":"Sim" if m.possui_apreciacao_risco else "Não","Manual":"Sim" if m.possui_manual_atualizado else "Não","Treinamento":"Sim" if m.possui_treinamento else "Não","Observações":m.observacoes})
     return pd.DataFrame(rows)
 def df_docs(db,ids):
-    return pd.DataFrame([{"ID":d.id,"Site":site_display(db,d.site_id),"Máquina":d.maquina.codigo if d.maquina else "—","Tipo":d.tipo,"Status":calcular_status_documento(d),"Emissão":fmt_date(d.data_emissao),"Validade":fmt_date(d.data_validade),"Arquivo":d.arquivo_nome,"Responsável":d.responsavel,"Descrição":d.descricao,"Observações":d.observacoes} for d in db.query(DocumentoNR12).filter(DocumentoNR12.site_id.in_(ids)).order_by(DocumentoNR12.id.desc())])
+    return pd.DataFrame([{"ID":d.id,"Site":site_code(db,d.site_id),"Máquina":d.maquina.codigo if d.maquina else "—","Tipo":d.tipo,"Status":calcular_status_documento(d),"Emissão":fmt_date(d.data_emissao),"Validade":fmt_date(d.data_validade),"Arquivo":d.arquivo_nome,"Responsável":d.responsavel,"Descrição":d.descricao,"Observações":d.observacoes} for d in db.query(DocumentoNR12).filter(DocumentoNR12.site_id.in_(ids)).order_by(DocumentoNR12.id.desc())])
 def df_ver(db,ids):
-    return pd.DataFrame([{"ID":v.id,"Site":site_display(db,v.site_id),"Máquina":v.maquina.codigo if v.maquina else "—","Tipo":v.tipo,"Data":fmt_date(v.data_verificacao),"Responsável":v.responsavel,"Resultado":v.resultado,"Pontuação %":v.pontuacao,"NC crítica":"Sim" if v.possui_nc_critica else "Não","Próxima":fmt_date(v.proxima_verificacao),"Observações":v.observacoes} for v in db.query(VerificacaoNR12).filter(VerificacaoNR12.site_id.in_(ids)).order_by(VerificacaoNR12.id.desc())])
+    return pd.DataFrame([{"ID":v.id,"Site":site_code(db,v.site_id),"Máquina":v.maquina.codigo if v.maquina else "—","Tipo":v.tipo,"Data":fmt_date(v.data_verificacao),"Responsável":v.responsavel,"Resultado":v.resultado,"Pontuação %":v.pontuacao,"NC crítica":"Sim" if v.possui_nc_critica else "Não","Próxima":fmt_date(v.proxima_verificacao),"Observações":v.observacoes} for v in db.query(VerificacaoNR12).filter(VerificacaoNR12.site_id.in_(ids)).order_by(VerificacaoNR12.id.desc())])
 def df_pac_nr12(db,ids):
-    return pd.DataFrame([{"ID":p.id,"Site":site_display(db,p.site_id),"Máquina":p.maquina.codigo if p.maquina else "—","Origem":p.origem,"Classificação":p.classificacao,"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else p.status,"Responsável":p.responsavel,"Área":p.area_responsavel,"Prazo":fmt_date(p.prazo),"Desvio":p.descricao_desvio,"Evidência":p.evidencia_conclusao,"Validação EHS":"Sim" if p.validacao_ehs else "Não","Eficácia":p.verificacao_eficacia} for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids)).order_by(PACNR12.id.desc())])
+    return pd.DataFrame([{"ID":p.id,"Site":site_code(db,p.site_id),"Máquina":p.maquina.codigo if p.maquina else "—","Origem":p.origem,"Classificação":p.classificacao,"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else p.status,"Responsável":p.responsavel,"Área":p.area_responsavel,"Prazo":fmt_date(p.prazo),"Desvio":p.descricao_desvio,"Evidência":p.evidencia_conclusao,"Validação EHS":"Sim" if p.validacao_ehs else "Não","Eficácia":p.verificacao_eficacia} for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids)).order_by(PACNR12.id.desc())])
 def df_moc(db,ids):
-    return pd.DataFrame([{"ID":m.id,"Site":site_display(db,m.site_id),"Máquina":m.maquina.codigo if m.maquina else "—","Tipo":m.tipo_mudanca,"Descrição":m.descricao,"Solicitante":m.solicitante,"Área":m.area_solicitante,"Data":fmt_date(m.data),"Impacta segurança":"Sim" if m.impacta_seguranca else "Não","Exige MOC":"Sim" if m.exige_moc else "Não","Status":m.status,"EHS":"Sim" if m.aprovacao_ehs else "Não","Manutenção":"Sim" if m.aprovacao_manutencao else "Não","Engenharia":"Sim" if m.aprovacao_engenharia else "Não","Produção":"Sim" if m.aprovacao_producao else "Não","Auditoria pós":"Sim" if m.necessita_auditoria_pos_mudanca else "Não","Treinamento":"Sim" if m.necessita_treinamento else "Não","Validação final":"Sim" if m.validacao_final else "Não"} for m in db.query(MOCNR12).filter(MOCNR12.site_id.in_(ids)).order_by(MOCNR12.id.desc())])
+    return pd.DataFrame([{"ID":m.id,"Site":site_code(db,m.site_id),"Máquina":m.maquina.codigo if m.maquina else "—","Tipo":m.tipo_mudanca,"Descrição":m.descricao,"Solicitante":m.solicitante,"Área":m.area_solicitante,"Data":fmt_date(m.data),"Impacta segurança":"Sim" if m.impacta_seguranca else "Não","Exige MOC":"Sim" if m.exige_moc else "Não","Status":m.status,"EHS":"Sim" if m.aprovacao_ehs else "Não","Manutenção":"Sim" if m.aprovacao_manutencao else "Não","Engenharia":"Sim" if m.aprovacao_engenharia else "Não","Produção":"Sim" if m.aprovacao_producao else "Não","Auditoria pós":"Sim" if m.necessita_auditoria_pos_mudanca else "Não","Treinamento":"Sim" if m.necessita_treinamento else "Não","Validação final":"Sim" if m.validacao_final else "Não"} for m in db.query(MOCNR12).filter(MOCNR12.site_id.in_(ids)).order_by(MOCNR12.id.desc())])
 def df_aud(db,ids):
     rows=[]
     for a in db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.id.desc()):
         res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all(); a.conformidade_percentual=calcular_conformidade_ehs(res); a.maturidade_media=calcular_maturidade_ehs(res)
-        rows.append({"ID":a.id,"Ano":a.ano,"Ciclo":a.ciclo,"Site auditado":site_display(db,a.site_auditado_id),"Site auditor líder":site_display(db,a.site_auditor_lider_id),"Site auditor apoio":site_display(db,a.site_auditor_apoio_id),"Auditor líder":a.auditor_lider,"Auditor apoio":a.auditor_apoio,"Data planejada":fmt_date(a.data_planejada),"Início":fmt_date(a.data_inicio),"Fim":fmt_date(a.data_fim),"Status":a.status,"Conformidade %":a.conformidade_percentual,"Maturidade":a.maturidade_media,"Escopo":a.escopo})
+        rows.append({"ID":a.id,"Ano":a.ano,"Ciclo":a.ciclo,"Site auditado":site_code(db,a.site_auditado_id),"Site auditor líder":site_code(db,a.site_auditor_lider_id),"Site auditor apoio":site_code(db,a.site_auditor_apoio_id),"Auditor líder":a.auditor_lider,"Auditor apoio":a.auditor_apoio,"Data planejada":fmt_date(a.data_planejada),"Início":fmt_date(a.data_inicio),"Fim":fmt_date(a.data_fim),"Status":a.status,"Conformidade %":a.conformidade_percentual,"Maturidade":a.maturidade_media,"Escopo":a.escopo})
     db.commit(); return pd.DataFrame(rows)
 def df_pac_ehs(db,ids):
-    return pd.DataFrame([{"ID":p.id,"Site":site_display(db,p.site_id),"Auditoria":p.auditoria_id,"Requisito":p.requisito.pergunta if p.requisito else "—","Tipo de achado":p.tipo_achado,"Descrição":p.descricao,"Evidência":p.evidencia,"Risco":p.risco,"Causa raiz":p.causa_raiz,"Ação imediata":p.acao_imediata,"Ação corretiva":p.acao_corretiva,"Responsável":p.responsavel,"Área":p.area_responsavel,"Prazo":fmt_date(p.prazo),"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else p.status,"Prioridade":p.prioridade_criticidade,"Validação EHS":"Sim" if p.validacao_ehs else "Não","Eficácia":p.verificacao_eficacia} for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids)).order_by(PACEHS.id.desc())])
+    return pd.DataFrame([{"ID":p.id,"Site":site_code(db,p.site_id),"Auditoria":p.auditoria_id,"Requisito":p.requisito.pergunta if p.requisito else "—","Tipo de achado":p.tipo_achado,"Descrição":p.descricao,"Evidência":p.evidencia,"Risco":p.risco,"Causa raiz":p.causa_raiz,"Ação imediata":p.acao_imediata,"Ação corretiva":p.acao_corretiva,"Responsável":p.responsavel,"Área":p.area_responsavel,"Prazo":fmt_date(p.prazo),"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else p.status,"Prioridade":p.prioridade_criticidade,"Validação EHS":"Sim" if p.validacao_ehs else "Não","Eficácia":p.verificacao_eficacia} for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids)).order_by(PACEHS.id.desc())])
 
 # ============================================================
 # 12. Páginas comuns
 # ============================================================
+
 def dashboard_integrado(db,u):
     ids=visible_site_ids(u,db); update_vencidos(db)
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all()
     auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).all()
     conf=[calcular_conformidade_ehs(db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()) for a in auds]
-    vals=[len(ms),sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Não conforme"),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(),db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count(),db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(),f"{round(sum(conf)/len(conf),1) if conf else 0}%",db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(),db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count()]
-    labs=["[Máquinas] Total de máquinas","[Máquinas] Máquinas não conformes","[Máquinas] PACs vencidos","[Máquinas] PACs abertos","[Auditoria EHS] Auditorias em andamento","[Auditoria EHS] Conformidade média","[Auditoria EHS] PACs vencidos","[Auditoria EHS] NC críticas"]
+    cards = [
+        ("Máquinas • Total de máquinas", len(ms), "Sustentação de Proteções de Máquinas"),
+        ("Máquinas • Não conformes", sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Não conforme"), "Sustentação de Proteções de Máquinas"),
+        ("Máquinas • PACs vencidos", db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status=="Vencida").count(), "Sustentação de Proteções de Máquinas"),
+        ("Máquinas • PACs abertos", db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Aberta","Em andamento","Aguardando validação"])).count(), "Sustentação de Proteções de Máquinas"),
+        ("Auditoria EHS • Em andamento", db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids),AuditoriaCruzada.status=="Em andamento").count(), "Auditoria Cruzada"),
+        ("Auditoria EHS • Conformidade média", f"{round(sum(conf)/len(conf),1) if conf else 0}%", "Auditoria Cruzada"),
+        ("Auditoria EHS • PACs vencidos", db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status=="Vencida").count(), "Auditoria Cruzada"),
+        ("Auditoria EHS • NC críticas", db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.tipo_achado=="Não conformidade crítica",PACEHS.status.in_(["Aberta","Em andamento","Vencida"])).count(), "Auditoria Cruzada"),
+    ]
+    cards.extend(energia_home_kpi_cards(db))
     section("Visão geral integrada")
-    for chunk in [range(4),range(4,8)]:
+    for base in range(0,len(cards),4):
         cols=st.columns(4)
-        for c,i in zip(cols,chunk):
-            with c: kpi_card(labs[i],vals[i])
+        for c,(lab,val,help_) in zip(cols,cards[base:base+4]):
+            with c:
+                kpi_card(lab,val,help_)
     alerts=[]
     for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Vencida","Aberta","Em andamento"])).limit(5): 
-        if p.status=="Vencida" or p.classificacao=="Crítico": alerts.append({"Módulo":NOME_MODULO_MAQUINAS,"Tipo":p.classificacao,"Site":site_display(db,p.site_id),"Descrição":(p.descricao_desvio or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
+        if p.status=="Vencida" or p.classificacao=="Crítico": alerts.append({"Módulo":"Proteções de Máquinas","Tipo":p.classificacao,"Site":site_code(db,p.site_id),"Descrição":(p.descricao_desvio or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
     for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids),PACEHS.status.in_(["Vencida","Aberta","Em andamento"])).limit(5):
-        if p.status=="Vencida" or p.tipo_achado=="Não conformidade crítica": alerts.append({"Módulo":"Auditoria EHS","Tipo":p.tipo_achado,"Site":site_display(db,p.site_id),"Descrição":(p.descricao or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
+        if p.status=="Vencida" or p.tipo_achado=="Não conformidade crítica": alerts.append({"Módulo":"Auditoria EHS","Tipo":p.tipo_achado,"Site":site_code(db,p.site_id),"Descrição":(p.descricao or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
     section("Alertas principais")
     if alerts:
         st.dataframe(pd.DataFrame(alerts), use_container_width=True, hide_index=True)
@@ -713,15 +1025,22 @@ def dashboard_integrado(db,u):
         empty_state("Nenhum alerta crítico ou vencido identificado.")
 
 def home_page(db,u):
-    header("Plataforma Integrada EHS",f"{NOME_MODULO_MAQUINAS} e Auditorias Cruzadas de Diretrizes de EHS em uma única aplicação")
-    dashboard_integrado(db,u); section("Módulos")
+    header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas e Controle de Energia e Emissões em uma única aplicação")
+    dashboard_integrado(db,u)
+    section("Módulos")
     c1,c2=st.columns(2)
     with c1:
-        module_card(NOME_MODULO_MAQUINAS,"Inventário, documentos, checklists, PAC, pendências e relatórios.","⚙️")
+        module_card(NOME_MODULO_MAQUINAS,"Inventário, documentos, checklists, PAC, pendências e relatórios de proteções de máquinas.","⚙️")
         if st.button(f"Acessar {NOME_MODULO_MAQUINAS}",use_container_width=True):
             st.session_state.modulo="nr12"
             st.session_state.page_nr12=NOME_DASH_MAQUINAS
             st.session_state.nav_nr12=NOME_DASH_MAQUINAS
+            st.rerun()
+        module_card("Controle de Energia e Emissões","Consumo de energia, gás natural, CO₂, gastos, eficiência energética, R12, FY e análise I-REC.","⚡")
+        if st.button("Acessar Controle de Energia",use_container_width=True):
+            st.session_state.modulo="energia"
+            st.session_state.page_energia="Dashboard Energia e CO₂"
+            st.session_state.nav_energia="Dashboard Energia e CO₂"
             st.rerun()
     with c2:
         module_card("Auditoria Cruzada de Diretrizes de EHS","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.","🧭")
@@ -731,7 +1050,7 @@ def home_page(db,u):
             st.session_state.nav_ehs="Dashboard Auditoria Cruzada"
             st.rerun()
 def nr12_dashboard(db,u):
-    header(NOME_DASH_MAQUINAS,"Dashboard para máquinas e proteções críticas")
+    header("Sustentação de Proteções de Máquinas","Dashboard para acompanhamento de máquinas, proteções e dispositivos de segurança")
     ids=visible_site_ids(u,db)
     dfm_full=df_maquinas(db,ids)
     if dfm_full.empty:
@@ -742,12 +1061,12 @@ def nr12_dashboard(db,u):
     unidades=f1.multiselect("Unidade", sorted(dfm_full["Site"].dropna().unique()))
     riscos=f2.multiselect("Risco da máquina", [r for r in RISCOS_MAQUINA if r in set(dfm_full["Risco"].dropna())])
     crits=f3.multiselect("Criticidade", sorted(dfm_full["Criticidade"].dropna().unique()))
-    status_f=f4.multiselect(NOME_STATUS_MAQUINA, [s for s in STATUS_MAQUINA if s in set(dfm_full[NOME_STATUS_MAQUINA].dropna())])
+    status_f=f4.multiselect("Status de Proteção", [s for s in STATUS_MAQUINA if s in set(dfm_full["Status de Proteção"].dropna())])
     dfm=dfm_full.copy()
     if unidades: dfm=dfm[dfm["Site"].isin(unidades)]
     if riscos: dfm=dfm[dfm["Risco"].isin(riscos)]
     if crits: dfm=dfm[dfm["Criticidade"].isin(crits)]
-    if status_f: dfm=dfm[dfm[NOME_STATUS_MAQUINA].isin(status_f)]
+    if status_f: dfm=dfm[dfm["Status de Proteção"].isin(status_f)]
     m_ids=dfm["ID"].astype(int).tolist() if not dfm.empty else []
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.id.in_(m_ids)).all() if m_ids else []
     sts=[calcular_status_maquina_nr12(db,m) for m in ms]
@@ -802,7 +1121,7 @@ def nr12_dashboard(db,u):
     section("Gráficos")
     c1,c2=st.columns(2)
     with c1:
-        st.plotly_chart(px.histogram(dfm, x="Site", color=NOME_STATUS_MAQUINA, barmode="group", title="Status de Proteção por site", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
+        st.plotly_chart(px.histogram(dfm, x="Site", color="Status de Proteção", barmode="group", title="Status de conformidade por unidade", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
     with c2:
         fig_risco = px.bar(
             risco_counts,
@@ -834,7 +1153,7 @@ def nr12_dashboard(db,u):
         dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":verificacoes_vencidas},{"Tipo":"Próximas","Qtd":verificacoes_proximas}])
         st.plotly_chart(px.bar(dv,x="Tipo",y="Qtd",color="Tipo",title="Verificações vencidas/próximas", color_discrete_map={"Vencidas":"#dc2626","Próximas":"#f59e0b"}).update_layout(template="plotly_white", showlegend=False),use_container_width=True)
 
-    section("Evolução esperada da adequação das proteções")
+    section("Evolução esperada da adequação de proteções de máquinas")
     evolucao=montar_evolucao_adequacao_nr12(db,ms)
     if not evolucao.empty:
         st.plotly_chart(
@@ -847,7 +1166,7 @@ def nr12_dashboard(db,u):
         empty_state("Sem datas previstas de adequação cadastradas para gerar a evolução esperada.")
 
     section("Máquinas prioritárias")
-    pr=dfm[dfm[NOME_STATUS_MAQUINA]=="Não conforme"] if not dfm.empty else pd.DataFrame()
+    pr=dfm[dfm["Status de Proteção"]=="Não conforme"] if not dfm.empty else pd.DataFrame()
     if not pr.empty:
         st.dataframe(pr, use_container_width=True, hide_index=True)
     else:
@@ -865,17 +1184,17 @@ def nr12_inventario(db,u):
         empty_state("Nenhuma máquina cadastrada.")
     else:
         f1,f2,f3,f4=st.columns(4)
-        fs=f1.multiselect("Filtrar status",sorted(df[NOME_STATUS_MAQUINA].dropna().unique()))
+        fs=f1.multiselect("Filtrar status",sorted(df["Status de Proteção"].dropna().unique()))
         fr=f2.multiselect("Filtrar risco",[r for r in RISCOS_MAQUINA if r in set(df["Risco"].dropna())])
         fc=f3.multiselect("Filtrar criticidade",sorted(df["Criticidade"].dropna().unique()))
         fu=f4.multiselect("Filtrar unidade",sorted(df["Site"].dropna().unique()))
         f=df.copy()
-        if fs: f=f[f[NOME_STATUS_MAQUINA].isin(fs)]
+        if fs: f=f[f["Status de Proteção"].isin(fs)]
         if fr: f=f[f["Risco"].isin(fr)]
         if fc: f=f[f["Criticidade"].isin(fc)]
         if fu: f=f[f["Site"].isin(fu)]
         st.dataframe(f,use_container_width=True,hide_index=True)
-        download_excel_button("Exportar Excel","inventario_protecoes_maquinas.xlsx",{"Inventário":f})
+        download_excel_button("Exportar Excel","inventario_maquinas_nr12.xlsx",{"Inventário":f})
 
     # 2) Cadastrar máquina
     if can_edit(u,"nr12_manutencao"):
@@ -901,11 +1220,11 @@ def nr12_inventario(db,u):
                         crit=st.selectbox("Criticidade",CRITICIDADES)
                     with c:
                         risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA)
-                        status=st.selectbox(NOME_STATUS_MAQUINA,STATUS_MAQUINA)
+                        status=st.selectbox("Status de Proteção",STATUS_MAQUINA)
                         prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180))
                         data_prevista_adequacao=None
                         if status!="Conforme":
-                            data_prevista_adequacao=st.date_input("Data prevista para adequação",value=date.today()+timedelta(days=90),help="Obrigatória para máquinas com Status de Proteção diferente de Conforme.")
+                            data_prevista_adequacao=st.date_input("Data prevista para adequação",value=date.today()+timedelta(days=90),help="Obrigatória para máquinas com status diferente de Conforme.")
                         else:
                             st.caption("Máquina conforme: data prevista para adequação não aplicável.")
                     ck=st.columns(5)
@@ -917,8 +1236,9 @@ def nr12_inventario(db,u):
                     obs=st.text_area("Observações")
                     if st.form_submit_button("Salvar",use_container_width=True):
                         if cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
-                            nova_maquina=MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,proxima_auditoria=prox,data_prevista_adequacao=data_prevista_adequacao,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs)
-                            db.add(nova_maquina); db.flush(); registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",nova_maquina.id,"Criar máquina",valor_novo=cod)
+                            db.add(MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,proxima_auditoria=prox,data_prevista_adequacao=data_prevista_adequacao,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs))
+                            db.flush()
+                            registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",db.query(MaquinaNR12).filter_by(codigo=cod).first().id if db.query(MaquinaNR12).filter_by(codigo=cod).first() else None,"criar",observacao=f"Máquina {cod} cadastrada")
                             db.commit()
                             st.success("Máquina cadastrada.")
                             st.rerun()
@@ -946,20 +1266,19 @@ def nr12_inventario(db,u):
                         st.caption("Máquina conforme: data prevista para adequação será limpa ao salvar.")
                     novas_observacoes=st.text_area("Observações",m.observacoes or "")
                     if st.form_submit_button("Atualizar",use_container_width=True):
-                        status_anterior=m.status_nr12
                         m.status_nr12=novo_status
                         m.criticidade=nova_criticidade
                         m.risco_maquina=novo_risco
                         m.proxima_auditoria=nova_proxima_auditoria
                         m.data_prevista_adequacao=None if novo_status=="Conforme" else nova_data_prevista
                         m.observacoes=novas_observacoes
-                        registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",m.id,"Editar máquina",campo=NOME_STATUS_MAQUINA,valor_anterior=status_anterior,valor_novo=novo_status)
+                        registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",m.id,"editar",observacao=f"Máquina {m.codigo} atualizada")
                         db.commit()
                         st.success("Atualizado.")
                         st.rerun()
 
 def nr12_documentos(db,u):
-    header(NOME_DOCS_MAQUINAS,"Controle de documentos essenciais, validade, evidências e anexos")
+    header("Documentos de Proteções de Máquinas","Controle de documentos essenciais, validade, evidências e anexos")
     ids=visible_site_ids(u,db)
     opts=machine_options(db,ids)
 
@@ -970,7 +1289,7 @@ def nr12_documentos(db,u):
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum documento.")
-    download_excel_button("Exportar documentos Excel","documentos_protecoes_maquinas.xlsx",{"Documentos":df})
+    download_excel_button("Exportar documentos Excel","documentos_nr12.xlsx",{"Documentos":df})
 
     # 2) Arquivos anexados por máquina
     section("Arquivos anexados")
@@ -1016,17 +1335,17 @@ def nr12_documentos(db,u):
                     m=db.get(MaquinaNR12,opts[lab])
                     fname=up.name if up else ""
                     fbytes=up.getvalue() if up else None
-                    docnovo=DocumentoNR12(maquina_id=m.id,site_id=m.site_id,tipo=tipo,descricao=desc,data_emissao=emiss,data_validade=valid,arquivo_nome=fname,arquivo_caminho=fname,arquivo_bytes=fbytes,responsavel=resp)
-                    db.add(docnovo); db.flush(); registrar_log(db,u,NOME_MODULO_MAQUINAS,"DocumentoNR12",docnovo.id,"Criar documento",valor_novo=tipo)
+                    db.add(DocumentoNR12(maquina_id=m.id,site_id=m.site_id,tipo=tipo,descricao=desc,data_emissao=emiss,data_validade=valid,arquivo_nome=fname,arquivo_caminho=fname,arquivo_bytes=fbytes,responsavel=resp))
                     if tipo=="Laudo NR-12": m.possui_laudo=True
                     if tipo=="ART": m.possui_art=True
                     if tipo=="Apreciação de risco": m.possui_apreciacao_risco=True
+                    registrar_log(db,u,NOME_DOCS_MAQUINAS,"DocumentoNR12",None,"criar",observacao=f"Documento {tipo} salvo para {m.codigo}")
                     db.commit()
                     st.success("Documento salvo.")
                     st.rerun()
 
 def nr12_checklists(db,u):
-    header(NOME_CHECKLISTS_MAQUINAS, "Registro por máquina, pontuação e geração automática de PAC")
+    header("Checklists e Inspeções de Proteções de Máquinas", "Registro por máquina, pontuação e geração automática de PAC")
     ids = visible_site_ids(u, db)
     opts = machine_options(db, ids)
 
@@ -1051,12 +1370,12 @@ def nr12_checklists(db,u):
                 for r in db.query(RespostaNR12).filter_by(verificacao_id=v.id).all():
                     respostas.append({
                         "Verificação ID":v.id,
-                        "Site":site_display(db,v.site_id),
+                        "Site":site_code(db,v.site_id),
                         "Máquina":v.maquina.codigo if v.maquina else "—",
                         "Tipo de checklist":v.tipo,
                         "Data":fmt_date(v.data_verificacao),
                         "Responsável":v.responsavel,
-                        "Ordem":r.item.ordem if r.item else "—",
+                        "Ordem":getattr(r,"ordem_snapshot",None) or (r.item.ordem if r.item else "—"),
                         "Pergunta":getattr(r,"pergunta_snapshot",None) or (r.item.pergunta if r.item else "—"),
                         "Item crítico":"Sim" if (getattr(r,"item_critico_snapshot",False) or (r.item and r.item.item_critico)) else "Não",
                         "Aplicável":"Sim" if r.aplicavel else "Não",
@@ -1071,7 +1390,7 @@ def nr12_checklists(db,u):
             )
     else:
         empty_state("Nenhuma verificação.")
-    download_excel_button("Exportar verificações Excel", "verificacoes_protecoes_maquinas.xlsx", {"Verificações": df})
+    download_excel_button("Exportar verificações Excel", "verificacoes_nr12.xlsx", {"Verificações": df})
 
     # 2) Tipo de checklist e checklist
     section("Tipo de checklist")
@@ -1082,11 +1401,15 @@ def nr12_checklists(db,u):
         alert_card("Seu perfil permite consulta, mas não registro.")
         return
 
-    tipos_disponiveis = checklist_tipos_ativos_maquinas(db)
-    tipo = st.selectbox("Tipo de checklist", tipos_disponiveis, key="nr12_tipo_checklist_selector")
-    versao = obter_versao_ativa_checklist_maquinas(db, tipo)
-    itens = itens_versao_checklist_maquinas(db, versao.id)
-    st.caption(f"Versão ativa do checklist: v{versao.versao} | {versao.descricao or 'Sem descrição'}")
+    tipos_db = [t for t in sorted({t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()} | {t for t, in db.query(ChecklistVersaoMaquinas.tipo_checklist).distinct().all()} | set(TIPOS_VERIFICACAO_NR12)) if t != "Checklist operacional"]
+    tipo = st.selectbox("Tipo de checklist", tipos_db, key="nr12_tipo_checklist_selector")
+    versao = get_versao_ativa_maquinas(db, tipo)
+    if versao:
+        itens = db.query(ChecklistPerguntaVersaoMaquinas).filter_by(checklist_versao_id=versao.id, ativo=True).order_by(ChecklistPerguntaVersaoMaquinas.ordem).all()
+        st.caption(f"Versão ativa do checklist: v{versao.versao} — {versao.descricao or 'sem descrição'}")
+    else:
+        itens = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ativo=True).order_by(ChecklistItemNR12.ordem).all()
+        st.warning("Este tipo ainda não possui versão ativa. O checklist atual será usado como base; crie uma versão na Base de Checklists de Proteções.")
     section("Checklist")
     with st.form(f"ver_{tipo}"):
         lab = st.selectbox("Máquina", list(opts), key=f"maq_{tipo}")
@@ -1094,62 +1417,199 @@ def nr12_checklists(db,u):
         obs = st.text_area("Observações", key=f"obs_{tipo}")
         temp = []
         for it in itens:
+            critico = bool(getattr(it, "item_critico", False))
+            gera_auto = bool(getattr(it, "gera_pac_automatico", False))
             st.markdown(
                 f"<div class='check-item'><div class='check-q'>{it.ordem}. {it.pergunta}"
-                f"{'<span class=\"check-meta\">Crítico</span>' if it.item_critico else ''}</div></div>",
+                f"{'<span class="check-meta">Crítico</span>' if critico else ''}"
+                f"{'<span class="check-meta">PAC auto</span>' if gera_auto else ''}</div></div>",
                 unsafe_allow_html=True,
             )
             c1, c2, c3, c4 = st.columns([1, 1.3, 2.6, 1])
             apl = c1.checkbox("Aplicável", True, key=f"nr12_ap_{tipo}_{it.id}")
             res = c2.selectbox("Resultado", RESULTADOS_NR12, key=f"nr12_rr_{tipo}_{it.id}")
             com = c3.text_input("Comentário/evidência", key=f"nr12_co_{tipo}_{it.id}")
-            gp = c4.checkbox("Gerar PAC", False, key=f"nr12_gp_{tipo}_{it.id}")
+            gp = c4.checkbox("Gerar PAC", gera_auto, key=f"nr12_gp_{tipo}_{it.id}")
             temp.append((it, apl, res, com, gp))
         if st.form_submit_button("Salvar verificação", use_container_width=True):
             m = db.get(MaquinaNR12, opts[lab])
             v = VerificacaoNR12(
-                maquina_id=m.id,
-                site_id=m.site_id,
-                tipo=tipo,
-                data_verificacao=date.today(),
-                responsavel=resp,
-                observacoes=obs,
-                proxima_verificacao=date.today() + timedelta(days=180),
-                versao_checklist_id=versao.id,
+                maquina_id=m.id, site_id=m.site_id, tipo=tipo, data_verificacao=date.today(),
+                responsavel=resp, observacoes=obs, proxima_verificacao=date.today() + timedelta(days=180),
+                versao_checklist_id=versao.id if versao else None,
             )
-            db.add(v)
-            db.flush()
+            db.add(v); db.flush()
             rs = []
             for it, apl, res, com, gp in temp:
-                legacy_item = ensure_legacy_item_for_version(db, tipo, it)
+                item_base_id = getattr(it, "item_base_id", None) or (it.id if isinstance(it, ChecklistItemNR12) else None)
+                critico = bool(getattr(it, "item_critico", False))
+                gera_auto = bool(getattr(it, "gera_pac_automatico", False))
                 r = RespostaNR12(
-                    verificacao_id=v.id,
-                    item_id=legacy_item.id,
-                    checklist_versao_id=versao.id,
-                    pergunta_snapshot=it.pergunta,
-                    item_critico_snapshot=bool(it.item_critico),
-                    aplicavel=apl,
-                    resultado="Não aplicável" if not apl else res,
-                    comentario_evidencia=com,
-                    gerar_pac=gp or bool(it.gera_pac_automatico and res=="Não conforme"),
+                    verificacao_id=v.id, item_id=item_base_id, aplicavel=apl,
+                    resultado="Não aplicável" if not apl else res, comentario_evidencia=com, gerar_pac=gp,
+                    ordem_snapshot=getattr(it, "ordem", None), pergunta_snapshot=getattr(it, "pergunta", None),
+                    item_critico_snapshot=critico, gera_pac_automatico_snapshot=gera_auto,
                 )
-                db.add(r)
-                rs.append(r)
+                db.add(r); rs.append(r)
             db.flush()
             v.resultado, v.pontuacao, v.possui_nc_critica = calcular_resultado_verificacao_nr12(rs)
-            m.ultima_auditoria = date.today()
-            m.proxima_auditoria = v.proxima_verificacao
+            m.ultima_auditoria = date.today(); m.proxima_auditoria = v.proxima_verificacao
             m.status_nr12 = v.resultado if v.resultado in STATUS_MAQUINA else normalizar_status_nr12(m.status_nr12)
             for r in rs:
-                if r.resultado == "Não conforme" or r.gerar_pac:
+                if r.resultado == "Não conforme" or r.gerar_pac or getattr(r, "gera_pac_automatico_snapshot", False):
                     gerar_pac_automatico_nr12(db, v, r, resp)
-            registrar_log(db,u,NOME_MODULO_MAQUINAS,"VerificacaoNR12",v.id,"Criar verificação",valor_novo=f"{v.resultado} | {v.pontuacao}%",observacao=tipo)
+            registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"VerificacaoNR12",v.id,"criar",observacao=f"Checklist {tipo} registrado para {m.codigo}")
             db.commit()
             st.success(f"Verificação salva: {v.resultado} | {v.pontuacao}%")
             st.rerun()
 
+def nr12_base_checklists(db,u):
+    header("Base de Checklists de Proteções", "Gestão editável, versionada e rastreável dos checklists de proteções de máquinas")
+    if not can_edit(u,"nr12_manutencao"):
+        alert_card("Seu perfil permite consulta, mas não administração da base de checklists.")
+    tipos = sorted({t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()} | {t for t, in db.query(ChecklistVersaoMaquinas.tipo_checklist).distinct().all()} | set(TIPOS_VERIFICACAO_NR12))
+    if not tipos:
+        empty_state("Nenhum tipo de checklist cadastrado.")
+        return
+    c1,c2 = st.columns([2,1])
+    tipo = c1.selectbox("Tipo de checklist", tipos, key="base_checklist_tipo")
+    versoes = db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo).order_by(ChecklistVersaoMaquinas.versao.desc()).all()
+    ativa = get_versao_ativa_maquinas(db,tipo)
+    c2.metric("Versão ativa", f"v{ativa.versao}" if ativa else "—")
+    if can_edit(u,"nr12_manutencao"):
+        ac1,ac2,ac3 = st.columns(3)
+        with ac1:
+            if st.button("Criar nova versão a partir da ativa", use_container_width=True):
+                nova = criar_versao_checklist_maquinas(db,tipo,u.nome,"Nova versão criada pelo app",ativa)
+                registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistVersaoMaquinas",nova.id,"criar",observacao=f"Nova versão v{nova.versao} para {tipo}")
+                db.commit(); st.success(f"Versão v{nova.versao} criada e ativada."); st.rerun()
+        with ac2:
+            novo_tipo = st.text_input("Novo tipo de checklist", key="novo_tipo_checklist")
+            if st.button("Criar tipo", use_container_width=True) and novo_tipo.strip():
+                item = ChecklistItemNR12(tipo_checklist=novo_tipo.strip(), ordem=1, pergunta="Nova pergunta a editar", item_critico=False, gera_pac_automatico=False, ativo=True)
+                db.add(item); db.flush()
+                nova = criar_versao_checklist_maquinas(db,novo_tipo.strip(),u.nome,"Versão inicial criada pelo app")
+                registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistVersaoMaquinas",nova.id,"criar",observacao=f"Tipo {novo_tipo} criado")
+                db.commit(); st.success("Tipo criado."); st.rerun()
+        with ac3:
+            if ativa and st.button("Inativar versão ativa", use_container_width=True):
+                ativa.ativo=False
+                registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistVersaoMaquinas",ativa.id,"inativar",observacao=f"Versão v{ativa.versao} inativada")
+                db.commit(); st.warning("Versão inativada. Crie/ative outra versão antes de novos registros."); st.rerun()
+    section("Versões cadastradas")
+    dfv = pd.DataFrame([{"ID":v.id,"Tipo":v.tipo_checklist,"Versão":v.versao,"Ativo":v.ativo,"Criado por":v.criado_por,"Criado em":fmt_date(v.criado_em),"Descrição":v.descricao} for v in versoes])
+    st.dataframe(dfv, use_container_width=True, hide_index=True)
+    if ativa:
+        section("Perguntas da versão ativa")
+        perguntas = db.query(ChecklistPerguntaVersaoMaquinas).filter_by(checklist_versao_id=ativa.id).order_by(ChecklistPerguntaVersaoMaquinas.ordem).all()
+        dfp = pd.DataFrame([{"ID":p.id,"Ordem":p.ordem,"Pergunta":p.pergunta,"Crítico":p.item_critico,"Gerar PAC automático":p.gera_pac_automatico,"Ativo":p.ativo} for p in perguntas])
+        if dfp.empty:
+            empty_state("Versão sem perguntas cadastradas.")
+        elif can_edit(u,"nr12_manutencao"):
+            ed = st.data_editor(dfp, use_container_width=True, hide_index=True, disabled=["ID"], num_rows="fixed")
+            if st.button("Salvar alterações das perguntas", use_container_width=True):
+                for _, row in ed.iterrows():
+                    obj = db.get(ChecklistPerguntaVersaoMaquinas, int(row["ID"]))
+                    if obj:
+                        antes = obj.pergunta
+                        obj.ordem = int(row["Ordem"]) if pd.notna(row["Ordem"]) else obj.ordem
+                        obj.pergunta = str(row["Pergunta"])
+                        obj.item_critico = bool(row["Crítico"])
+                        obj.gera_pac_automatico = bool(row["Gerar PAC automático"])
+                        obj.ativo = bool(row["Ativo"])
+                        if antes != obj.pergunta:
+                            registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistPerguntaVersaoMaquinas",obj.id,"editar","pergunta",antes,obj.pergunta)
+                db.commit(); st.success("Perguntas atualizadas."); st.rerun()
+            with st.expander("Adicionar pergunta à versão ativa"):
+                with st.form("add_pergunta_checklist_maquinas"):
+                    prox_ordem = (max([p.ordem or 0 for p in perguntas]) + 1) if perguntas else 1
+                    ordem = st.number_input("Ordem", min_value=1, value=prox_ordem)
+                    pergunta = st.text_area("Pergunta")
+                    crit = st.checkbox("Item crítico")
+                    pac_auto = st.checkbox("Gerar PAC automático quando houver não conformidade")
+                    if st.form_submit_button("Adicionar", use_container_width=True):
+                        if pergunta.strip():
+                            obj = ChecklistPerguntaVersaoMaquinas(checklist_versao_id=ativa.id, ordem=int(ordem), pergunta=pergunta.strip(), item_critico=crit, gera_pac_automatico=pac_auto, ativo=True)
+                            db.add(obj); db.flush()
+                            registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistPerguntaVersaoMaquinas",obj.id,"criar",observacao=f"Pergunta adicionada à v{ativa.versao}")
+                            db.commit(); st.success("Pergunta adicionada."); st.rerun()
+                        else:
+                            st.error("Informe a pergunta.")
+        else:
+            st.dataframe(dfp, use_container_width=True, hide_index=True)
+        download_excel_button("Exportar base de checklists", "base_checklists_protecoes.xlsx", {"Versoes": dfv, "Perguntas_Ativas": dfp})
+
+def nr12_calendario(db,u):
+    header("Calendário de Auditorias e Inspeções", "Visão mensal, por unidade e por responsável das auditorias e inspeções de proteções de máquinas")
+    ids = visible_site_ids(u,db)
+    hoje = date.today()
+    rows=[]
+    for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all():
+        if m.proxima_auditoria:
+            d=as_date(m.proxima_auditoria)
+            rows.append({"Data":d,"Mês":d.replace(day=1),"Site":site_code(db,m.site_id),"Responsável":m.responsavel_area or "—","Tipo":"Auditoria/inspeção planejada","Máquina":m.codigo,"Status":"Vencida" if d < hoje else "Planejada","Origem":"Inventário","Observação":m.nome})
+    for v in db.query(VerificacaoNR12).filter(VerificacaoNR12.site_id.in_(ids)).all():
+        d=as_date(v.data_verificacao)
+        if d:
+            rows.append({"Data":d,"Mês":d.replace(day=1),"Site":site_code(db,v.site_id),"Responsável":v.responsavel or "—","Tipo":v.tipo or "Verificação","Máquina":v.maquina.codigo if v.maquina else "—","Status":"Concluída","Origem":"Verificação registrada","Observação":v.resultado})
+    df=pd.DataFrame(rows)
+    if df.empty:
+        empty_state("Nenhum evento encontrado.")
+        return
+    with st.expander("Filtros", expanded=True):
+        c1,c2,c3,c4=st.columns(4)
+        meses=sorted(df["Mês"].dropna().unique())
+        mes_ref=c1.selectbox("Mês",meses,index=max(0,len(meses)-1),format_func=lambda d: pd.to_datetime(d).strftime("%m/%Y"))
+        sites=c2.multiselect("Site",sorted(df["Site"].dropna().unique()))
+        resp=c3.multiselect("Responsável",sorted(df["Responsável"].dropna().unique()))
+        status=c4.multiselect("Status",[s for s in ["Planejada","Vencida","Concluída"] if s in set(df["Status"])])
+    f=df.copy()
+    if mes_ref: f=f[f["Mês"]==mes_ref]
+    if sites: f=f[f["Site"].isin(sites)]
+    if resp: f=f[f["Responsável"].isin(resp)]
+    if status: f=f[f["Status"].isin(status)]
+    k1,k2,k3=st.columns(3)
+    k1.metric("Planejadas", int((f["Status"]=="Planejada").sum()))
+    k2.metric("Vencidas", int((f["Status"]=="Vencida").sum()))
+    k3.metric("Concluídas", int((f["Status"]=="Concluída").sum()))
+    t1,t2,t3=st.tabs(["Visão mensal","Por site","Por responsável"])
+    with t1:
+        st.dataframe(f.sort_values("Data"), use_container_width=True, hide_index=True)
+    with t2:
+        agg=f.groupby(["Site","Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
+        if not agg.empty: st.plotly_chart(px.bar(agg,x="Site",y="Quantidade",color="Status",barmode="group",title="Eventos por site e status").update_layout(template="plotly_white"), use_container_width=True)
+        st.dataframe(agg, use_container_width=True, hide_index=True)
+    with t3:
+        agg=f.groupby(["Responsável","Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
+        if not agg.empty: st.plotly_chart(px.bar(agg,x="Responsável",y="Quantidade",color="Status",barmode="group",title="Eventos por responsável e status").update_layout(template="plotly_white"), use_container_width=True)
+        st.dataframe(agg, use_container_width=True, hide_index=True)
+    download_excel_button("Exportar calendário", "calendario_auditorias_inspecoes.xlsx", {"Calendario": f})
+
+def logs_sistema_page(db,u):
+    header("Logs do Sistema", "Trilha de auditoria de alterações críticas")
+    if not can_admin(u):
+        alert_card("Acesso restrito ao perfil Admin_LAG.")
+        return
+    df=df_logs(db)
+    if df.empty:
+        empty_state("Nenhum log registrado.")
+        return
+    with st.expander("Filtros", expanded=True):
+        c1,c2,c3,c4=st.columns(4)
+        usuarios=c1.multiselect("Usuário", sorted(df["Usuário"].dropna().unique()))
+        modulos=c2.multiselect("Módulo", sorted(df["Módulo"].dropna().unique()))
+        entidades=c3.multiselect("Entidade", sorted(df["Entidade"].dropna().unique()))
+        acoes=c4.multiselect("Ação", sorted(df["Ação"].dropna().unique()))
+    f=df.copy()
+    if usuarios: f=f[f["Usuário"].isin(usuarios)]
+    if modulos: f=f[f["Módulo"].isin(modulos)]
+    if entidades: f=f[f["Entidade"].isin(entidades)]
+    if acoes: f=f[f["Ação"].isin(acoes)]
+    st.dataframe(f, use_container_width=True, hide_index=True)
+    download_excel_button("Exportar logs", "logs_auditoria_sistema.xlsx", {"Logs": f})
+
 def nr12_pac(db,u):
-    header(NOME_PAC_MAQUINAS,"Planos de ação corretiva")
+    header("PAC de Proteções de Máquinas","Planos de ação corretiva")
     ids=visible_site_ids(u,db)
     sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
     opts=machine_options(db,ids)
@@ -1161,7 +1621,7 @@ def nr12_pac(db,u):
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhum PAC.")
-    download_excel_button("Exportar Plano de Ação - Proteções de Máquinas Excel","pac_protecoes_maquinas.xlsx",{"PAC":df})
+    download_excel_button("Exportar PAC Proteções de Máquinas Excel","pac_nr12.xlsx",{"PAC":df})
 
     # 2) Cadastrar PAC manual
     if can_edit(u,"nr12_manutencao") and sites:
@@ -1176,8 +1636,7 @@ def nr12_pac(db,u):
                 area=st.text_input("Área")
                 desc=st.text_area("Descrição do desvio")
                 if st.form_submit_button("Salvar",use_container_width=True):
-                    pacnovo=PACNR12(origem="Manual",site_id=sites[site],maquina_id=None if maq=="—" else opts[maq],classificacao=clas,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao_desvio=desc)
-                    db.add(pacnovo); db.flush(); registrar_log(db,u,NOME_MODULO_MAQUINAS,"PACNR12",pacnovo.id,"Criar PAC",valor_novo=clas)
+                    db.add(PACNR12(origem="Manual",site_id=sites[site],maquina_id=None if maq=="—" else opts[maq],classificacao=clas,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao_desvio=desc))
                     db.commit()
                     st.success("PAC salvo.")
                     st.rerun()
@@ -1200,7 +1659,6 @@ def nr12_pac(db,u):
                     else:
                         if p.status=="Concluída" and not p.data_conclusao:
                             p.data_conclusao=date.today()
-                        registrar_log(db,u,NOME_MODULO_MAQUINAS,"PACNR12",p.id,"Atualizar PAC",campo="Status",valor_novo=p.status)
                         db.commit()
                         st.success("Atualizado.")
                         st.rerun()
@@ -1226,7 +1684,7 @@ def prioridade_auditoria_nr12(db,m):
     return score, prioridade, prazo_txt, dias, risco
 
 def nr12_central_pendencias(db,u):
-    header("Central de Pendências", "Próximas auditorias e inspeções ordenadas por prioridade")
+    header("Central de Pendências de Proteções de Máquinas","Próximas auditorias ordenadas por prioridade")
     ids=visible_site_ids(u,db)
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all()
     rows=[]
@@ -1235,13 +1693,13 @@ def nr12_central_pendencias(db,u):
         rows.append({
             "Prioridade":prioridade,
             "Score":score,
-            "Site":site_display(db,m.site_id),
+            "Site":site_code(db,m.site_id),
             "Código":m.codigo,
             "Máquina":m.nome,
             "Área":m.area_setor,
             "Risco":risco,
             "Criticidade":m.criticidade,
-            NOME_STATUS_MAQUINA:calcular_status_maquina_nr12(db,m),"Grupo":site_grupo(site_code(db,m.site_id)),"Divisão":site_divisao(site_code(db,m.site_id)),
+            "Status de Proteção":calcular_status_maquina_nr12(db,m),
             "Próxima auditoria":fmt_date(m.proxima_auditoria),
             "Dias para vencer":dias if dias is not None else "—",
             "Situação do prazo":prazo_txt,
@@ -1258,10 +1716,10 @@ def nr12_central_pendencias(db,u):
     if risco: df=df[df["Risco"].isin(risco)]
     if prioridade: df=df[df["Prioridade"].isin(prioridade)]
     st.dataframe(df.drop(columns=["Score"]),use_container_width=True,hide_index=True)
-    download_excel_button("Exportar central de pendências", "central_pendencias_protecoes_maquinas.xlsx", {"Pendências": df.drop(columns=["Score"])})
+    download_excel_button("Exportar central de pendências", "central_pendencias_nr12.xlsx", {"Pendências": df.drop(columns=["Score"])})
 
 def nr12_moc(db,u):
-    header("MOC de Proteções de Máquinas","Mudanças críticas, aprovações e validação")
+    header("Gestão de Mudanças / MOC de Proteções de Máquinas","Mudanças críticas, aprovações e validação")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}; opts=machine_options(db,ids)
     if can_edit(u,"moc"):
         with st.form("moc"):
@@ -1275,8 +1733,7 @@ def nr12_moc(db,u):
                 crit=tipo in TIPOS_MUDANCA_CRITICA or imp
                 if crit and (not exige or (status in ["Aprovada","Implementada","Validada"] and (not ehs or not (man or eng)))): st.error("Mudança crítica exige MOC, aprovação EHS e aprovação de Manutenção ou Engenharia.")
                 else:
-                    mid=None if maq=="—" else opts[maq]; mocnovo=MOCNR12(site_id=sites[site],maquina_id=mid,tipo_mudanca=tipo,descricao=desc,solicitante=solic,area_solicitante=area,data=date.today(),impacta_seguranca=imp,exige_moc=exige,status=status,aprovacao_ehs=ehs,aprovacao_manutencao=man,aprovacao_engenharia=eng,aprovacao_producao=prod,necessita_auditoria_pos_mudanca=aud,necessita_treinamento=tre,observacoes=obs,validacao_final=val)
-                    db.add(mocnovo); db.flush(); registrar_log(db,u,NOME_MODULO_MAQUINAS,"MOCNR12",mocnovo.id,"Criar MOC",valor_novo=tipo)
+                    mid=None if maq=="—" else opts[maq]; db.add(MOCNR12(site_id=sites[site],maquina_id=mid,tipo_mudanca=tipo,descricao=desc,solicitante=solic,area_solicitante=area,data=date.today(),impacta_seguranca=imp,exige_moc=exige,status=status,aprovacao_ehs=ehs,aprovacao_manutencao=man,aprovacao_engenharia=eng,aprovacao_producao=prod,necessita_auditoria_pos_mudanca=aud,necessita_treinamento=tre,observacoes=obs,validacao_final=val))
                     if mid and crit and status=="Implementada" and not val: db.get(MaquinaNR12,mid).status_nr12="Não conforme"
                     db.commit(); st.success("MOC salva."); st.rerun()
     df = df_moc(db, ids)
@@ -1285,167 +1742,26 @@ def nr12_moc(db,u):
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         empty_state("Nenhuma MOC.")
-    download_excel_button("Exportar MOC Excel", "moc_protecoes_maquinas.xlsx", {"MOC": df})
+    download_excel_button("Exportar MOC Excel", "moc_nr12.xlsx", {"MOC": df})
 def nr12_termo(db,u):
     header("Termo de Garantia de Proteções de Máquinas","Emissão anual por site")
     ids=visible_site_ids(u,db); sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
     with st.form("termo"):
-        site=st.selectbox("Site",list(sites)); ano=st.number_input("Ano/ciclo",2020,2100,date.today().year); ehs=st.text_input("Responsável EHS"); man=st.text_input("Responsável Manutenção"); prod=st.text_input("Responsável Produção/Operação"); eng=st.text_input("Responsável Engenharia"); lid=st.text_input("Liderança do site"); res=st.text_area("Ressalvas"); pend=st.text_area("Pendências"); dec=st.text_area("Declaração formal","Declaramos que o site acompanha a sustentação da conformidade NR-12 das máquinas já adequadas, mantendo inventário, controles documentais, inspeções, PAC e MOC.")
+        site=st.selectbox("Site",list(sites)); ano=st.number_input("Ano/ciclo",2020,2100,date.today().year); ehs=st.text_input("Responsável EHS"); man=st.text_input("Responsável Manutenção"); prod=st.text_input("Responsável Produção/Operação"); eng=st.text_input("Responsável Engenharia"); lid=st.text_input("Liderança do site"); res=st.text_area("Ressalvas"); pend=st.text_area("Pendências"); dec=st.text_area("Declaração formal","Declaramos que o site acompanha a sustentação de proteções de máquinas já adequadas, mantendo inventário, controles documentais, inspeções, PAC e MOC.")
         if st.form_submit_button("Gerar termo",use_container_width=True):
             sid=sites[site]; ms=db.query(MaquinaNR12).filter_by(site_id=sid).all(); sts=[calcular_status_maquina_nr12(db,m) for m in ms]
             resumo=pd.DataFrame([{"Indicador":"Total de máquinas","Valor":len(ms)},{"Indicador":"Conformes","Valor":sts.count("Conforme")},{"Indicador":"Não conformes","Valor":sts.count("Não conforme")},{"Indicador":"PACs críticos abertos/vencidos","Valor":db.query(PACNR12).filter(PACNR12.site_id==sid,PACNR12.classificacao=="Crítico",PACNR12.status.in_(["Aberta","Em andamento","Vencida"])).count()},{"Indicador":"MOCs críticas sem validação","Valor":db.query(MOCNR12).filter(MOCNR12.site_id==sid,MOCNR12.exige_moc==True,MOCNR12.validacao_final==False).count()}])
             if can_edit(u,"nr12_manutencao"): db.add(TermoGarantiaNR12(site_id=sid,ano_ciclo=ano,responsavel_ehs=ehs,responsavel_manutencao=man,responsavel_producao=prod,responsavel_engenharia=eng,lideranca_site=lid,ressalvas=res,pendencias=pend,declaracao_formal=dec)); db.commit()
             pdf=gerar_pdf(f"Termo de Garantia de Sustentação de Proteções de Máquinas — {site}",f"Ano/ciclo: {ano} | Emissão: {fmt_date(date.today())}",[("Declaração",dec),("Responsáveis",pd.DataFrame([{"Função":"EHS","Responsável":ehs},{"Função":"Manutenção","Responsável":man},{"Função":"Produção/Operação","Responsável":prod},{"Função":"Engenharia","Responsável":eng},{"Função":"Liderança","Responsável":lid}])),("Consolidação",resumo),("Ressalvas",res or "Sem ressalvas."),("Pendências",pend or "Sem pendências.")])
-            download_pdf_button("Baixar termo de proteções PDF",f"termo_nr12_{site}_{ano}.pdf",pdf)
-def nr12_base_checklists(db,u):
-    header("Base de Checklists de Proteções", "Gestão de tipos, perguntas, criticidade, PAC automático e versionamento")
-    if not can_admin(u) and not can_edit(u,"nr12_manutencao"):
-        alert_card("Seu perfil permite consulta, mas não administração da base de checklists.")
-    tipos=checklist_tipos_ativos_maquinas(db)
-    section("Versões ativas")
-    versoes=db.query(ChecklistVersaoMaquinas).order_by(ChecklistVersaoMaquinas.tipo_checklist, ChecklistVersaoMaquinas.versao.desc()).all()
-    dfv=pd.DataFrame([{"ID":v.id,"Tipo":v.tipo_checklist,"Versão":v.versao,"Ativa":"Sim" if v.ativo else "Não","Descrição":v.descricao,"Criado por":v.criado_por,"Criado em":fmt_date(v.criado_em)} for v in versoes])
-    if not dfv.empty:
-        st.dataframe(dfv,use_container_width=True,hide_index=True)
-    else:
-        empty_state("Nenhuma versão cadastrada.")
-    download_excel_button("Exportar base de checklists", "base_checklists_protecoes.xlsx", {"Versoes":dfv})
-
-    section("Editar perguntas da versão ativa")
-    if not tipos:
-        empty_state("Nenhum tipo de checklist ativo.")
-        return
-    tipo=st.selectbox("Tipo de checklist", tipos, key="base_checklist_tipo_admin")
-    versao=obter_versao_ativa_checklist_maquinas(db,tipo)
-    perguntas=db.query(ChecklistPerguntaMaquinas).filter_by(checklist_versao_id=versao.id).order_by(ChecklistPerguntaMaquinas.ordem).all()
-    dfp=pd.DataFrame([{"ID":p.id,"Ordem":p.ordem,"Pergunta":p.pergunta,"Crítico":p.item_critico,"Gera PAC automático":p.gera_pac_automatico,"Criticidade":p.criticidade,"Ativo":p.ativo} for p in perguntas])
-    if dfp.empty:
-        dfp=pd.DataFrame(columns=["ID","Ordem","Pergunta","Crítico","Gera PAC automático","Criticidade","Ativo"])
-    if can_edit(u,"nr12_manutencao"):
-        edit=st.data_editor(
-            dfp, use_container_width=True, hide_index=True, disabled=["ID"], key=f"editor_base_checklist_{versao.id}",
-            column_config={"Criticidade":st.column_config.SelectboxColumn("Criticidade", options=CRITICIDADES)}
-        )
-        if st.button("Salvar alterações da versão ativa",use_container_width=True):
-            for _,row in edit.iterrows():
-                if pd.isna(row.get("ID")):
-                    continue
-                p=db.get(ChecklistPerguntaMaquinas,int(row["ID"]))
-                if not p: continue
-                anterior=(p.pergunta,p.item_critico,p.gera_pac_automatico,p.criticidade,p.ativo,p.ordem)
-                p.ordem=int(row["Ordem"] or p.ordem); p.pergunta=str(row["Pergunta"] or ""); p.item_critico=bool(row["Crítico"]); p.gera_pac_automatico=bool(row["Gera PAC automático"]); p.criticidade=str(row["Criticidade"] or "Média"); p.ativo=bool(row["Ativo"])
-                registrar_log(db,u,NOME_MODULO_MAQUINAS,"ChecklistPerguntaMaquinas",p.id,"Editar pergunta",valor_anterior=anterior,valor_novo=(p.pergunta,p.item_critico,p.gera_pac_automatico,p.criticidade,p.ativo,p.ordem))
-            db.commit(); st.success("Base de checklist atualizada."); st.rerun()
-        with st.expander("Adicionar pergunta à versão ativa"):
-            with st.form("nova_pergunta_checklist"):
-                ordem=st.number_input("Ordem",min_value=1,value=int((dfp["Ordem"].max() if not dfp.empty and pd.notna(dfp["Ordem"].max()) else 0)+1))
-                pergunta=st.text_area("Pergunta")
-                crit=st.checkbox("Item crítico")
-                gera=st.checkbox("Gera PAC automaticamente", value=crit)
-                criticidade=st.selectbox("Criticidade",CRITICIDADES,index=1)
-                if st.form_submit_button("Adicionar pergunta",use_container_width=True):
-                    novo=ChecklistPerguntaMaquinas(checklist_versao_id=versao.id,ordem=int(ordem),pergunta=pergunta,item_critico=crit,gera_pac_automatico=gera,criticidade=criticidade,ativo=True)
-                    db.add(novo); db.flush(); registrar_log(db,u,NOME_MODULO_MAQUINAS,"ChecklistPerguntaMaquinas",novo.id,"Criar pergunta",valor_novo=pergunta); db.commit(); st.success("Pergunta adicionada."); st.rerun()
-        with st.expander("Criar novo tipo ou nova versão"):
-            c1,c2=st.columns(2)
-            with c1:
-                with st.form("novo_tipo_checklist"):
-                    nt=st.text_input("Novo tipo de checklist")
-                    np=st.text_area("Primeira pergunta")
-                    if st.form_submit_button("Criar tipo",use_container_width=True):
-                        if nt:
-                            v=ChecklistVersaoMaquinas(tipo_checklist=nt,versao=1,descricao="Criado pelo app",ativo=True,criado_por=u.nome)
-                            db.add(v); db.flush()
-                            if np:
-                                db.add(ChecklistPerguntaMaquinas(checklist_versao_id=v.id,ordem=1,pergunta=np,item_critico=False,ativo=True,criticidade="Média"))
-                            registrar_log(db,u,NOME_MODULO_MAQUINAS,"ChecklistVersaoMaquinas",v.id,"Criar tipo",valor_novo=nt)
-                            db.commit(); st.success("Tipo criado."); st.rerun()
-            with c2:
-                with st.form("nova_versao_checklist"):
-                    desc=st.text_area("Descrição da nova versão")
-                    if st.form_submit_button("Criar nova versão a partir da ativa",use_container_width=True):
-                        nova=criar_nova_versao_checklist_maquinas(db,tipo,u,desc)
-                        db.commit(); st.success(f"Versão {nova.versao} criada e ativada."); st.rerun()
-    else:
-        st.dataframe(dfp,use_container_width=True,hide_index=True)
-
-def nr12_calendario(db,u):
-    header("Calendário de Auditorias e Inspeções", "Visão mensal, por site, responsável e status")
-    ids=visible_site_ids(u,db)
-    rows=[]
-    for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all():
-        if m.proxima_auditoria:
-            dias=(m.proxima_auditoria-date.today()).days
-            status="Vencida" if dias<0 else "Próximos 30 dias" if dias<=30 else "Próximos 60 dias" if dias<=60 else "Próximos 90 dias" if dias<=90 else "Planejada"
-            rows.append({"Data":m.proxima_auditoria,"Mês":m.proxima_auditoria.strftime("%Y-%m"),"Tipo":"Auditoria/inspeção prevista","Site":site_display(db,m.site_id),"Grupo":site_grupo(site_code(db,m.site_id)),"Responsável":m.responsavel_area or "—","Status":status,"Máquina":m.codigo,"Descrição":m.nome})
-        if m.ultima_auditoria:
-            rows.append({"Data":m.ultima_auditoria,"Mês":m.ultima_auditoria.strftime("%Y-%m"),"Tipo":"Última auditoria registrada","Site":site_display(db,m.site_id),"Grupo":site_grupo(site_code(db,m.site_id)),"Responsável":m.responsavel_area or "—","Status":"Concluída","Máquina":m.codigo,"Descrição":m.nome})
-    for v in db.query(VerificacaoNR12).filter(VerificacaoNR12.site_id.in_(ids)).all():
-        if v.data_verificacao:
-            rows.append({"Data":v.data_verificacao,"Mês":v.data_verificacao.strftime("%Y-%m"),"Tipo":v.tipo,"Site":site_display(db,v.site_id),"Grupo":site_grupo(site_code(db,v.site_id)),"Responsável":v.responsavel or "—","Status":v.resultado or "Concluída","Máquina":v.maquina.codigo if v.maquina else "—","Descrição":"Verificação registrada"})
-    df=pd.DataFrame(rows)
-    if df.empty:
-        empty_state("Nenhuma auditoria ou inspeção cadastrada.")
-        return
-    with st.expander("Filtros",expanded=True):
-        c1,c2,c3,c4=st.columns(4)
-        meses=c1.multiselect("Mês",sorted(df["Mês"].dropna().unique()))
-        sites=c2.multiselect("Site",sorted(df["Site"].dropna().unique()))
-        resp=c3.multiselect("Responsável",sorted(df["Responsável"].dropna().unique()))
-        status=c4.multiselect("Status",sorted(df["Status"].dropna().unique()))
-    f=df.copy()
-    if meses: f=f[f["Mês"].isin(meses)]
-    if sites: f=f[f["Site"].isin(sites)]
-    if resp: f=f[f["Responsável"].isin(resp)]
-    if status: f=f[f["Status"].isin(status)]
-    c1,c2,c3=st.columns(3)
-    with c1: kpi_card("Vencidas", int((f["Status"]=="Vencida").sum()))
-    with c2: kpi_card("Próximos 30 dias", int((f["Status"]=="Próximos 30 dias").sum()))
-    with c3: kpi_card("Eventos no filtro", len(f))
-    tabs=st.tabs(["Visão mensal","Por site","Por responsável","Detalhamento"])
-    with tabs[0]:
-        dm=f.groupby(["Mês","Status"],as_index=False).size().rename(columns={"size":"Quantidade"})
-        st.plotly_chart(px.bar(dm,x="Mês",y="Quantidade",color="Status",barmode="group",title="Eventos por mês e status").update_layout(template="plotly_white"),use_container_width=True)
-    with tabs[1]:
-        ds=f.groupby(["Site","Status"],as_index=False).size().rename(columns={"size":"Quantidade"})
-        st.plotly_chart(px.bar(ds,x="Site",y="Quantidade",color="Status",barmode="group",title="Eventos por site").update_layout(template="plotly_white"),use_container_width=True)
-    with tabs[2]:
-        dr=f.groupby(["Responsável","Status"],as_index=False).size().rename(columns={"size":"Quantidade"})
-        st.plotly_chart(px.bar(dr,x="Responsável",y="Quantidade",color="Status",barmode="group",title="Eventos por responsável").update_layout(template="plotly_white"),use_container_width=True)
-    with tabs[3]:
-        st.dataframe(f.sort_values("Data"),use_container_width=True,hide_index=True)
-    download_excel_button("Exportar calendário Excel", "calendario_auditorias_inspecoes.xlsx", {"Calendario":f})
-
-def logs_sistema(db,u):
-    header("Logs do Sistema", "Trilha de auditoria das alterações críticas")
-    if not can_admin(u):
-        alert_card("Apenas Admin_LAG pode acessar os logs do sistema.")
-        return
-    logs=db.query(LogAuditoriaSistema).order_by(LogAuditoriaSistema.data_hora.desc()).all()
-    df=pd.DataFrame([{"ID":l.id,"Data/hora":l.data_hora,"Usuário":l.usuario,"Perfil":l.perfil,"Módulo":l.modulo,"Entidade":l.entidade,"Entidade ID":l.entidade_id,"Ação":l.acao,"Campo":l.campo,"Valor anterior":l.valor_anterior,"Valor novo":l.valor_novo,"Observação":l.observacao} for l in logs])
-    if df.empty:
-        empty_state("Nenhum log registrado ainda.")
-        return
-    with st.expander("Filtros",expanded=True):
-        c1,c2,c3=st.columns(3)
-        usuarios=c1.multiselect("Usuário",sorted(df["Usuário"].dropna().unique()))
-        modulos=c2.multiselect("Módulo",sorted(df["Módulo"].dropna().unique()))
-        entidades=c3.multiselect("Entidade",sorted(df["Entidade"].dropna().unique()))
-    f=df.copy()
-    if usuarios: f=f[f["Usuário"].isin(usuarios)]
-    if modulos: f=f[f["Módulo"].isin(modulos)]
-    if entidades: f=f[f["Entidade"].isin(entidades)]
-    st.dataframe(f,use_container_width=True,hide_index=True)
-    download_excel_button("Exportar logs Excel", "logs_auditoria_sistema.xlsx", {"Logs":f})
-
+            download_pdf_button("Baixar termo Proteções de Máquinas PDF",f"termo_nr12_{site}_{ano}.pdf",pdf)
 def nr12_relatorios(db,u):
-    header(NOME_RELATORIOS_MAQUINAS,"Exportações em Excel e PDFs")
+    header("Relatórios de Proteções de Máquinas","Exportações em Excel e PDFs")
     ids=visible_site_ids(u,db)
     d={"Inventário":df_maquinas(db,ids),"Documentos":df_docs(db,ids),"Verificações":df_ver(db,ids),"PAC":df_pac_nr12(db,ids)}
     cols=st.columns(4)
     for (name,df),c in zip(d.items(),cols):
         with c: download_excel_button(f"{name} Excel",f"{name.lower()}_nr12.xlsx",{name:df})
-    download_excel_button("Pacote Proteções de Máquinas Excel","pacote_protecoes_maquinas.xlsx",d)
+    download_excel_button("Pacote Proteções de Máquinas Excel","pacote_nr12.xlsx",d)
     opts=machine_options(db,ids)
     if opts:
         lab=st.selectbox("Relatório PDF por máquina",list(opts)); m=db.get(MaquinaNR12,opts[lab])
@@ -1453,16 +1769,20 @@ def nr12_relatorios(db,u):
         docs=df_docs(db,[m.site_id]); docs=docs[docs["ID"].isin([d.id for d in db.query(DocumentoNR12).filter_by(maquina_id=m.id).all()])] if not docs.empty else docs
         pacs=df_pac_nr12(db,[m.site_id]); pacs=pacs[pacs["Máquina"]==m.codigo] if not pacs.empty else pacs
         vers=pd.DataFrame([{"ID":v.id,"Tipo":v.tipo,"Data":fmt_date(v.data_verificacao),"Responsável":v.responsavel,"Resultado":v.resultado,"Pontuação %":v.pontuacao,"NC crítica":"Sim" if v.possui_nc_critica else "Não","Próxima":fmt_date(v.proxima_verificacao),"Observações":v.observacoes} for v in db.query(VerificacaoNR12).filter_by(maquina_id=m.id).order_by(VerificacaoNR12.data_verificacao.desc())])
-        pdf=gerar_pdf(f"Relatório por Máquina — {m.codigo}",f"{m.nome} | Site {site_display(db,m.site_id)}",[("Dados",dados),("Auditorias e verificações realizadas",vers),("Documentos",docs),("PACs",pacs)])
+        pdf=gerar_pdf(f"Relatório por Máquina — {m.codigo}",f"{m.nome} | Site {site_code(db,m.site_id)}",[("Dados",dados),("Auditorias e verificações realizadas",vers),("Documentos",docs),("PACs",pacs)])
         download_pdf_button("Baixar relatório por máquina PDF",f"relatorio_maquina_{m.codigo}.pdf",pdf)
 
 # ============================================================
 # 14. Páginas Auditoria Cruzada
 # ============================================================
 def gerar_checklist_automatico_ehs(db,auditoria_id,commit=True):
+    auditoria = db.get(AuditoriaCruzada, auditoria_id)
+    versao = db.query(ChecklistVersaoEHS).filter_by(ativo=True).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).first()
+    if auditoria and versao and not auditoria.versao_checklist_id:
+        auditoria.versao_checklist_id = versao.id
     for r in db.query(RequisitoEHS).join(DiretivaEHS).filter(RequisitoEHS.ativo==True,DiretivaEHS.ativo==True):
         if not db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=auditoria_id,requisito_id=r.id).first():
-            db.add(RespostaAuditoriaEHS(auditoria_id=auditoria_id,requisito_id=r.id,aplicavel=True,status="Conforme",nota_maturidade=3))
+            db.add(RespostaAuditoriaEHS(auditoria_id=auditoria_id,requisito_id=r.id,aplicavel=True,status="Conforme",nota_maturidade=3,versao_checklist_id=versao.id if versao else None,pergunta_snapshot=r.pergunta,criticidade_snapshot=r.criticidade,evidencia_esperada_snapshot=r.evidencia_esperada,gera_pac_automatico_snapshot=getattr(r,"gera_pac_automatico",False)))
     if commit: db.commit()
 
 def ehs_dashboard(db,u):
@@ -1515,7 +1835,7 @@ def ehs_dashboard(db,u):
             res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
             rows.append({
                 "Auditoria":a.id,
-                "Site auditado":site_display(db,a.site_auditado_id),
+                "Site auditado":site_code(db,a.site_auditado_id),
                 "Data de referência":fmt_date(a.data_fim or a.data_inicio or a.data_planejada),
                 "Status":a.status,
                 "Conformidade %":calcular_conformidade_ehs(res),
@@ -1569,8 +1889,8 @@ def ehs_planejamento(db,u):
                     a=AuditoriaCruzada(ano=ano,ciclo=ciclo,site_auditado_id=sv[site],site_auditor_lider_id=None if lider=="—" else sall[lider],site_auditor_apoio_id=None if apoio=="—" else sall[apoio],auditor_lider=aud_l,auditor_apoio=aud_a,data_planejada=data,status=status,escopo=esc,observacoes=obs)
                     db.add(a)
                     db.flush()
-                    registrar_log(db,u,"Auditoria Cruzada de Diretrizes de EHS","AuditoriaCruzada",a.id,"Criar auditoria",valor_novo=f"{site} | {ciclo}")
                     gerar_checklist_automatico_ehs(db,a.id,False)
+                    registrar_log(db,u,"Auditoria Cruzada","AuditoriaCruzada",a.id,"criar",observacao=f"Auditoria {a.ciclo} criada")
                     db.commit()
                     st.success("Auditoria criada.")
                     st.rerun()
@@ -1585,7 +1905,7 @@ def ehs_checklist(db,u):
     if not auds:
         empty_state("Crie uma auditoria no planejamento.")
         return
-    amap = {f"{a.id} — {site_display(db,a.site_auditado_id)} — {a.ciclo} — {a.status}": a.id for a in auds}
+    amap = {f"{a.id} — {site_code(db,a.site_auditado_id)} — {a.ciclo} — {a.status}": a.id for a in auds}
     a = db.get(AuditoriaCruzada, amap[st.selectbox("Auditoria", list(amap), key="auditoria_ehs_selector")])
     gerar_checklist_automatico_ehs(db, a.id)
     res = db.query(RespostaAuditoriaEHS).join(RequisitoEHS).join(DiretivaEHS).filter(
@@ -1605,13 +1925,16 @@ def ehs_checklist(db,u):
             categoria_atual = None
             for r in res:
                 categoria = r.requisito.diretiva.categoria
+                pergunta_txt = getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta
+                criticidade_txt = getattr(r,"criticidade_snapshot",None) or r.requisito.criticidade
+                evidencia_esperada_txt = getattr(r,"evidencia_esperada_snapshot",None) or r.requisito.evidencia_esperada
                 if categoria != categoria_atual:
                     st.markdown(f"<div class='check-category'>{categoria}</div>", unsafe_allow_html=True)
                     categoria_atual = categoria
                 st.markdown(
-                    f"<div class='check-item'><div class='check-q'>{r.requisito.ordem}. {r.requisito.pergunta}"
-                    f"<span class='check-meta'>{r.requisito.criticidade}</span></div>"
-                    f"<div class='muted'>Evidência esperada: {r.requisito.evidencia_esperada or 'Verificar evidência aplicável.'}</div></div>",
+                    f"<div class='check-item'><div class='check-q'>{r.requisito.ordem}. {pergunta_txt}"
+                    f"<span class='check-meta'>{criticidade_txt}</span></div>"
+                    f"<div class='muted'>Evidência esperada: {evidencia_esperada_txt or 'Verificar evidência aplicável.'}</div></div>",
                     unsafe_allow_html=True,
                 )
                 col1, col2, col3, col4, col5, col6 = st.columns([.85, 1.45, 1, 2.2, 2.2, .9])
@@ -1621,7 +1944,7 @@ def ehs_checklist(db,u):
                 maturidade = col3.number_input("Maturidade", min_value=0.0, max_value=5.0, value=float(r.nota_maturidade or 0), step=.5, key=f"ehs_mat_{a.id}_{r.id}")
                 evidencia = col4.text_input("Evidência verificada", value=r.evidencia_verificada or "", key=f"ehs_evid_{a.id}_{r.id}")
                 comentario = col5.text_input("Comentário do auditor", value=r.comentario_auditor or "", key=f"ehs_com_{a.id}_{r.id}")
-                pac = col6.checkbox("PAC", value=bool(r.necessita_pac), key=f"ehs_pac_{a.id}_{r.id}")
+                pac = col6.checkbox("PAC", value=bool(r.necessita_pac) or bool(getattr(r,"gera_pac_automatico_snapshot",False)), key=f"ehs_pac_{a.id}_{r.id}")
                 respostas_para_salvar.append((r.id, apl, status, maturidade, evidencia, comentario, pac))
             if st.form_submit_button("Salvar checklist e gerar PACs necessários", use_container_width=True):
                 for rid, apl, status, maturidade, evidencia, comentario, pac in respostas_para_salvar:
@@ -1636,10 +1959,10 @@ def ehs_checklist(db,u):
                 res_atual = db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
                 a.conformidade_percentual = calcular_conformidade_ehs(res_atual)
                 a.maturidade_media = calcular_maturidade_ehs(res_atual)
-                registrar_log(db,u,"Auditoria Cruzada de Diretrizes de EHS","AuditoriaCruzada",a.id,"Salvar checklist",valor_novo=f"Conformidade {a.conformidade_percentual}% | Maturidade {a.maturidade_media}")
                 for r in res_atual:
                     if r.necessita_pac or r.status in ["Não Conforme", "Parcialmente Conforme"]:
                         gerar_pac_automatico_ehs(db, a, r, a.auditor_lider)
+                registrar_log(db,u,"Auditoria Cruzada","AuditoriaCruzada",a.id,"editar",observacao="Checklist EHS atualizado")
                 db.commit()
                 st.session_state["ehs_checklist_saved_msg"]="Checklist salvo com sucesso. Os PACs necessários foram gerados ou atualizados."
                 st.rerun()
@@ -1647,13 +1970,15 @@ def ehs_checklist(db,u):
         categoria_atual = None
         for r in res:
             categoria = r.requisito.diretiva.categoria
+            pergunta_txt = getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta
+            criticidade_txt = getattr(r,"criticidade_snapshot",None) or r.requisito.criticidade
             if categoria != categoria_atual:
                 st.markdown(f"<div class='check-category'>{categoria}</div>", unsafe_allow_html=True)
                 categoria_atual = categoria
             status_txt = "Não Aplicável" if not r.aplicavel else r.status
             st.markdown(
-                f"<div class='check-item'><div class='check-q'>{r.requisito.ordem}. {r.requisito.pergunta}"
-                f"<span class='check-meta'>{r.requisito.criticidade}</span></div>"
+                f"<div class='check-item'><div class='check-q'>{r.requisito.ordem}. {pergunta_txt}"
+                f"<span class='check-meta'>{criticidade_txt}</span></div>"
                 f"<div class='muted'>Status: <b>{status_txt}</b> | Maturidade: <b>{r.nota_maturidade}</b></div>"
                 f"<div class='muted'>Evidência: {r.evidencia_verificada or '—'}</div>"
                 f"<div class='muted'>Comentário: {r.comentario_auditor or '—'}</div></div>",
@@ -1721,13 +2046,31 @@ def ehs_pac(db,u):
 def ehs_base_checklist(db,u):
     header("Base do Checklist EHS","Visualizar categorias, requisitos, criticidade e evidência esperada")
     reqs=db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem).all()
-    df=pd.DataFrame([{"ID":r.id,"Categoria":r.diretiva.categoria,"Ordem":r.ordem,"Requisito":r.pergunta,"Ativo":r.ativo,"Criticidade":r.criticidade,"Evidência esperada":r.evidencia_esperada} for r in reqs])
+    df=pd.DataFrame([{"ID":r.id,"Categoria":r.diretiva.categoria,"Ordem":r.ordem,"Requisito":r.pergunta,"Ativo":r.ativo,"Criticidade":r.criticidade,"Evidência esperada":r.evidencia_esperada,"Gerar PAC automático":getattr(r,"gera_pac_automatico",False)} for r in reqs])
     if can_edit(u,"auditoria"):
-        ed=st.data_editor(df,use_container_width=True,hide_index=True,disabled=["ID","Categoria","Ordem","Requisito"],column_config={"Criticidade":st.column_config.SelectboxColumn("Criticidade",options=CRITICIDADES)})
+        ed=st.data_editor(df,use_container_width=True,hide_index=True,disabled=["ID","Categoria","Ordem"],column_config={"Criticidade":st.column_config.SelectboxColumn("Criticidade",options=CRITICIDADES)})
         if st.button("Salvar ajustes",use_container_width=True):
             for _,row in ed.iterrows():
-                r=db.get(RequisitoEHS,int(row["ID"])); r.ativo=bool(row["Ativo"]); r.criticidade=row["Criticidade"]; r.evidencia_esperada=row["Evidência esperada"]
+                r=db.get(RequisitoEHS,int(row["ID"])); r.ativo=bool(row["Ativo"]); r.pergunta=row["Requisito"]; r.criticidade=row["Criticidade"]; r.evidencia_esperada=row["Evidência esperada"]; r.gera_pac_automatico=bool(row.get("Gerar PAC automático", False))
+            registrar_log(db,u,"Auditoria Cruzada","RequisitoEHS",None,"editar",observacao="Base do checklist EHS atualizada")
             db.commit(); st.success("Base atualizada."); st.rerun()
+        with st.expander("Criar novo requisito EHS"):
+            cats = [d.categoria for d in db.query(DiretivaEHS).order_by(DiretivaEHS.categoria).all()]
+            with st.form("novo_requisito_ehs"):
+                categoria = st.selectbox("Categoria", cats) if cats else st.text_input("Categoria")
+                ordem = st.number_input("Ordem", min_value=1, value=1)
+                pergunta = st.text_area("Requisito / pergunta")
+                criticidade = st.selectbox("Criticidade", CRITICIDADES)
+                evidencia = st.text_area("Evidência esperada")
+                pac_auto = st.checkbox("Gerar PAC automático quando houver não conformidade")
+                if st.form_submit_button("Adicionar requisito", use_container_width=True):
+                    d = db.query(DiretivaEHS).filter_by(categoria=categoria).first()
+                    if not d:
+                        d = DiretivaEHS(categoria=categoria, descricao=categoria, ativo=True); db.add(d); db.flush()
+                    obj = RequisitoEHS(diretiva_id=d.id, ordem=int(ordem), pergunta=pergunta, criticidade=criticidade, evidencia_esperada=evidencia, gera_pac_automatico=pac_auto, ativo=True)
+                    db.add(obj); db.flush()
+                    registrar_log(db,u,"Auditoria Cruzada","RequisitoEHS",obj.id,"criar",observacao="Novo requisito EHS cadastrado")
+                    db.commit(); st.success("Requisito criado."); st.rerun()
     else: st.dataframe(df,use_container_width=True,hide_index=True)
 def ehs_relatorios(db,u):
     header("Relatórios Auditoria Cruzada","Exportações em Excel e PDF")
@@ -1736,10 +2079,2399 @@ def ehs_relatorios(db,u):
     download_excel_button("Checklist Excel","checklist_ehs.xlsx",{"Checklist":base}); download_excel_button("PAC EHS Excel","pac_ehs.xlsx",{"PAC":dp}); download_excel_button("Pacote Auditoria Excel","auditoria_cruzada_ehs.xlsx",{"Auditorias":da,"Checklist":base,"PAC":dp})
     auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.id.desc()).all()
     if auds:
-        amap={f"{a.id} — {site_display(db,a.site_auditado_id)} — {a.ciclo}":a.id for a in auds}; a=db.get(AuditoriaCruzada,amap[st.selectbox("Relatório PDF",list(amap))]); res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
-        dfr=pd.DataFrame([{"Categoria":r.requisito.diretiva.categoria,"Requisito":r.requisito.pergunta,"Status":r.status,"Maturidade":r.nota_maturidade,"Evidência":r.evidencia_verificada,"Comentário":r.comentario_auditor} for r in res])
-        pdf=gerar_pdf(f"Relatório de Auditoria Cruzada de Diretrizes de EHS — {site_display(db,a.site_auditado_id)}",f"Auditoria {a.id} | {a.ciclo} | Conformidade {calcular_conformidade_ehs(res)}% | Maturidade {calcular_maturidade_ehs(res)}",[("Dados",pd.DataFrame([{"Ano":a.ano,"Ciclo":a.ciclo,"Site":site_display(db,a.site_auditado_id),"Status":a.status,"Auditor líder":a.auditor_lider}])),("Resultado por item",dfr),("PACs vinculados",dp[dp["Auditoria"]==a.id] if not dp.empty else dp)])
+        amap={f"{a.id} — {site_code(db,a.site_auditado_id)} — {a.ciclo}":a.id for a in auds}; a=db.get(AuditoriaCruzada,amap[st.selectbox("Relatório PDF",list(amap))]); res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
+        dfr=pd.DataFrame([{"Categoria":r.requisito.diretiva.categoria,"Requisito":getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta,"Status":r.status,"Maturidade":r.nota_maturidade,"Evidência":r.evidencia_verificada,"Comentário":r.comentario_auditor} for r in res])
+        pdf=gerar_pdf(f"Relatório de Auditoria Cruzada de Diretrizes de EHS — {site_code(db,a.site_auditado_id)}",f"Auditoria {a.id} | {a.ciclo} | Conformidade {calcular_conformidade_ehs(res)}% | Maturidade {calcular_maturidade_ehs(res)}",[("Dados",pd.DataFrame([{"Ano":a.ano,"Ciclo":a.ciclo,"Site":site_code(db,a.site_auditado_id),"Status":a.status,"Auditor líder":a.auditor_lider}])),("Resultado por item",dfr),("PACs vinculados",dp[dp["Auditoria"]==a.id] if not dp.empty else dp)])
         download_pdf_button("Baixar relatório de auditoria PDF",f"relatorio_auditoria_ehs_{a.id}.pdf",pdf)
+
+
+# ============================================================
+# 14B. Módulo Controle de Energia e Emissões
+# ============================================================
+
+ENERGIA_SITE_INFO = {
+    "CAC": {"nome": "MSG Br CAC - Cachoeirinha", "grupo": "MSG Br", "linha": "MSG Br CAC"},
+    "JAC": {"nome": "MSG Br JAC - Jacareí", "grupo": "MSG Br", "linha": "MSG Br JAC"},
+    "JUN": {"nome": "EMG Br JU - Jundiaí", "grupo": "EMG Br", "linha": "EMG Br JU"},
+    "PER": {"nome": "EMG Br SP - Perus", "grupo": "EMG Br", "linha": "EMG Br SP"},
+    "SJC": {"nome": "Filtration Br - São José dos Campos", "grupo": "Filtration Br", "linha": "Filtration Br"},
+    "DIA": {"nome": "FCG Br - Diadema", "grupo": "FCG Br", "linha": "FCG Br"},
+}
+ENERGIA_SITE_ORDER = ["CAC", "JAC", "JUN", "PER", "SJC", "DIA"]
+ENERGIA_GROUP_ORDER = ["MSG Br", "EMG Br", "Filtration Br", "FCG Br", "LAG"]
+ENERGIA_LINHAS_EXECUTIVAS = [
+    ("MSG Br CAC", ["CAC"], False),
+    ("MSG Br JAC", ["JAC"], False),
+    ("MSG Br", ["CAC", "JAC"], True),
+    ("EMG Br SP", ["PER"], False),
+    ("EMG Br JU", ["JUN"], False),
+    ("EMG Br", ["JUN", "PER"], True),
+    ("Filtration Br", ["SJC"], True),
+    ("FCG Br", ["DIA"], True),
+    ("Brasil", ["CAC", "JAC", "JUN", "PER", "SJC", "DIA"], True),
+]
+ENERGIA_DEFAULT_PARAMS = {
+    # Eletricidade Brasil/SIN: MCTI, fator médio mensal de abril/2025 = 0,0289 tCO₂/MWh = 0,0289 kgCO₂/kWh.
+    "fator_emissao_eletricidade_kgco2_kwh": ("0.0289", "Fator de emissão da energia elétrica em kgCO₂e/kWh. Default inicial: MCTI/SIN abr-2025, 0,0289 tCO₂/MWh."),
+    # Gás natural: US EPA GHG Emission Factors Hub, 53,06 kgCO₂/MMBtu; convertido por 293,071 kWh/MMBtu = 0,1810 kgCO₂/kWh.
+    "fator_emissao_gas_kgco2_kwh": ("0.1810", "Fator de emissão do gás natural em kgCO₂e/kWh. Default inicial: US EPA 53,06 kgCO₂/MMBtu ÷ 293,071 kWh/MMBtu."),
+    "meta_reducao_co2_percentual": ("5", "Meta percentual de redução para emissões de CO₂."),
+    "meta_reducao_eficiencia_percentual": ("5", "Meta percentual de redução para taxa de eficiência energética."),
+    "conversao_mmbtu_kwh": ("293.071", "Conversão de MMBtu para kWh."),
+    "fy_atual": ("26", "Fiscal Year atual. Exemplo: 26 para FY26."),
+    "mes_referencia_r12": ("2026-04-01", "Mês de referência padrão para R12."),
+}
+ENERGIA_FONTE_MAP = {
+    "electric power": ("Energia elétrica", "Escopo 2"),
+    "electricity": ("Energia elétrica", "Escopo 2"),
+    "energia eletrica": ("Energia elétrica", "Escopo 2"),
+    "energia elétrica": ("Energia elétrica", "Escopo 2"),
+    "natural gas": ("Gás natural", "Escopo 1"),
+    "gas natural": ("Gás natural", "Escopo 1"),
+    "gás natural": ("Gás natural", "Escopo 1"),
+}
+ENERGIA_RESOURCE_SITE_PATTERNS = {
+    "CAC": ["cachoeirinha"],
+    "JAC": ["jacarei", "jacareí"],
+    "SJC": ["sao jose dos campos", "são josé dos campos", "sao jose", "sjc"],
+    "DIA": ["diadema"],
+    "JUN": ["jundiai", "jundiaí"],
+    "PER": ["sao paulo", "são paulo", "perus"],
+}
+ENERGIA_ABSORPTION_SHEETS = {
+    "FCG": "DIA",
+    "PFG": "SJC",
+    "MSG Cachoeirinha": "CAC",
+    "MSG Jacarei": "JAC",
+    "MSG Jacareí": "JAC",
+    "EMG Jundiai": "JUN",
+    "EMG Jundiaí": "JUN",
+    "EMG Perus": "PER",
+}
+
+# Carga inicial bruta de Actual Hours extraída da planilha Brazil Absorption Summary FY26.xls.
+ENERGIA_ACTUAL_HOURS_SEED = [{'mes_ref': '2023-07-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4145.0,
+  'production_capacity_hours': 5758.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5576.0,
+  'production_capacity_hours': 6919.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4904.0,
+  'production_capacity_hours': 5955.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6357.0,
+  'production_capacity_hours': 6205.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6088.0,
+  'production_capacity_hours': 6416.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 3536.0,
+  'production_capacity_hours': 3681.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4509.0,
+  'production_capacity_hours': 4039.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6900.0,
+  'production_capacity_hours': 7031.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6988.0,
+  'production_capacity_hours': 6976.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 7481.0,
+  'production_capacity_hours': 7420.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5965.0,
+  'production_capacity_hours': 7110.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6091.0,
+  'production_capacity_hours': 6561.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6364.0,
+  'production_capacity_hours': 7091.38,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 7114.0,
+  'production_capacity_hours': 7598.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6854.0,
+  'production_capacity_hours': 7098.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6877.0,
+  'production_capacity_hours': 7383.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5956.0,
+  'production_capacity_hours': 6792.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5371.0,
+  'production_capacity_hours': 5281.47,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5953.0,
+  'production_capacity_hours': 5893.0255,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5364.0,
+  'production_capacity_hours': 5995.22,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4949.0,
+  'production_capacity_hours': 5000.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6424.0,
+  'production_capacity_hours': 6131.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6257.0,
+  'production_capacity_hours': 6219.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 7005.0,
+  'production_capacity_hours': 6314.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6455.0,
+  'production_capacity_hours': 6503.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6185.0,
+  'production_capacity_hours': 6764.55,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 6652.0,
+  'production_capacity_hours': 6248.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4802.0,
+  'production_capacity_hours': 4398.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5139.0,
+  'production_capacity_hours': 5121.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 4021.0,
+  'production_capacity_hours': 3751.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5461.0,
+  'production_capacity_hours': 5460.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5354.0,
+  'production_capacity_hours': 5244.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5856.0,
+  'production_capacity_hours': 6394.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'DIA',
+  'site_nome': 'FCG Br - Diadema',
+  'grupo': 'FCG Br',
+  'actual_hours': 5488.0,
+  'production_capacity_hours': 5441.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 9953.0,
+  'production_capacity_hours': 9987.72,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11140.55,
+  'production_capacity_hours': 11157.05,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 9855.5,
+  'production_capacity_hours': 9880.82,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 10555.24,
+  'production_capacity_hours': 10563.07,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 10854.24,
+  'production_capacity_hours': 10883.19,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11580.84,
+  'production_capacity_hours': 11697.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 10744.43,
+  'production_capacity_hours': 10750.53,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11322.93,
+  'production_capacity_hours': 11323.95,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12053.46,
+  'production_capacity_hours': 12090.35,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13711.75,
+  'production_capacity_hours': 13732.55,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12448.44,
+  'production_capacity_hours': 12467.87,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11604.23,
+  'production_capacity_hours': 12101.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13495.72,
+  'production_capacity_hours': 13707.9,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12796.64,
+  'production_capacity_hours': 12799.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11839.0,
+  'production_capacity_hours': 12146.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11728.18,
+  'production_capacity_hours': 11897.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11681.7,
+  'production_capacity_hours': 11806.25,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 9203.82,
+  'production_capacity_hours': 9230.59615384615,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11062.3,
+  'production_capacity_hours': 11299.75,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11511.7,
+  'production_capacity_hours': 11644.6,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11349.18,
+  'production_capacity_hours': 11368.49,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12742.23,
+  'production_capacity_hours': 12861.98,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12106.0,
+  'production_capacity_hours': 12154.6,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12986.89,
+  'production_capacity_hours': 13035.76,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 14230.0,
+  'production_capacity_hours': 14616.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13125.0,
+  'production_capacity_hours': 13160.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 14138.41,
+  'production_capacity_hours': 14438.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13710.0,
+  'production_capacity_hours': 14657.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13304.0,
+  'production_capacity_hours': 13391.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11325.0,
+  'production_capacity_hours': 11389.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 11605.0,
+  'production_capacity_hours': 11928.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 13018.0,
+  'production_capacity_hours': 13330.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 14185.0,
+  'production_capacity_hours': 14498.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'SJC',
+  'site_nome': 'Filtration Br - São José dos Campos',
+  'grupo': 'Filtration Br',
+  'actual_hours': 12685.0,
+  'production_capacity_hours': 12786.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7153.11,
+  'production_capacity_hours': 9346.68,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8761.75000000001,
+  'production_capacity_hours': 10560.96,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9501.25000000001,
+  'production_capacity_hours': 10062.89,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 10358.69,
+  'production_capacity_hours': 10773.72,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9612.04347754168,
+  'production_capacity_hours': 10108.67,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 5358.24999999998,
+  'production_capacity_hours': 6316.28,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7360.09,
+  'production_capacity_hours': 9647.05,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8166.5221,
+  'production_capacity_hours': 9032.28,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8096.12000000004,
+  'production_capacity_hours': 8973.51,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9095.0,
+  'production_capacity_hours': 11091.03,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8190.57950000003,
+  'production_capacity_hours': 10884.36,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8833.91,
+  'production_capacity_hours': 9918.96,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9593.24000000003,
+  'production_capacity_hours': 11405.69,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9092.48999999998,
+  'production_capacity_hours': 10939.31,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8223.97,
+  'production_capacity_hours': 10187.69,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9896.48000000002,
+  'production_capacity_hours': 11359.54,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7566.92000000003,
+  'production_capacity_hours': 9750.77,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 4281.35999999999,
+  'production_capacity_hours': 5713.29,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7708.44000000002,
+  'production_capacity_hours': 9508.44,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 7973.05,
+  'production_capacity_hours': 9431.28,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8506.77,
+  'production_capacity_hours': 11178.75,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 10065.07,
+  'production_capacity_hours': 12803.73,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 10665.3800000001,
+  'production_capacity_hours': 12407.72,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 10515.83,
+  'production_capacity_hours': 12587.01,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9992.69999999999,
+  'production_capacity_hours': 12545.06,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9410.51,
+  'production_capacity_hours': 11565.77,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8257.44,
+  'production_capacity_hours': 10857.42,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 9664.42,
+  'production_capacity_hours': 11235.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8064.97,
+  'production_capacity_hours': 9541.54,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 6581.7,
+  'production_capacity_hours': 6918.72,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 5279.95,
+  'production_capacity_hours': 6811.42,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 6812.63,
+  'production_capacity_hours': 7933.51,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8170.0,
+  'production_capacity_hours': 9425.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'CAC',
+  'site_nome': 'MSG Br CAC - Cachoeirinha',
+  'grupo': 'MSG Br',
+  'actual_hours': 8112.0,
+  'production_capacity_hours': 8154.12,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2729.48,
+  'production_capacity_hours': 3377.68,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2428.1,
+  'production_capacity_hours': 3205.41,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2300.95,
+  'production_capacity_hours': 2897.07,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2456.85,
+  'production_capacity_hours': 2929.91,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2340.34,
+  'production_capacity_hours': 2822.42,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1647.21,
+  'production_capacity_hours': 1964.64,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1819.3,
+  'production_capacity_hours': 2310.54,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2415.6,
+  'production_capacity_hours': 3167.4,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1957.1,
+  'production_capacity_hours': 3139.3,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2623.26,
+  'production_capacity_hours': 3049.4,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2343.7,
+  'production_capacity_hours': 2926.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2565.8,
+  'production_capacity_hours': 3102.6,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2727.4,
+  'production_capacity_hours': 3441.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2767.6,
+  'production_capacity_hours': 3237.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2399.1,
+  'production_capacity_hours': 2956.3,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2939.33,
+  'production_capacity_hours': 3544.15,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2603.8,
+  'production_capacity_hours': 3020.9,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2206.1,
+  'production_capacity_hours': 2505.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2045.9,
+  'production_capacity_hours': 2538.1,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2683.7,
+  'production_capacity_hours': 3285.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2433.8,
+  'production_capacity_hours': 3034.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2056.7,
+  'production_capacity_hours': 2624.7,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2223.8,
+  'production_capacity_hours': 2898.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2329.9,
+  'production_capacity_hours': 3054.9,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2338.35,
+  'production_capacity_hours': 3632.04,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1895.0,
+  'production_capacity_hours': 2755.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2198.8,
+  'production_capacity_hours': 2788.1,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2064.2,
+  'production_capacity_hours': 2932.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1918.5,
+  'production_capacity_hours': 2438.2,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1073.5,
+  'production_capacity_hours': 1107.4,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 1514.5,
+  'production_capacity_hours': 1856.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2521.5,
+  'production_capacity_hours': 2738.7,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2803.1,
+  'production_capacity_hours': 2807.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'JAC',
+  'site_nome': 'MSG Br JAC - Jacareí',
+  'grupo': 'MSG Br',
+  'actual_hours': 2512.33,
+  'production_capacity_hours': 2710.53,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 771.065116853774,
+  'production_capacity_hours': 815.990432817906,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 864.399752877215,
+  'production_capacity_hours': 698.542821083104,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 576.336793228836,
+  'production_capacity_hours': 512.231117877568,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 657.376562169032,
+  'production_capacity_hours': 566.609087057827,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 676.630269010803,
+  'production_capacity_hours': 597.378344277342,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 451.022666984396,
+  'production_capacity_hours': 429.65105239003,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 954.662964237803,
+  'production_capacity_hours': 770.789147055709,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 897.818686895432,
+  'production_capacity_hours': 810.406857833792,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 736.830192402739,
+  'production_capacity_hours': 685.798700840218,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 771.065116853774,
+  'production_capacity_hours': 679.380798559627,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 662.877621266681,
+  'production_capacity_hours': 713.716575760785,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 921.427398856175,
+  'production_capacity_hours': 842.578885123208,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 1026.86436489444,
+  'production_capacity_hours': 1010.3611876015,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 746.280370142272,
+  'production_capacity_hours': 669.786126334462,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 853.581003318506,
+  'production_capacity_hours': 568.44277342371,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 859.341437352609,
+  'production_capacity_hours': 799.821169812187,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 726.393766451317,
+  'production_capacity_hours': 633.125051452729,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 464.733231626421,
+  'production_capacity_hours': 502.911406922968,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 1002.68977732119,
+  'production_capacity_hours': 1015.74699951105,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 699.307376613359,
+  'production_capacity_hours': 748.565051669844,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 840.40954246805,
+  'production_capacity_hours': 713.555211360587,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 929.46389609193,
+  'production_capacity_hours': 931.103120018711,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 802.191851230318,
+  'production_capacity_hours': 738.613635762198,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 800.511369360305,
+  'production_capacity_hours': 711.884906449904,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 813.9671,
+  'production_capacity_hours': 677.166399999999,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 748.184,
+  'production_capacity_hours': 595.4236,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 924.9167,
+  'production_capacity_hours': 891.825800000002,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 959.783,
+  'production_capacity_hours': 857.6464,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 919.1668,
+  'production_capacity_hours': 765.826500000001,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 774.5327,
+  'production_capacity_hours': 669.9414,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 1025.4669,
+  'production_capacity_hours': 865.9645,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 786.487,
+  'production_capacity_hours': 789.8827,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 1139.01,
+  'production_capacity_hours': 927.1059,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'JUN',
+  'site_nome': 'EMG Br JU - Jundiaí',
+  'grupo': 'EMG Br',
+  'actual_hours': 836.7159,
+  'production_capacity_hours': 694.0899,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-07-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8287.6,
+  'production_capacity_hours': 8370.69,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-08-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9821.88,
+  'production_capacity_hours': 10499.9145333333,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-09-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9532.91,
+  'production_capacity_hours': 9767.38833333333,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-10-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8762.74,
+  'production_capacity_hours': 9765.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-11-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9229.3,
+  'production_capacity_hours': 9294.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2023-12-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8189.0,
+  'production_capacity_hours': 9016.84583333333,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-01-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9556.74,
+  'production_capacity_hours': 10070.4442,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-02-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8773.0,
+  'production_capacity_hours': 9606.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-03-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8717.24,
+  'production_capacity_hours': 9829.87065,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-04-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9136.0,
+  'production_capacity_hours': 9364.11,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-05-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8126.0,
+  'production_capacity_hours': 9259.5,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-06-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8781.35,
+  'production_capacity_hours': 8700.17,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-07-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9647.99,
+  'production_capacity_hours': 9251.42,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-08-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10069.8,
+  'production_capacity_hours': 9274.12,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-09-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8458.71,
+  'production_capacity_hours': 8979.65,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-10-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10529.0,
+  'production_capacity_hours': 11245.22,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-11-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8349.0,
+  'production_capacity_hours': 12326.4828,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2024-12-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7245.34,
+  'production_capacity_hours': 11429.2528,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-01-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8571.49,
+  'production_capacity_hours': 13002.962,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-02-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8850.09,
+  'production_capacity_hours': 13045.854,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-03-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9733.29,
+  'production_capacity_hours': 11425.3,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-04-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10104.44,
+  'production_capacity_hours': 10308.46,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-05-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 8483.47,
+  'production_capacity_hours': 8863.275,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-06-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10263.02,
+  'production_capacity_hours': 10212.21,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-07-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10199.6,
+  'production_capacity_hours': 11218.66,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-08-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10163.56,
+  'production_capacity_hours': 10157.65,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-09-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 9310.96999999999,
+  'production_capacity_hours': 12950.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-10-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 10700.44,
+  'production_capacity_hours': 12552.31,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-11-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7866.52000000057,
+  'production_capacity_hours': 10737.35,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2025-12-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7570.0,
+  'production_capacity_hours': 8771.0,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-01-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7187.92,
+  'production_capacity_hours': 9883.8,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-02-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7276.51833333333,
+  'production_capacity_hours': 8794.335,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-03-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 7557.56999999998,
+  'production_capacity_hours': 9425.17,
+  'origem': 'Carga inicial Absorption FY26'},
+ {'mes_ref': '2026-04-01',
+  'site_codigo': 'PER',
+  'site_nome': 'EMG Br SP - Perus',
+  'grupo': 'EMG Br',
+  'actual_hours': 6075.21,
+  'production_capacity_hours': 7414.6,
+  'origem': 'Carga inicial Absorption FY26'}]
+
+
+def energia_norm_txt(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    s = str(v).strip().lower()
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+def energia_safe_float(v, default=0.0):
+    if v is None or v == "":
+        return default
+    if isinstance(v, (int, float)) and not pd.isna(v):
+        return float(v)
+    s = str(v).strip()
+    if s in ["-", "—", "nan", "None", ""]:
+        return default
+    s = s.replace("R$", "").replace(" ", "")
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return default
+
+def energia_first_day(v):
+    d = as_date(v)
+    if not d:
+        return None
+    return date(d.year, d.month, 1)
+
+def energia_site_nome(site_codigo):
+    return ENERGIA_SITE_INFO.get(site_codigo, {}).get("nome", site_codigo or "—")
+
+def energia_site_grupo(site_codigo):
+    return ENERGIA_SITE_INFO.get(site_codigo, {}).get("grupo", "LAG")
+
+def energia_map_resource_site(site_value):
+    n = energia_norm_txt(site_value)
+    for codigo, patterns in ENERGIA_RESOURCE_SITE_PATTERNS.items():
+        if any(p in n for p in patterns):
+            return codigo
+    return None
+
+def energia_map_absorption_site(sheet_name):
+    n = energia_norm_txt(sheet_name)
+    for label, codigo in ENERGIA_ABSORPTION_SHEETS.items():
+        if energia_norm_txt(label) in n or n in energia_norm_txt(label):
+            return codigo
+    return None
+
+def energia_map_fonte(service_value):
+    n = energia_norm_txt(service_value)
+    for key, val in ENERGIA_FONTE_MAP.items():
+        if energia_norm_txt(key) in n:
+            return val
+    if "gas" in n:
+        return ("Gás natural", "Escopo 1")
+    if "power" in n or "electric" in n:
+        return ("Energia elétrica", "Escopo 2")
+    return ("Outro", "—")
+
+def energia_fiscal_year(mes_ref):
+    d = as_date(mes_ref)
+    if not d:
+        return None
+    return d.year + 1 if d.month >= 7 else d.year
+
+def energia_intervalo_fy(fy):
+    fy = int(fy)
+    if fy < 100:
+        fy += 2000
+    return date(fy - 1, 7, 1), date(fy, 6, 30)
+
+def energia_fy_label(mes_ref):
+    fy = energia_fiscal_year(mes_ref)
+    return f"FY{str(fy)[-2:]}" if fy else "—"
+
+def energia_r12_start(mes_ref):
+    d = energia_first_day(mes_ref)
+    if not d:
+        return None
+    return (pd.Timestamp(d) - pd.DateOffset(months=11)).date()
+
+def energia_pct_change(atual, base):
+    if base is None or pd.isna(base) or abs(float(base)) < 1e-12:
+        return None
+    if atual is None or pd.isna(atual):
+        return None
+    return (float(atual) - float(base)) / float(base)
+
+def energia_fmt_val(v, metric_kind="numero"):
+    if v is None or pd.isna(v):
+        return "—"
+    if metric_kind == "percent":
+        return f"{v*100:.1f}%".replace(".", ",")
+    if metric_kind == "money":
+        return f"R$ {v:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    if abs(v) >= 1000:
+        return f"{v:,.0f}".replace(",", ".")
+    return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def energia_param(db, chave, default=None):
+    p = db.query(EnergiaParametro).filter_by(chave=chave).first()
+    if p and p.valor not in [None, ""]:
+        return p.valor
+    if default is not None:
+        return default
+    return ENERGIA_DEFAULT_PARAMS.get(chave, ("", ""))[0]
+
+def energia_param_float(db, chave, default=0):
+    return energia_safe_float(energia_param(db, chave, default), default)
+
+def energia_set_param(db, chave, valor, descricao=None):
+    p = db.query(EnergiaParametro).filter_by(chave=chave).first()
+    if not p:
+        p = EnergiaParametro(chave=chave, valor=str(valor), descricao=descricao or "")
+        db.add(p)
+    else:
+        p.valor = str(valor)
+        if descricao is not None:
+            p.descricao = descricao
+    db.commit()
+
+def seed_energia_parametros(db):
+    """Garante parâmetros iniciais; atualiza fatores antigos zerados para defaults confiáveis."""
+    for chave, (valor, desc) in ENERGIA_DEFAULT_PARAMS.items():
+        p = db.query(EnergiaParametro).filter_by(chave=chave).first()
+        if not p:
+            db.add(EnergiaParametro(chave=chave, valor=valor, descricao=desc))
+        else:
+            # Em versões anteriores os fatores vinham zerados, impedindo a tabela executiva de CO₂.
+            if chave in ["fator_emissao_eletricidade_kgco2_kwh", "fator_emissao_gas_kgco2_kwh"] and energia_safe_float(p.valor, 0) == 0:
+                p.valor = valor
+                p.descricao = desc
+    db.commit()
+
+def seed_energia_actual_hours_inicial(db):
+    """Carrega uma base inicial de Actual Hours já mapeada, sem sobrescrever ajustes manuais futuros."""
+    if not ENERGIA_ACTUAL_HOURS_SEED:
+        return
+    adicionados = 0
+    for row in ENERGIA_ACTUAL_HOURS_SEED:
+        mes = as_date(row.get("mes_ref"))
+        site = row.get("site_codigo")
+        if not mes or not site:
+            continue
+        existente = db.query(EnergiaActualHours).filter(
+            EnergiaActualHours.mes_ref == mes,
+            EnergiaActualHours.site_codigo == site
+        ).first()
+        if existente:
+            continue
+        db.add(EnergiaActualHours(
+            mes_ref=mes,
+            site_codigo=site,
+            site_nome=row.get("site_nome") or energia_site_nome(site),
+            grupo=row.get("grupo") or energia_site_grupo(site),
+            actual_hours=energia_safe_float(row.get("actual_hours"), 0),
+            production_capacity_hours=energia_safe_float(row.get("production_capacity_hours"), 0),
+            origem=row.get("origem") or "Carga inicial Absorption FY26",
+            atualizado_em=datetime.utcnow(),
+        ))
+        adicionados += 1
+    if adicionados:
+        db.add(EnergiaUploadHistorico(
+            tipo_base="Actual Hours",
+            nome_arquivo="Brazil Absorption Summary FY26.xls",
+            usuario="Sistema",
+            observacoes=f"Carga inicial bruta de {adicionados} registros de Actual Hours."
+        ))
+    db.commit()
+
+def energia_find_header(raw_df, required_terms):
+    for idx in raw_df.index:
+        row_norm = [energia_norm_txt(x) for x in raw_df.loc[idx].tolist()]
+        joined = " | ".join(row_norm)
+        if all(term in joined for term in required_terms):
+            return int(idx)
+    return None
+
+def energia_read_excel_any(uploaded_or_bytes, filename="arquivo.xlsx", sheet_name=0, header=None, nrows=None):
+    data = uploaded_or_bytes.getvalue() if hasattr(uploaded_or_bytes, "getvalue") else uploaded_or_bytes
+    try:
+        return pd.read_excel(io.BytesIO(data), sheet_name=sheet_name, header=header, nrows=nrows)
+    except ImportError as e:
+        if str(filename).lower().endswith(".xls"):
+            raise RuntimeError("Não foi possível ler .xls porque a dependência xlrd não está disponível. Converta o arquivo para .xlsx e tente novamente.") from e
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Não foi possível ler o arquivo Excel: {e}") from e
+
+def energia_parse_base_resource(uploaded_file, db, filename="base_energia.xlsx"):
+    data = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file
+    try:
+        xls = pd.ExcelFile(io.BytesIO(data))
+    except ImportError as e:
+        if str(filename).lower().endswith(".xls"):
+            raise RuntimeError("Não foi possível ler .xls porque a dependência xlrd não está disponível. Converta para .xlsx e tente novamente.") from e
+        raise
+    rows = []
+    f_elec = energia_param_float(db, "fator_emissao_eletricidade_kgco2_kwh", 0)
+    f_gas = energia_param_float(db, "fator_emissao_gas_kgco2_kwh", 0)
+    conv = energia_param_float(db, "conversao_mmbtu_kwh", 293.071)
+
+    for sheet in xls.sheet_names:
+        raw = pd.read_excel(io.BytesIO(data), sheet_name=sheet, header=None, nrows=50)
+        header_idx = energia_find_header(raw, ["service month", "site"])
+        if header_idx is None:
+            continue
+        df = pd.read_excel(io.BytesIO(data), sheet_name=sheet, header=header_idx)
+        df.columns = [str(c).strip() for c in df.columns]
+        colmap = {energia_norm_txt(c): c for c in df.columns}
+        col_month = colmap.get("service month")
+        col_site = colmap.get("site") or colmap.get("site name")
+        col_service = colmap.get("services") or colmap.get("service")
+        col_uom = colmap.get("usage uom") or colmap.get("uom")
+        col_usage = colmap.get("total usage") or colmap.get("total billed usage")
+        col_cost = colmap.get("total cost (brl)") or colmap.get("total cost")
+        col_unit = colmap.get("unit cost")
+        col_div = colmap.get("division")
+        if not all([col_month, col_site, col_service, col_usage]):
+            continue
+
+        for _, r in df.iterrows():
+            mes = energia_first_day(r.get(col_month))
+            site_codigo = energia_map_resource_site(r.get(col_site))
+            fonte, escopo = energia_map_fonte(r.get(col_service))
+            if not mes or not site_codigo or fonte not in ["Energia elétrica", "Gás natural"]:
+                continue
+            consumo_original = energia_safe_float(r.get(col_usage), 0)
+            uom = str(r.get(col_uom) or "").strip()
+            consumo_kwh = consumo_original
+            if fonte == "Gás natural" and energia_norm_txt(uom) in ["mmbtu", "mm btu", "mmbtus"]:
+                consumo_kwh = consumo_original * conv
+            elif energia_norm_txt(uom) in ["mwh"]:
+                consumo_kwh = consumo_original * 1000
+            custo = energia_safe_float(r.get(col_cost), 0) if col_cost else 0
+            unit_cost = energia_safe_float(r.get(col_unit), 0) if col_unit else 0
+            fator = f_elec if fonte == "Energia elétrica" else f_gas
+            rows.append({
+                "mes_ref": mes,
+                "site_codigo": site_codigo,
+                "site_nome": energia_site_nome(site_codigo),
+                "grupo": energia_site_grupo(site_codigo),
+                "divisao": str(r.get(col_div) or ""),
+                "fonte": fonte,
+                "consumo_original": consumo_original,
+                "unidade_original": uom,
+                "consumo_kwh": consumo_kwh,
+                "custo_brl": custo,
+                "unit_cost": unit_cost,
+                "emissao_co2_ton": consumo_kwh * fator / 1000 if fator else 0,
+                "emissao_escopo": escopo,
+                "origem_arquivo": filename,
+            })
+    return pd.DataFrame(rows)
+
+def energia_parse_absorption(uploaded_file, filename="absorption.xlsx"):
+    data = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file
+    try:
+        xls = pd.ExcelFile(io.BytesIO(data))
+    except ImportError as e:
+        if str(filename).lower().endswith(".xls"):
+            raise RuntimeError("Não foi possível ler .xls porque a dependência xlrd não está disponível. Converta o arquivo para .xlsx e tente novamente.") from e
+        raise
+    rows = []
+    for sheet in xls.sheet_names:
+        site_codigo = energia_map_absorption_site(sheet)
+        if not site_codigo:
+            continue
+        raw = pd.read_excel(io.BytesIO(data), sheet_name=sheet, header=None)
+        header_idx = None
+        actual_col = None
+        capacity_col = None
+        for idx in raw.index[:25]:
+            vals = [energia_norm_txt(x) for x in raw.loc[idx].tolist()]
+            if "actual hours" in vals:
+                header_idx = idx
+                actual_col = vals.index("actual hours")
+                if "production capacity (hours)" in vals:
+                    capacity_col = vals.index("production capacity (hours)")
+                break
+        if header_idx is None:
+            continue
+        for ridx in raw.index:
+            if ridx <= header_idx:
+                continue
+            mes = energia_first_day(raw.iat[ridx, 0] if raw.shape[1] > 0 else None)
+            if not mes:
+                continue
+            actual = energia_safe_float(raw.iat[ridx, actual_col], None)
+            if actual is None:
+                continue
+            capacity = energia_safe_float(raw.iat[ridx, capacity_col], 0) if capacity_col is not None else 0
+            rows.append({
+                "mes_ref": mes,
+                "site_codigo": site_codigo,
+                "site_nome": energia_site_nome(site_codigo),
+                "grupo": energia_site_grupo(site_codigo),
+                "actual_hours": actual,
+                "production_capacity_hours": capacity,
+                "origem": "Importado Absorption",
+            })
+    return pd.DataFrame(rows)
+
+def energia_df_registros(db):
+    regs = db.query(EnergiaRegistro).order_by(EnergiaRegistro.mes_ref, EnergiaRegistro.site_codigo, EnergiaRegistro.fonte).all()
+    f_elec = energia_param_float(db, "fator_emissao_eletricidade_kgco2_kwh", 0.0289)
+    f_gas = energia_param_float(db, "fator_emissao_gas_kgco2_kwh", 0.1810)
+    rows = []
+    for r in regs:
+        fator = f_elec if r.fonte == "Energia elétrica" else f_gas if r.fonte == "Gás natural" else 0
+        emissao_recalculada = (energia_safe_float(r.consumo_kwh, 0) * fator / 1000) if fator else energia_safe_float(r.emissao_co2_ton, 0)
+        rows.append({
+            "ID": r.id,
+            "Mês": r.mes_ref,
+            "FY": energia_fy_label(r.mes_ref),
+            "Site": r.site_codigo,
+            "Site nome": r.site_nome,
+            "Grupo": r.grupo,
+            "Divisão": r.divisao,
+            "Fonte": r.fonte,
+            "Consumo original": r.consumo_original,
+            "Unidade original": r.unidade_original,
+            "Consumo kWh": r.consumo_kwh,
+            "Custo BRL": r.custo_brl,
+            "Unit cost": r.unit_cost,
+            # Recalcula dinamicamente para refletir fatores confiáveis carregados em Parâmetros,
+            # inclusive bases importadas quando os fatores estavam zerados.
+            "Emissão tCO₂e": emissao_recalculada,
+            "Escopo": r.emissao_escopo,
+            "Origem": r.origem_arquivo,
+        })
+    return pd.DataFrame(rows)
+
+def energia_df_actual_hours(db):
+    hrs = db.query(EnergiaActualHours).order_by(EnergiaActualHours.mes_ref, EnergiaActualHours.site_codigo).all()
+    return pd.DataFrame([{
+        "ID": h.id,
+        "Mês": h.mes_ref,
+        "FY": energia_fy_label(h.mes_ref),
+        "Site": h.site_codigo,
+        "Site nome": h.site_nome,
+        "Grupo": h.grupo,
+        "Actual Hours": h.actual_hours,
+        "Production capacity (hours)": h.production_capacity_hours,
+        "Origem": h.origem,
+    } for h in hrs])
+
+def energia_consolidado(db):
+    regs = energia_df_registros(db)
+    hrs = energia_df_actual_hours(db)
+    sites = pd.DataFrame([{"Site": k, "Site nome": v["nome"], "Grupo": v["grupo"]} for k, v in ENERGIA_SITE_INFO.items()])
+    if regs.empty and hrs.empty:
+        return pd.DataFrame()
+    if regs.empty:
+        base = hrs[["Mês", "Site", "Site nome", "Grupo"]].drop_duplicates()
+    else:
+        base = regs[["Mês", "Site", "Site nome", "Grupo"]].drop_duplicates()
+    if not hrs.empty:
+        base = pd.concat([base, hrs[["Mês", "Site", "Site nome", "Grupo"]].drop_duplicates()], ignore_index=True).drop_duplicates()
+    pivot_consumo = pd.DataFrame()
+    pivot_custo = pd.DataFrame()
+    pivot_emissao = pd.DataFrame()
+    gas_original = pd.DataFrame()
+    if not regs.empty:
+        pivot_consumo = regs.pivot_table(index=["Mês", "Site"], columns="Fonte", values="Consumo kWh", aggfunc="sum", fill_value=0).reset_index()
+        pivot_custo = regs.pivot_table(index=["Mês", "Site"], columns="Fonte", values="Custo BRL", aggfunc="sum", fill_value=0).reset_index()
+        pivot_emissao = regs.pivot_table(index=["Mês", "Site"], columns="Escopo", values="Emissão tCO₂e", aggfunc="sum", fill_value=0).reset_index()
+        gas = regs[regs["Fonte"] == "Gás natural"].groupby(["Mês", "Site"], as_index=False).agg({
+            "Consumo original": "sum",
+            "Unidade original": lambda x: ", ".join(sorted(set([str(v) for v in x if str(v) != "nan"]))) if len(x) else "",
+        })
+        gas_original = gas.rename(columns={"Consumo original": "consumo_gas_original", "Unidade original": "consumo_gas_unidade_original"})
+    df = base.copy()
+    if not pivot_consumo.empty:
+        df = df.merge(pivot_consumo, on=["Mês", "Site"], how="left")
+    if not pivot_custo.empty:
+        pivot_custo = pivot_custo.rename(columns={"Energia elétrica": "custo_eletrico_brl", "Gás natural": "custo_gas_brl"})
+        df = df.merge(pivot_custo[["Mês", "Site"] + [c for c in ["custo_eletrico_brl","custo_gas_brl"] if c in pivot_custo.columns]], on=["Mês", "Site"], how="left")
+    if not pivot_emissao.empty:
+        pivot_emissao = pivot_emissao.rename(columns={"Escopo 1": "emissao_escopo1_tco2e", "Escopo 2": "emissao_escopo2_tco2e"})
+        df = df.merge(pivot_emissao[["Mês", "Site"] + [c for c in ["emissao_escopo1_tco2e","emissao_escopo2_tco2e"] if c in pivot_emissao.columns]], on=["Mês", "Site"], how="left")
+    if not gas_original.empty:
+        df = df.merge(gas_original, on=["Mês", "Site"], how="left")
+    if not hrs.empty:
+        h = hrs[["Mês", "Site", "Actual Hours", "Production capacity (hours)"]].copy()
+        df = df.merge(h, on=["Mês", "Site"], how="left")
+    for col in ["Energia elétrica", "Gás natural", "custo_eletrico_brl", "custo_gas_brl", "emissao_escopo1_tco2e", "emissao_escopo2_tco2e", "consumo_gas_original", "Actual Hours", "Production capacity (hours)"]:
+        if col not in df.columns:
+            df[col] = 0
+    df["Mês"] = pd.to_datetime(df["Mês"]).dt.date
+    df["fiscal_year"] = df["Mês"].apply(lambda d: f"FY{str(energia_fiscal_year(d))[-2:]}")
+    df["consumo_eletrico_kwh"] = df["Energia elétrica"].fillna(0)
+    df["consumo_gas_kwh"] = df["Gás natural"].fillna(0)
+    df["consumo_total_kwh"] = df["consumo_eletrico_kwh"] + df["consumo_gas_kwh"]
+    df["custo_total_brl"] = df["custo_eletrico_brl"].fillna(0) + df["custo_gas_brl"].fillna(0)
+    df["emissao_total_tco2e"] = df["emissao_escopo1_tco2e"].fillna(0) + df["emissao_escopo2_tco2e"].fillna(0)
+    df["emissao_total_com_irec_tco2e"] = df["emissao_escopo1_tco2e"].fillna(0)
+    df["actual_hours"] = df["Actual Hours"].fillna(0)
+    df["production_capacity_hours"] = df["Production capacity (hours)"].fillna(0)
+    df["eficiencia_energetica"] = df.apply(lambda r: (r["consumo_total_kwh"] / r["actual_hours"]) if r["actual_hours"] else None, axis=1)
+    df = df.sort_values(["Site", "Mês"]).reset_index(drop=True)
+
+    r12_cols = ["consumo_eletrico_kwh", "consumo_gas_kwh", "consumo_total_kwh", "emissao_total_tco2e", "emissao_total_com_irec_tco2e", "custo_total_brl", "actual_hours"]
+    for col in r12_cols:
+        df[f"{col}_r12"] = df.groupby("Site")[col].transform(lambda s: s.rolling(window=12, min_periods=1).sum())
+    df["eficiencia_energetica_r12"] = df.apply(lambda r: (r["consumo_total_kwh_r12"] / r["actual_hours_r12"]) if r["actual_hours_r12"] else None, axis=1)
+    out_cols = [
+        "Mês", "fiscal_year", "Site", "Site nome", "Grupo",
+        "consumo_eletrico_kwh", "consumo_gas_original", "consumo_gas_unidade_original", "consumo_gas_kwh", "consumo_total_kwh",
+        "custo_eletrico_brl", "custo_gas_brl", "custo_total_brl",
+        "emissao_escopo1_tco2e", "emissao_escopo2_tco2e", "emissao_total_tco2e", "emissao_total_com_irec_tco2e",
+        "actual_hours", "production_capacity_hours", "eficiencia_energetica",
+        "consumo_eletrico_kwh_r12", "consumo_gas_kwh_r12", "consumo_total_kwh_r12",
+        "emissao_total_tco2e_r12", "emissao_total_com_irec_tco2e_r12", "custo_total_brl_r12",
+        "actual_hours_r12", "eficiencia_energetica_r12"
+    ]
+    for col in out_cols:
+        if col not in df.columns:
+            df[col] = None
+    return df[out_cols].copy()
+
+def energia_filtrar(df, sites=None, grupos=None, data_ini=None, data_fim=None, fy=None):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    f = df.copy()
+    if sites:
+        f = f[f["Site"].isin(sites)]
+    if grupos:
+        # Grupo "LAG" significa todos.
+        grupos_validos = [g for g in grupos if g != "LAG"]
+        if grupos_validos:
+            f = f[f["Grupo"].isin(grupos_validos)]
+    if fy and fy != "Custom":
+        f = f[f["fiscal_year"] == fy]
+    if data_ini:
+        f = f[pd.to_datetime(f["Mês"]) >= pd.to_datetime(data_ini)]
+    if data_fim:
+        f = f[pd.to_datetime(f["Mês"]) <= pd.to_datetime(data_fim)]
+    return f
+
+def energia_metric_series(df, metric, usar_irec=False):
+    if df.empty:
+        return pd.Series(dtype=float)
+    if metric == "Consumo de energia elétrica":
+        return df["consumo_eletrico_kwh"]
+    if metric == "Consumo de gás natural":
+        return df["consumo_gas_kwh"]
+    if metric == "Consumo total de energia":
+        return df["consumo_total_kwh"]
+    if metric == "Emissões de CO₂ considerando I-REC":
+        return df["emissao_total_com_irec_tco2e"]
+    if metric == "Emissões de CO₂":
+        return df["emissao_total_com_irec_tco2e"] if usar_irec else df["emissao_total_tco2e"]
+    if metric == "Custo":
+        return df["custo_total_brl"]
+    if metric == "Eficiência energética":
+        return df["eficiencia_energetica"]
+    return df["consumo_total_kwh"]
+
+def energia_agregar_periodo(df, sites, metric, start=None, end=None, usar_irec=False):
+    if df.empty:
+        return 0
+    f = df[df["Site"].isin(sites)].copy()
+    if start:
+        f = f[pd.to_datetime(f["Mês"]) >= pd.to_datetime(start)]
+    if end:
+        f = f[pd.to_datetime(f["Mês"]) <= pd.to_datetime(end)]
+    if f.empty:
+        return 0
+    if metric == "Eficiência energética":
+        energia = f["consumo_total_kwh"].sum()
+        horas = f["actual_hours"].sum()
+        return energia / horas if horas else None
+    return energia_metric_series(f, metric, usar_irec=usar_irec).sum()
+
+def energia_executive_table(db, metric, r12_mes, usar_irec=False):
+    df = energia_consolidado(db)
+    if df.empty:
+        return pd.DataFrame()
+    r12_mes = energia_first_day(r12_mes) or df["Mês"].max()
+    r12_ini = energia_r12_start(r12_mes)
+    fy19 = energia_intervalo_fy(2019)
+    fy24 = energia_intervalo_fy(2024)
+    fy25 = energia_intervalo_fy(2025)
+    rows = []
+    for label, sites, is_group in ENERGIA_LINHAS_EXECUTIVAS:
+        v19 = energia_agregar_periodo(df, sites, metric, fy19[0], fy19[1], usar_irec)
+        v24 = energia_agregar_periodo(df, sites, metric, fy24[0], fy24[1], usar_irec)
+        v25 = energia_agregar_periodo(df, sites, metric, fy25[0], fy25[1], usar_irec)
+        vr12 = energia_agregar_periodo(df, sites, metric, r12_ini, r12_mes, usar_irec)
+        eff_r12 = energia_agregar_periodo(df, sites, "Eficiência energética", r12_ini, r12_mes, usar_irec)
+        eff_25 = energia_agregar_periodo(df, sites, "Eficiência energética", fy25[0], fy25[1], usar_irec)
+        rows.append({
+            "Divisão": label,
+            "FY19": v19,
+            "FY24": v24,
+            "FY25": v25,
+            f"R12 YTD {r12_mes.strftime('%b/%y')}": vr12,
+            "R12 vs FY25": energia_pct_change(vr12, v25),
+            "R12 vs FY19": energia_pct_change(vr12, v19),
+            f"Taxa de eficiência energética R12 {r12_mes.strftime('%b/%y')} vs FY25": energia_pct_change(eff_r12, eff_25),
+            "_grupo": is_group,
+        })
+    return pd.DataFrame(rows)
+
+def energia_table_html(df, metric):
+    if df.empty:
+        return "<div class='empty'>Sem dados para gerar a tabela executiva.</div>"
+    title = "Considerando os Certificados de Energia Renovável (I-REC)"
+    value_cols = [c for c in df.columns if c not in ["Divisão", "_grupo"]]
+    pct_cols = [c for c in value_cols if "vs" in c]
+    num_kind = "money" if metric == "Custo" else "numero"
+    html = """
+    <style>
+    .tbl-energy{border-collapse:collapse;width:100%;font-family:Arial, sans-serif;border:2px solid #111827;}
+    .tbl-energy th,.tbl-energy td{border:1px solid #111827;padding:8px;text-align:center;font-weight:800;}
+    .tbl-energy .title{background:#1f3b68;color:#fff;font-size:20px;text-align:center;}
+    .tbl-energy .head{background:#bfbfbf;color:#000;}
+    .tbl-energy .grp td{background:#ffc000!important;}
+    .tbl-energy .base td{background:#fff2cc;}
+    .tbl-energy .good{background:#00b050!important;color:#000;}
+    .tbl-energy .mid{background:#ffd966!important;color:#000;}
+    .tbl-energy .bad{background:#ff0000!important;color:#000;}
+    </style>
+    """
+    html += f"<table class='tbl-energy'><tr><th class='title' colspan='{len(value_cols)+1}'>{title}</th></tr>"
+    html += "<tr><th class='head'>Divisão</th>" + "".join(f"<th class='head'>{html_escape(c)}</th>" for c in value_cols) + "</tr>"
+    for _, r in df.iterrows():
+        tr_class = "grp" if bool(r.get("_grupo")) else "base"
+        html += f"<tr class='{tr_class}'><td>{html_escape(r['Divisão'])}</td>"
+        for c in value_cols:
+            val = r[c]
+            cls = ""
+            if c in pct_cols:
+                if val is None or pd.isna(val):
+                    txt = "—"
+                else:
+                    txt = energia_fmt_val(val, "percent")
+                    meta = 0.05
+                    if val <= -meta:
+                        cls = "good"
+                    elif val < 0:
+                        cls = "mid"
+                    else:
+                        cls = "bad"
+            else:
+                txt = energia_fmt_val(val, num_kind)
+            html += f"<td class='{cls}'>{txt}</td>"
+        html += "</tr>"
+    html += "</table>"
+    return html
+
+def energia_df_kpis(df, r12_mes, usar_irec=False):
+    if df.empty:
+        return pd.DataFrame()
+    r12_mes = energia_first_day(r12_mes) or df["Mês"].max()
+    r12_ini = energia_r12_start(r12_mes)
+    f = df[(pd.to_datetime(df["Mês"]) >= pd.to_datetime(r12_ini)) & (pd.to_datetime(df["Mês"]) <= pd.to_datetime(r12_mes))]
+    if f.empty:
+        return pd.DataFrame()
+    consumo_eletrico = f["consumo_eletrico_kwh"].sum()
+    consumo_gas = f["consumo_gas_kwh"].sum()
+    consumo_total = f["consumo_total_kwh"].sum()
+    emissao1 = f["emissao_escopo1_tco2e"].sum()
+    emissao2 = f["emissao_escopo2_tco2e"].sum()
+    emissao_total = emissao1 + emissao2
+    emissao_irec = emissao1
+    custo = f["custo_total_brl"].sum()
+    horas = f["actual_hours"].sum()
+    eficiencia = consumo_total / horas if horas else None
+    custo_medio = custo / consumo_total if consumo_total else None
+    rows = [
+        ("Consumo elétrico R12 kWh", consumo_eletrico),
+        ("Consumo de gás R12 kWh", consumo_gas),
+        ("Consumo total R12 kWh", consumo_total),
+        ("Emissões Escopo 1 R12 tCO₂e", emissao1),
+        ("Emissões Escopo 2 R12 tCO₂e", emissao2),
+        ("Emissões CO₂ R12 tCO₂e", emissao_irec if usar_irec else emissao_total),
+        ("Emissões CO₂ R12 com I-REC tCO₂e", emissao_irec),
+        ("Custo total R12 BRL", custo),
+        ("Custo médio BRL/kWh", custo_medio),
+        ("Actual Hours R12", horas),
+        ("Eficiência energética R12", eficiencia),
+    ]
+    return pd.DataFrame(rows, columns=["Indicador", "Valor"])
+
+
+def energia_dash_filters(df, prefix="energia"):
+    if df.empty:
+        return df, None, False
+    section("Filtros")
+    min_date = min(df["Mês"])
+    max_date = max(df["Mês"])
+    fy_data = sorted(df["fiscal_year"].dropna().unique().tolist(), key=lambda x: int(str(x).replace("FY","")) if str(x).replace("FY","").isdigit() else 999)
+    fy_opts = ["Todos"] + fy_data + ["Custom"]
+    c1,c2,c3,c4 = st.columns(4)
+    default_fy = ["FY26"] if "FY26" in fy_data else (["Todos"] if fy_data else [])
+    fys = c1.multiselect("Fiscal Year", fy_opts, default=default_fy, key=f"{prefix}_fy")
+    data_ini = c2.date_input("Período inicial", min_date, key=f"{prefix}_ini")
+    data_fim = c3.date_input("Período final", max_date, key=f"{prefix}_fim")
+    r12_opts = sorted(df["Mês"].unique())
+    default_r12 = energia_default_r12_mes(df) or max_date
+    r12_idx = r12_opts.index(default_r12) if default_r12 in r12_opts else len(r12_opts)-1
+    r12_mes = c4.selectbox("Mês de referência R12", r12_opts, index=r12_idx, format_func=lambda d: d.strftime("%b/%Y"), key=f"{prefix}_r12")
+    c5,c6,c7,c8 = st.columns(4)
+    sites = c5.multiselect("Site", ENERGIA_SITE_ORDER, default=[], key=f"{prefix}_sites")
+    grupos = c6.multiselect("Grupo", ENERGIA_GROUP_ORDER, default=[], key=f"{prefix}_grupos")
+    visao = c7.selectbox("Visão", ["Site", "Grupo", "LAG"], key=f"{prefix}_visao")
+    usar_irec = c8.toggle("Considerar I-REC", value=True, key=f"{prefix}_irec")
+    f = df.copy()
+    selected_fys = [fy for fy in (fys or []) if fy not in ["Todos", "Custom"]]
+    if selected_fys and "Todos" not in (fys or []):
+        f = f[f["fiscal_year"].isin(selected_fys)]
+    if data_ini:
+        f = f[pd.to_datetime(f["Mês"]) >= pd.to_datetime(data_ini)]
+    if data_fim:
+        f = f[pd.to_datetime(f["Mês"]) <= pd.to_datetime(data_fim)]
+    if sites:
+        f = f[f["Site"].isin(sites)]
+    if grupos and "LAG" not in grupos:
+        f = f[f["Grupo"].isin(grupos)]
+    return f, r12_mes, usar_irec
+
+
+def energia_dashboard(db,u):
+    header("Controle de Energia e Emissões", "Consumo elétrico, gás natural, CO₂, custos, Actual Hours, R12, FY e I-REC")
+    df = energia_consolidado(db)
+    if df.empty:
+        empty_state("Nenhuma base de energia carregada. Acesse 'Atualizar Base' para importar o arquivo do Resource Advisor.")
+        return
+    if energia_param_float(db, "fator_emissao_eletricidade_kgco2_kwh", 0) == 0 or energia_param_float(db, "fator_emissao_gas_kgco2_kwh", 0) == 0:
+        alert_card("Os fatores de emissão estão zerados ou incompletos. Configure-os na página Parâmetros para calcular CO₂.")
+    f, r12_mes, usar_irec = energia_dash_filters(df, "energia_dash")
+    if f.empty:
+        empty_state("Sem dados para os filtros selecionados.")
+        return
+    kpis = energia_df_kpis(f, r12_mes, usar_irec)
+    vals = {r["Indicador"]: r["Valor"] for _, r in kpis.iterrows()}
+    cards = [
+        ("Consumo elétrico R12", energia_fmt_val(vals.get("Consumo elétrico R12 kWh"), "numero"), "kWh"),
+        ("Consumo de gás R12", energia_fmt_val(vals.get("Consumo de gás R12 kWh"), "numero"), "kWh"),
+        ("Consumo total R12", energia_fmt_val(vals.get("Consumo total R12 kWh"), "numero"), "kWh"),
+        ("CO₂ R12", energia_fmt_val(vals.get("Emissões CO₂ R12 tCO₂e"), "numero"), "tCO₂e"),
+        ("CO₂ R12 com I-REC", energia_fmt_val(vals.get("Emissões CO₂ R12 com I-REC tCO₂e"), "numero"), "tCO₂e"),
+        ("Custo total R12", energia_fmt_val(vals.get("Custo total R12 BRL"), "money"), ""),
+        ("Actual Hours R12", energia_fmt_val(vals.get("Actual Hours R12"), "numero"), "h"),
+        ("Eficiência energética R12", energia_fmt_val(vals.get("Eficiência energética R12"), "numero"), "kWh/h"),
+    ]
+    for i in range(0, len(cards), 4):
+        cols = st.columns(4)
+        for c, (lab, val, help_) in zip(cols, cards[i:i+4]):
+            with c:
+                kpi_card(lab, val, help_)
+
+    section("Gráficos executivos")
+    c1, c2 = st.columns(2)
+    mensal_site = f.groupby(["Mês", "Site"], as_index=False).agg({
+        "consumo_eletrico_kwh": "sum", "consumo_gas_kwh": "sum", "emissao_total_tco2e": "sum", "emissao_total_com_irec_tco2e": "sum", "custo_total_brl": "sum", "consumo_total_kwh": "sum", "actual_hours": "sum"
+    })
+    mensal_site["eficiencia_energetica"] = mensal_site.apply(lambda r: r["consumo_total_kwh"]/r["actual_hours"] if r["actual_hours"] else None, axis=1)
+    with c1:
+        st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_eletrico_kwh", color="Site", markers=True, title="Consumo elétrico mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+    with c2:
+        st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_gas_kwh", color="Site", markers=True, title="Consumo de gás natural mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+    c3, c4 = st.columns(2)
+    with c3:
+        emis = mensal_site.groupby("Mês", as_index=False)[["emissao_total_tco2e", "emissao_total_com_irec_tco2e"]].sum()
+        emis_long = emis.melt(id_vars="Mês", value_vars=["emissao_total_tco2e", "emissao_total_com_irec_tco2e"], var_name="Cenário", value_name="tCO₂e")
+        emis_long["Cenário"] = emis_long["Cenário"].map({"emissao_total_tco2e": "Sem I-REC", "emissao_total_com_irec_tco2e": "Com I-REC"})
+        st.plotly_chart(px.line(emis_long, x="Mês", y="tCO₂e", color="Cenário", markers=True, title="Emissões mensais de CO₂ — com e sem I-REC").update_layout(template="plotly_white"), use_container_width=True)
+    with c4:
+        ref_ini = energia_r12_start(r12_mes)
+        r12 = f[(pd.to_datetime(f["Mês"]) >= pd.to_datetime(ref_ini)) & (pd.to_datetime(f["Mês"]) <= pd.to_datetime(r12_mes))]
+        r12_site = r12.groupby("Site", as_index=False).agg({"consumo_total_kwh":"sum", "emissao_total_tco2e":"sum", "custo_total_brl":"sum", "actual_hours":"sum"})
+        r12_site["eficiencia_energetica"] = r12_site.apply(lambda r: r["consumo_total_kwh"]/r["actual_hours"] if r["actual_hours"] else None, axis=1)
+        fig = px.bar(r12_site.sort_values("consumo_total_kwh", ascending=False), x="Site", y="consumo_total_kwh", text="consumo_total_kwh", title="Consumo total R12 por site").update_layout(template="plotly_white", yaxis_title="kWh")
+        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+    c5, c6 = st.columns(2)
+    with c5:
+        fig = px.bar(r12_site.sort_values("custo_total_brl", ascending=False), x="Site", y="custo_total_brl", text="custo_total_brl", title="Custo total R12 por site").update_layout(template="plotly_white", yaxis_title="BRL")
+        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+    with c6:
+        fig = px.bar(r12_site.sort_values("eficiencia_energetica", ascending=True), x="Site", y="eficiencia_energetica", text="eficiencia_energetica", title="Eficiência energética R12 por site — menor é melhor").update_layout(template="plotly_white", yaxis_title="kWh/Actual Hour")
+        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+
+    section("Metas ao longo do tempo")
+    df_scope = df.copy()
+    sites_sel = st.session_state.get("energia_dash_sites", [])
+    grupos_sel = st.session_state.get("energia_dash_grupos", [])
+    if sites_sel:
+        df_scope = df_scope[df_scope["Site"].isin(sites_sel)]
+    if grupos_sel and "LAG" not in grupos_sel:
+        df_scope = df_scope[df_scope["Grupo"].isin(grupos_sel)]
+    metas = energia_tendencia_metas(df_scope, usar_irec, db)
+    if metas.empty:
+        empty_state("Sem dados suficientes para gerar a tendência de metas.")
+    else:
+        c7, c8 = st.columns(2)
+        with c7:
+            emis_meta = metas[["Mês","Emissões R12","Meta emissões"]].melt(id_vars="Mês", var_name="Série", value_name="tCO₂e")
+            st.plotly_chart(px.line(emis_meta, x="Mês", y="tCO₂e", color="Série", markers=True, title="Emissões R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
+        with c8:
+            eff_meta = metas[["Mês","Eficiência energética R12","Meta eficiência energética"]].melt(id_vars="Mês", var_name="Série", value_name="kWh/Actual Hour")
+            st.plotly_chart(px.line(eff_meta, x="Mês", y="kWh/Actual Hour", color="Série", markers=True, title="Eficiência energética R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
+
+    section("Exportação")
+    tabela_exec = energia_executive_table(db, "Emissões de CO₂ considerando I-REC" if usar_irec else "Emissões de CO₂", r12_mes, usar_irec)
+    download_excel_button("Exportar relatório Excel", "relatorio_energia_co2.xlsx", {
+        "Consolidado_Filtrado": f,
+        "KPIs": kpis,
+        "Tabela_Executiva": tabela_exec.drop(columns=["_grupo"], errors="ignore"),
+        "Base_Energia": energia_df_registros(db),
+        "Base_Actual_Hours": energia_df_actual_hours(db),
+        "Premissas": pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in db.query(EnergiaParametro).all()]),
+    })
+
+def energia_atualizar_base(db,u):
+    header("Atualizar Base de Energia e Gás", "Importe o Excel do Resource Advisor e sobrescreva a base atual do módulo")
+    up = st.file_uploader("Arquivo Excel do Resource Advisor — GAS_ENERGIA_CONTROLE_MENSAL", type=["xlsx","xls"], key="energia_upload_base")
+    if not up:
+        empty_state("Envie o arquivo Excel de energia elétrica e gás natural para iniciar a atualização.")
+        return
+    try:
+        parsed = energia_parse_base_resource(up, db, up.name)
+    except Exception as e:
+        st.error(str(e))
+        return
+    if parsed.empty:
+        st.warning("Nenhum registro produtivo reconhecido no arquivo. Verifique cabeçalho, sites e serviços.")
+        return
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Linhas reconhecidas", len(parsed))
+    c2.metric("Meses", parsed["mes_ref"].nunique())
+    c3.metric("Sites", parsed["site_codigo"].nunique())
+    c4.metric("Serviços", parsed["fonte"].nunique())
+    st.dataframe(parsed.head(100), use_container_width=True, hide_index=True)
+    st.info("Ao confirmar, a base EnergiaRegistro será apagada e substituída pela base acima.")
+    if st.button("Confirmar atualização da base", use_container_width=True):
+        db.query(EnergiaRegistro).delete()
+        for _, r in parsed.iterrows():
+            db.add(EnergiaRegistro(**r.to_dict()))
+        db.add(EnergiaUploadHistorico(tipo_base="Energia/Gás", nome_arquivo=up.name, usuario=u.nome if u else "", observacoes=f"{len(parsed)} linhas importadas"))
+        db.commit()
+        st.success("Base de energia e gás atualizada com sucesso.")
+        st.rerun()
+
+def energia_actual_hours_page(db,u):
+    header("Actual Hours", "Importação, edição manual e manutenção da base de horas trabalhadas")
+    up = st.file_uploader("Importar Brazil Absorption Summary FY26 (.xls ou .xlsx)", type=["xlsx","xls"], key="energia_upload_absorption")
+    if up:
+        try:
+            parsed = energia_parse_absorption(up, up.name)
+            if parsed.empty:
+                st.warning("Nenhum Actual Hours foi reconhecido nas abas mapeadas.")
+            else:
+                st.dataframe(parsed.head(120), use_container_width=True, hide_index=True)
+                if st.button("Confirmar importação de Actual Hours", use_container_width=True):
+                    # Substitui os meses/sites importados para evitar duplicidade.
+                    for _, r in parsed.iterrows():
+                        db.query(EnergiaActualHours).filter(
+                            EnergiaActualHours.mes_ref == r["mes_ref"],
+                            EnergiaActualHours.site_codigo == r["site_codigo"]
+                        ).delete()
+                        db.add(EnergiaActualHours(**r.to_dict()))
+                    db.add(EnergiaUploadHistorico(tipo_base="Actual Hours", nome_arquivo=up.name, usuario=u.nome if u else "", observacoes=f"{len(parsed)} linhas importadas"))
+                    db.commit()
+                    st.success("Actual Hours importado/atualizado.")
+                    st.rerun()
+        except Exception as e:
+            st.error(str(e))
+
+    section("Adicionar novo mês manualmente")
+    with st.form("energia_add_hours"):
+        c1,c2,c3,c4 = st.columns(4)
+        mes = c1.date_input("Mês", value=date.today().replace(day=1))
+        site = c2.selectbox("Site", ENERGIA_SITE_ORDER)
+        actual = c3.number_input("Actual Hours", min_value=0.0, step=100.0)
+        capacity = c4.number_input("Production capacity (hours)", min_value=0.0, step=100.0)
+        if st.form_submit_button("Salvar novo valor", use_container_width=True):
+            mes = energia_first_day(mes)
+            db.query(EnergiaActualHours).filter(EnergiaActualHours.mes_ref==mes, EnergiaActualHours.site_codigo==site).delete()
+            db.add(EnergiaActualHours(mes_ref=mes, site_codigo=site, site_nome=energia_site_nome(site), grupo=energia_site_grupo(site), actual_hours=actual, production_capacity_hours=capacity, origem="Manual", atualizado_em=datetime.utcnow()))
+            db.commit()
+            st.success("Actual Hours salvo.")
+            st.rerun()
+
+    section("Base atual")
+    df = energia_df_actual_hours(db)
+    if df.empty:
+        empty_state("Nenhum Actual Hours cadastrado.")
+        return
+    f1,f2,f3 = st.columns(3)
+    sites = f1.multiselect("Filtrar site", ENERGIA_SITE_ORDER, key="ah_site")
+    grupos = f2.multiselect("Filtrar grupo", ENERGIA_GROUP_ORDER, key="ah_grupo")
+    fys = sorted(df["FY"].dropna().unique().tolist())
+    fy = f3.multiselect("Filtrar FY", fys, key="ah_fy")
+    f = df.copy()
+    if sites: f = f[f["Site"].isin(sites)]
+    if grupos and "LAG" not in grupos: f = f[f["Grupo"].isin(grupos)]
+    if fy: f = f[f["FY"].isin(fy)]
+    st.dataframe(f, use_container_width=True, hide_index=True)
+    download_excel_button("Exportar Actual Hours", "actual_hours.xlsx", {"Actual_Hours": f})
+
+def energia_tabela_executiva_page(db,u):
+    header("Tabela Executiva", "Tabela no padrão executivo para FY, R12, I-REC e eficiência energética")
+    df = energia_consolidado(db)
+    if df.empty:
+        empty_state("Sem base consolidada. Importe energia/gás e Actual Hours.")
+        return
+    metricas = ["Consumo de energia elétrica", "Consumo de gás natural", "Consumo total de energia", "Emissões de CO₂", "Emissões de CO₂ considerando I-REC", "Custo", "Eficiência energética"]
+    c1,c2,c3 = st.columns(3)
+    metrica = c1.selectbox("Métrica", metricas, index=metricas.index("Emissões de CO₂ considerando I-REC"))
+    usar_irec = c2.toggle("Considerar I-REC", value=True)
+    r12_opts = sorted(df["Mês"].unique())
+    default_r12 = energia_default_r12_mes(df) or max(r12_opts)
+    r12_idx = r12_opts.index(default_r12) if default_r12 in r12_opts else len(r12_opts)-1
+    r12_mes = c3.selectbox("Mês R12/YTD", r12_opts, index=r12_idx, format_func=lambda d: d.strftime("%b/%Y"))
+    tabela = energia_executive_table(db, metrica, r12_mes, usar_irec)
+    subt = "Emissões de energia elétrica zeradas; emissões de gás natural mantidas." if usar_irec else "Sem abatimento de emissões por I-REC."
+    st.caption(subt)
+    st.markdown(energia_table_html(tabela, metrica), unsafe_allow_html=True)
+    download_excel_button("Exportar tabela executiva Excel", "tabela_executiva_energia.xlsx", {"Tabela_Executiva": tabela.drop(columns=["_grupo"], errors="ignore")})
+
+def energia_base_consolidada_page(db,u):
+    header("Base Consolidada", "Tabela mensal consolidada de energia, gás, CO₂, custos, Actual Hours e R12")
+    df = energia_consolidado(db)
+    if df.empty:
+        empty_state("Sem dados consolidados.")
+        return
+    f, r12_mes, usar_irec = energia_dash_filters(df, "energia_base")
+    st.dataframe(f, use_container_width=True, hide_index=True)
+    download_excel_button("Exportar base consolidada", "base_consolidada_energia.xlsx", {"Consolidado": f})
+
+def energia_parametros_page(db,u):
+    header("Parâmetros", "Fatores de emissão, metas, conversões e referência fiscal")
+    seed_energia_parametros(db)
+    ps = db.query(EnergiaParametro).order_by(EnergiaParametro.chave).all()
+    with st.form("energia_parametros_form"):
+        values = {}
+        for p in ps:
+            values[p.chave] = st.text_input(p.chave, value=p.valor or "", help=p.descricao or "")
+        if st.form_submit_button("Salvar parâmetros", use_container_width=True):
+            for chave, valor in values.items():
+                energia_set_param(db, chave, valor)
+            st.success("Parâmetros atualizados.")
+            st.rerun()
+    df = pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in ps])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def energia_relatorios_page(db,u):
+    header("Relatórios Energia", "Exportações completas do módulo de energia e emissões")
+    df_cons = energia_consolidado(db)
+    df_reg = energia_df_registros(db)
+    df_hrs = energia_df_actual_hours(db)
+    if df_cons.empty:
+        empty_state("Sem dados para exportar.")
+        return
+    r12_mes = energia_default_r12_mes(df_cons) or max(df_cons["Mês"])
+    tabela = energia_executive_table(db, "Emissões de CO₂ considerando I-REC", r12_mes, True)
+    kpis = energia_df_kpis(df_cons, r12_mes, True)
+    prem = pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in db.query(EnergiaParametro).order_by(EnergiaParametro.chave).all()])
+    dados_graficos = df_cons.groupby(["Mês","Site","Grupo"], as_index=False).agg({
+        "consumo_eletrico_kwh":"sum", "consumo_gas_kwh":"sum", "consumo_total_kwh":"sum",
+        "emissao_total_tco2e":"sum", "emissao_total_com_irec_tco2e":"sum",
+        "custo_total_brl":"sum", "actual_hours":"sum"
+    })
+    section("Relatório completo")
+    download_excel_button("Baixar relatório completo Excel", "relatorio_completo_energia.xlsx", {
+        "Base_Energia": df_reg,
+        "Base_Actual_Hours": df_hrs,
+        "Consolidado": df_cons,
+        "KPIs": kpis,
+        "Tabela_Executiva": tabela.drop(columns=["_grupo"], errors="ignore"),
+        "Premissas": prem,
+        "Dados_Graficos": dados_graficos,
+    })
+    pdf_dashboard = energia_pdf_dashboard(db, r12_mes, True)
+    download_pdf_button("Baixar todo o dashboard em PDF", "dashboard_energia_co2.pdf", pdf_dashboard)
+
+    section("Bases individuais")
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        download_excel_button("Base energia", "base_energia.xlsx", {"Base_Energia": df_reg})
+    with c2:
+        download_excel_button("Actual Hours", "actual_hours.xlsx", {"Base_Actual_Hours": df_hrs})
+    with c3:
+        download_excel_button("Consolidado", "consolidado_energia.xlsx", {"Consolidado": df_cons})
 
 # ============================================================
 # 15. Roteamento principal
@@ -1755,7 +4487,9 @@ def render_sidebar(db,u):
         st.rerun()
     st.sidebar.divider()
     if mod=="nr12":
-        pages=[NOME_DASH_MAQUINAS,"Central de Pendências","Calendário de Auditorias e Inspeções","Inventário de Máquinas",NOME_DOCS_MAQUINAS,"Checklists e Inspeções","Base de Checklists de Proteções",NOME_PAC_MAQUINAS,"MOC de Proteções de Máquinas",NOME_RELATORIOS_MAQUINAS] + (["Logs do Sistema"] if can_admin(u) else [])
+        pages=[NOME_DASH_MAQUINAS,"Central de Pendências","Calendário de Auditorias e Inspeções","Inventário de Máquinas",NOME_DOCS_MAQUINAS,"Checklists e Inspeções","Base de Checklists de Proteções",NOME_PAC_MAQUINAS,NOME_RELATORIOS_MAQUINAS]
+        if can_admin(u):
+            pages.append("Logs do Sistema")
         current=st.session_state.get("page_nr12",pages[0])
         if current not in pages:
             current=pages[0]
@@ -1765,7 +4499,9 @@ def render_sidebar(db,u):
         selected=st.sidebar.radio(NOME_MODULO_MAQUINAS,pages,key="nav_nr12")
         st.session_state.page_nr12=selected
     elif mod=="ehs":
-        pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist Diretrizes de EHS","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"] + (["Logs do Sistema"] if can_admin(u) else [])
+        pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist Diretrizes de EHS","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"]
+        if can_admin(u):
+            pages.append("Logs do Sistema")
         current=st.session_state.get("page_ehs",pages[0])
         if current not in pages:
             current=pages[0]
@@ -1774,28 +4510,25 @@ def render_sidebar(db,u):
             st.session_state.nav_ehs=current
         selected=st.sidebar.radio("Auditoria Cruzada de Diretrizes de EHS",pages,key="nav_ehs")
         st.session_state.page_ehs=selected
-
+    elif mod=="energia":
+        pages=["Dashboard Energia e CO₂","Atualizar Base","Actual Hours","Tabela Executiva","Base Consolidada","Relatórios Energia","Parâmetros"]
+        current=st.session_state.get("page_energia",pages[0])
+        if current not in pages:
+            current=pages[0]
+            st.session_state.page_energia=current
+        if st.session_state.get("nav_energia") not in pages:
+            st.session_state.nav_energia=current
+        selected=st.sidebar.radio("Controle de Energia e Emissões",pages,key="nav_energia")
+        st.session_state.page_energia=selected
 def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod=="home": home_page(db,u)
     elif mod=="nr12":
-        pages_map={
-            NOME_DASH_MAQUINAS:nr12_dashboard,
-            "Central de Pendências":nr12_central_pendencias,
-            "Calendário de Auditorias e Inspeções":nr12_calendario,
-            "Inventário de Máquinas":nr12_inventario,
-            NOME_DOCS_MAQUINAS:nr12_documentos,
-            "Checklists e Inspeções":nr12_checklists,
-            "Base de Checklists de Proteções":nr12_base_checklists,
-            NOME_PAC_MAQUINAS:nr12_pac,
-            "MOC de Proteções de Máquinas":nr12_moc,
-            NOME_RELATORIOS_MAQUINAS:nr12_relatorios,
-            "Logs do Sistema":logs_sistema,
-        }
-        pages_map.get(st.session_state.get("page_nr12",NOME_DASH_MAQUINAS),nr12_dashboard)(db,u)
+        {NOME_DASH_MAQUINAS:nr12_dashboard,"Central de Pendências":nr12_central_pendencias,"Calendário de Auditorias e Inspeções":nr12_calendario,"Inventário de Máquinas":nr12_inventario,NOME_DOCS_MAQUINAS:nr12_documentos,"Checklists e Inspeções":nr12_checklists,"Base de Checklists de Proteções":nr12_base_checklists,NOME_PAC_MAQUINAS:nr12_pac,NOME_RELATORIOS_MAQUINAS:nr12_relatorios,"Logs do Sistema":logs_sistema_page}[st.session_state.get("page_nr12",NOME_DASH_MAQUINAS)](db,u)
     elif mod=="ehs":
-        pages_map={"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist Diretrizes de EHS":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios,"Logs do Sistema":logs_sistema}
-        pages_map.get(st.session_state.get("page_ehs","Dashboard Auditoria Cruzada"),ehs_dashboard)(db,u)
+        {"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist Diretrizes de EHS":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios,"Logs do Sistema":logs_sistema_page}[st.session_state.get("page_ehs","Dashboard Auditoria Cruzada")](db,u)
+    elif mod=="energia":
+        {"Dashboard Energia e CO₂":energia_dashboard,"Atualizar Base":energia_atualizar_base,"Actual Hours":energia_actual_hours_page,"Tabela Executiva":energia_tabela_executiva_page,"Base Consolidada":energia_base_consolidada_page,"Relatórios Energia":energia_relatorios_page,"Parâmetros":energia_parametros_page}[st.session_state.get("page_energia","Dashboard Energia e CO₂")](db,u)
 
 # ============================================================
 # 16. main()
