@@ -124,9 +124,9 @@ EHS_SUBMODULOS = {
     },
     "Planejamento e Execução": {
         "icone": "📋",
-        "descricao": "Planejamento dos ciclos de auditoria, execução do checklist e registro das evidências.",
+        "descricao": "Planejamento dos ciclos de auditoria, calendário, execução do checklist e registro das evidências.",
         "cor": "#2563eb",
-        "paginas": ["Planejamento de Auditorias", "Checklist Diretrizes de EHS"],
+        "paginas": ["Planejamento de Auditorias", "Calendário de Auditorias", "Checklist Diretrizes de EHS"],
     },
     "Gestão de Gaps e Planos de Ação": {
         "icone": "⚠️",
@@ -1882,7 +1882,7 @@ def render_calendario_mensal(df_eventos, mes_ref):
     eventos_por_data = {}
     for _, row in df.iterrows() if not df.empty else []:
         eventos_por_data.setdefault(row["Data"], []).append(row)
-    status_colors = {"Planejada":"#2563eb", "Vencida":"#dc2626", "Concluída":"#16a34a"}
+    status_colors = {"Planejada":"#2563eb", "Vencida":"#dc2626", "Concluída":"#16a34a", "Em andamento":"#f59e0b", "Cancelada":"#64748b"}
     dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
     html = ["""
     <style>
@@ -2370,6 +2370,151 @@ def ehs_dashboard(db,u):
             st.plotly_chart(px.histogram(dp, x="Status", color="Prioridade", barmode="group", title="PAC por status").update_layout(template="plotly_white"), use_container_width=True)
         else:
             empty_state("Sem PACs.")
+
+
+def status_calendario_auditoria_ehs(a):
+    """Traduz o status da auditoria para a visão de calendário.
+
+    A data planejada vencida ganha destaque visual como vencida, desde que a auditoria
+    ainda não tenha sido concluída ou cancelada.
+    """
+    if not a:
+        return "Planejada"
+    if a.status == "Concluída":
+        return "Concluída"
+    if a.status == "Cancelada":
+        return "Cancelada"
+    if a.data_planejada and as_date(a.data_planejada) < date.today() and a.status not in ["Concluída", "Cancelada"]:
+        return "Vencida"
+    if a.status == "Em andamento":
+        return "Em andamento"
+    return "Planejada"
+
+
+def ehs_calendario(db,u):
+    header("Calendário de Auditorias", "Acompanhamento visual das auditorias cruzadas planejadas, em andamento, vencidas e concluídas")
+    ids = visible_site_ids(u, db)
+    auds = db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.data_planejada.desc(), AuditoriaCruzada.id.desc()).all()
+    rows = []
+    for a in auds:
+        site_txt = site_code(db, a.site_auditado_id)
+        resp = a.auditor_lider or "—"
+        ciclo = a.ciclo or f"Auditoria {a.id}"
+        status_base = status_calendario_auditoria_ehs(a)
+        if a.data_planejada:
+            d = as_date(a.data_planejada)
+            rows.append({
+                "Data": d,
+                "Mês": d.replace(day=1),
+                "Site": site_txt,
+                "Responsável": resp,
+                "Tipo": "Auditoria planejada",
+                "Máquina": ciclo,
+                "Auditoria": a.id,
+                "Ciclo": ciclo,
+                "Status": status_base,
+                "Origem": "Data planejada",
+                "Observação": a.escopo or a.observacoes or "—",
+            })
+        if a.data_inicio:
+            d = as_date(a.data_inicio)
+            rows.append({
+                "Data": d,
+                "Mês": d.replace(day=1),
+                "Site": site_txt,
+                "Responsável": resp,
+                "Tipo": "Início da auditoria",
+                "Máquina": ciclo,
+                "Auditoria": a.id,
+                "Ciclo": ciclo,
+                "Status": "Em andamento" if a.status != "Concluída" else "Concluída",
+                "Origem": "Data de início",
+                "Observação": a.escopo or a.observacoes or "—",
+            })
+        if a.data_fim:
+            d = as_date(a.data_fim)
+            rows.append({
+                "Data": d,
+                "Mês": d.replace(day=1),
+                "Site": site_txt,
+                "Responsável": resp,
+                "Tipo": "Conclusão da auditoria",
+                "Máquina": ciclo,
+                "Auditoria": a.id,
+                "Ciclo": ciclo,
+                "Status": "Concluída",
+                "Origem": "Data de fim",
+                "Observação": a.escopo or a.observacoes or "—",
+            })
+    df = pd.DataFrame(rows)
+    if df.empty:
+        empty_state("Nenhuma auditoria com datas cadastradas para exibir no calendário.")
+        return
+
+    with st.expander("Filtros", expanded=True):
+        c1, c2, c3, c4 = st.columns(4)
+        meses = sorted(df["Mês"].dropna().unique())
+        hoje_mes = date.today().replace(day=1)
+        meses_ate_hoje = [m for m in meses if m <= hoje_mes]
+        mes_default = max(meses_ate_hoje) if meses_ate_hoje else max(meses)
+        mes_idx = meses.index(mes_default) if mes_default in meses else max(0, len(meses)-1)
+        mes_ref = c1.selectbox("Mês", meses, index=mes_idx, format_func=lambda d: pd.to_datetime(d).strftime("%m/%Y"), key="ehs_calendario_mes")
+        sites = c2.multiselect("Site auditado", sorted(df["Site"].dropna().unique()), key="ehs_calendario_sites")
+        resp = c3.multiselect("Auditor líder / responsável", sorted(df["Responsável"].dropna().unique()), key="ehs_calendario_resp")
+        status = c4.multiselect("Status", [s for s in ["Planejada", "Em andamento", "Vencida", "Concluída", "Cancelada"] if s in set(df["Status"])], key="ehs_calendario_status")
+        c5, c6 = st.columns(2)
+        tipos = c5.multiselect("Tipo de evento", sorted(df["Tipo"].dropna().unique()), key="ehs_calendario_tipos")
+        ciclos = c6.multiselect("Ciclo", sorted(df["Ciclo"].dropna().unique()), key="ehs_calendario_ciclos")
+
+    f = df.copy()
+    if mes_ref:
+        f = f[f["Mês"] == mes_ref]
+    if sites:
+        f = f[f["Site"].isin(sites)]
+    if resp:
+        f = f[f["Responsável"].isin(resp)]
+    if status:
+        f = f[f["Status"].isin(status)]
+    if tipos:
+        f = f[f["Tipo"].isin(tipos)]
+    if ciclos:
+        f = f[f["Ciclo"].isin(ciclos)]
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Planejadas", int((f["Status"] == "Planejada").sum()))
+    k2.metric("Em andamento", int((f["Status"] == "Em andamento").sum()))
+    k3.metric("Vencidas", int((f["Status"] == "Vencida").sum()))
+    k4.metric("Concluídas", int((f["Status"] == "Concluída").sum()))
+
+    t1, t2, t3, t4 = st.tabs(["Calendário mensal", "Por site", "Por responsável", "Lista detalhada"])
+    with t1:
+        render_calendario_mensal(f, mes_ref)
+        st.caption("A tabela abaixo mantém a rastreabilidade dos eventos exibidos no calendário.")
+        st.dataframe(f.sort_values("Data"), use_container_width=True, hide_index=True)
+    with t2:
+        agg = f.groupby(["Site", "Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
+        if not agg.empty:
+            st.plotly_chart(px.bar(agg, x="Site", y="Quantidade", color="Status", barmode="group", title="Auditorias por site e status").update_layout(template="plotly_white"), use_container_width=True)
+        else:
+            empty_state("Sem dados para os filtros selecionados.")
+        st.dataframe(agg, use_container_width=True, hide_index=True)
+    with t3:
+        agg = f.groupby(["Responsável", "Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
+        if not agg.empty:
+            st.plotly_chart(px.bar(agg, x="Responsável", y="Quantidade", color="Status", barmode="group", title="Auditorias por responsável e status").update_layout(template="plotly_white"), use_container_width=True)
+        else:
+            empty_state("Sem dados para os filtros selecionados.")
+        st.dataframe(agg, use_container_width=True, hide_index=True)
+    with t4:
+        st.dataframe(f.sort_values("Data"), use_container_width=True, hide_index=True)
+
+    proximas = df[(df["Data"] >= date.today()) & (df["Data"] <= date.today() + timedelta(days=90))].sort_values("Data")
+    section("Próximas auditorias — 90 dias")
+    if not proximas.empty:
+        st.dataframe(proximas, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhuma auditoria prevista para os próximos 90 dias.")
+    download_excel_button("Exportar calendário de auditorias", "calendario_auditorias_ehs.xlsx", {"Calendario_Auditorias": f, "Proximas_90_Dias": proximas})
 
 def ehs_planejamento(db,u):
     header("Planejamento de Auditorias","Cadastro de ciclos e geração automática do checklist")
@@ -5173,6 +5318,7 @@ def route(db,u):
             EHS_HOME_PAGE: ehs_submodulos_home,
             "Dashboard Auditoria Cruzada": ehs_dashboard,
             "Planejamento de Auditorias": ehs_planejamento,
+            "Calendário de Auditorias": ehs_calendario,
             "Checklist Diretrizes de EHS": ehs_checklist,
             "PAC Auditoria Cruzada": ehs_pac,
             "Base do Checklist EHS": ehs_base_checklist,
