@@ -420,16 +420,43 @@ def criar_versao_checklist_maquinas(db, tipo_checklist, criado_por="Sistema", de
     db.flush()
     return v
 
+def criar_versao_checklist_ehs(db, criado_por="Sistema", descricao=None):
+    """Cria uma nova versão ativa do checklist EHS a partir da base editável atual.
+
+    A base inicial continua no código como seed, mas a gestão operacional passa a ser pelo banco.
+    Cada nova auditoria recebe um snapshot da versão ativa, preservando rastreabilidade histórica.
+    """
+    atual = db.query(ChecklistVersaoEHS).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).first()
+    nova_num = (atual.versao if atual and atual.versao else 0) + 1
+    for v in db.query(ChecklistVersaoEHS).filter_by(ativo=True).all():
+        v.ativo = False
+    nova = ChecklistVersaoEHS(descricao=descricao or f"Versão {nova_num} do checklist de Diretrizes EHS", versao=nova_num, ativo=True, criado_por=criado_por)
+    db.add(nova); db.flush()
+    reqs = db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all()
+    for r in reqs:
+        db.add(ChecklistPerguntaVersaoEHS(
+            checklist_versao_id=nova.id,
+            requisito_id=r.id,
+            categoria=r.diretiva.categoria if r.diretiva else "Sem categoria",
+            ordem=r.ordem,
+            pergunta=r.pergunta,
+            criticidade=r.criticidade,
+            evidencia_esperada=r.evidencia_esperada,
+            gera_pac_automatico=getattr(r, "gera_pac_automatico", False),
+            ativo=r.ativo,
+        ))
+    db.flush()
+    return nova
+
 def seed_checklist_versions(db):
+    # Cria versões iniciais somente quando ainda não existem. Depois disso, as alterações
+    # feitas pelo usuário no app são preservadas e não são sobrescritas pelo hardcoded.
     tipos = {t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()}
     for tipo in sorted(tipos):
         if not db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo).first():
             criar_versao_checklist_maquinas(db, tipo, "Sistema", "Versão inicial migrada do checklist padrão")
     if not db.query(ChecklistVersaoEHS).first():
-        v = ChecklistVersaoEHS(descricao="Versão inicial migrada do checklist de Diretrizes EHS", versao=1, ativo=True, criado_por="Sistema")
-        db.add(v); db.flush()
-        for r in db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all():
-            db.add(ChecklistPerguntaVersaoEHS(checklist_versao_id=v.id, requisito_id=r.id, categoria=r.diretiva.categoria, ordem=r.ordem, pergunta=r.pergunta, criticidade=r.criticidade, evidencia_esperada=r.evidencia_esperada, gera_pac_automatico=getattr(r, "gera_pac_automatico", False), ativo=r.ativo))
+        criar_versao_checklist_ehs(db, "Sistema", "Versão inicial migrada do checklist de Diretrizes EHS")
 
 def sync_checklists_base(db):
     # Usa CHECKLIST_NR12/CHECKLIST_EHS apenas como seed inicial. Não sobrescreve perguntas editadas no app.
@@ -684,8 +711,10 @@ def gerar_pac_automatico_nr12(db,ver,r,resp=""):
     db.add(PACNR12(origem=ver.tipo,site_id=ver.site_id,maquina_id=ver.maquina_id,verificacao_id=ver.id,item_checklist=pergunta,descricao_desvio=r.comentario_evidencia or pergunta,classificacao=clas,responsavel=resp,area_responsavel="A definir",prazo=date.today()+timedelta(days=15 if clas=="Crítico" else 30),status="Aberta"))
 def gerar_pac_automatico_ehs(db,a,r,resp=""):
     if db.query(PACEHS).filter_by(auditoria_id=a.id,requisito_id=r.requisito_id).first(): return
-    tipo="Não conformidade crítica" if r.status=="Não Conforme" and r.requisito and r.requisito.criticidade=="Alta" else "Não conformidade maior" if r.status=="Não Conforme" else "Observação"
-    db.add(PACEHS(auditoria_id=a.id,site_id=a.site_auditado_id,requisito_id=r.requisito_id,tipo_achado=tipo,descricao=r.comentario_auditor or r.requisito.pergunta,evidencia=r.evidencia_verificada,risco="A avaliar",causa_raiz="A definir",acao_imediata="A definir",acao_corretiva="A definir",responsavel=resp,area_responsavel="A definir",prazo=date.today()+timedelta(days=15 if tipo=="Não conformidade crítica" else 30),status="Aberta",prioridade_criticidade="Alta" if tipo=="Não conformidade crítica" else "Média"))
+    criticidade = getattr(r, "criticidade_snapshot", None) or (r.requisito.criticidade if r.requisito else "Média")
+    pergunta = getattr(r, "pergunta_snapshot", None) or (r.requisito.pergunta if r.requisito else "Requisito de checklist")
+    tipo="Não conformidade crítica" if r.status=="Não Conforme" and criticidade=="Alta" else "Não conformidade maior" if r.status=="Não Conforme" else "Observação"
+    db.add(PACEHS(auditoria_id=a.id,site_id=a.site_auditado_id,requisito_id=r.requisito_id,tipo_achado=tipo,descricao=r.comentario_auditor or pergunta,evidencia=r.evidencia_verificada,risco="A avaliar",causa_raiz="A definir",acao_imediata="A definir",acao_corretiva="A definir",responsavel=resp,area_responsavel="A definir",prazo=date.today()+timedelta(days=15 if tipo=="Não conformidade crítica" else 30),status="Aberta",prioridade_criticidade="Alta" if tipo=="Não conformidade crítica" else "Média"))
 def gerar_excel(sheets):
     out=io.BytesIO()
     with pd.ExcelWriter(out,engine="openpyxl") as w:
@@ -1464,9 +1493,10 @@ def nr12_checklists(db,u):
             st.rerun()
 
 def nr12_base_checklists(db,u):
-    header("Base de Checklists de Proteções", "Gestão editável, versionada e rastreável dos checklists de proteções de máquinas")
+    header("Base de Checklists de Proteções", "Base inicial carregada no banco, editável pelo app e versionada para preservar histórico")
     if not can_edit(u,"nr12_manutencao"):
         alert_card("Seu perfil permite consulta, mas não administração da base de checklists.")
+    st.caption("Os checklists padrão continuam dentro do código como carga inicial. Depois que o banco é criado, a base passa a ser editável pelo app; as alterações ficam salvas no banco e as verificações mantêm snapshot da pergunta usada.")
     tipos = sorted({t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()} | {t for t, in db.query(ChecklistVersaoMaquinas.tipo_checklist).distinct().all()} | set(TIPOS_VERIFICACAO_NR12))
     if not tipos:
         empty_state("Nenhum tipo de checklist cadastrado.")
@@ -1517,9 +1547,17 @@ def nr12_base_checklists(db,u):
                         obj.item_critico = bool(row["Crítico"])
                         obj.gera_pac_automatico = bool(row["Gerar PAC automático"])
                         obj.ativo = bool(row["Ativo"])
+                        if obj.item_base_id:
+                            base_item = db.get(ChecklistItemNR12, obj.item_base_id)
+                            if base_item:
+                                base_item.ordem = obj.ordem
+                                base_item.pergunta = obj.pergunta
+                                base_item.item_critico = obj.item_critico
+                                base_item.gera_pac_automatico = obj.gera_pac_automatico
+                                base_item.ativo = obj.ativo
                         if antes != obj.pergunta:
                             registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistPerguntaVersaoMaquinas",obj.id,"editar","pergunta",antes,obj.pergunta)
-                db.commit(); st.success("Perguntas atualizadas."); st.rerun()
+                db.commit(); st.success("Perguntas atualizadas. A base editável também foi sincronizada para futuras versões."); st.rerun()
             with st.expander("Adicionar pergunta à versão ativa"):
                 with st.form("add_pergunta_checklist_maquinas"):
                     prox_ordem = (max([p.ordem or 0 for p in perguntas]) + 1) if perguntas else 1
@@ -1529,7 +1567,9 @@ def nr12_base_checklists(db,u):
                     pac_auto = st.checkbox("Gerar PAC automático quando houver não conformidade")
                     if st.form_submit_button("Adicionar", use_container_width=True):
                         if pergunta.strip():
-                            obj = ChecklistPerguntaVersaoMaquinas(checklist_versao_id=ativa.id, ordem=int(ordem), pergunta=pergunta.strip(), item_critico=crit, gera_pac_automatico=pac_auto, ativo=True)
+                            base_item = ChecklistItemNR12(tipo_checklist=tipo, ordem=int(ordem), pergunta=pergunta.strip(), item_critico=crit, gera_pac_automatico=pac_auto, ativo=True)
+                            db.add(base_item); db.flush()
+                            obj = ChecklistPerguntaVersaoMaquinas(checklist_versao_id=ativa.id, item_base_id=base_item.id, ordem=int(ordem), pergunta=pergunta.strip(), item_critico=crit, gera_pac_automatico=pac_auto, ativo=True)
                             db.add(obj); db.flush()
                             registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistPerguntaVersaoMaquinas",obj.id,"criar",observacao=f"Pergunta adicionada à v{ativa.versao}")
                             db.commit(); st.success("Pergunta adicionada."); st.rerun()
@@ -1780,9 +1820,23 @@ def gerar_checklist_automatico_ehs(db,auditoria_id,commit=True):
     versao = db.query(ChecklistVersaoEHS).filter_by(ativo=True).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).first()
     if auditoria and versao and not auditoria.versao_checklist_id:
         auditoria.versao_checklist_id = versao.id
-    for r in db.query(RequisitoEHS).join(DiretivaEHS).filter(RequisitoEHS.ativo==True,DiretivaEHS.ativo==True):
-        if not db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=auditoria_id,requisito_id=r.id).first():
-            db.add(RespostaAuditoriaEHS(auditoria_id=auditoria_id,requisito_id=r.id,aplicavel=True,status="Conforme",nota_maturidade=3,versao_checklist_id=versao.id if versao else None,pergunta_snapshot=r.pergunta,criticidade_snapshot=r.criticidade,evidencia_esperada_snapshot=r.evidencia_esperada,gera_pac_automatico_snapshot=getattr(r,"gera_pac_automatico",False)))
+
+    if versao:
+        perguntas = db.query(ChecklistPerguntaVersaoEHS).filter_by(checklist_versao_id=versao.id, ativo=True).order_by(ChecklistPerguntaVersaoEHS.categoria, ChecklistPerguntaVersaoEHS.ordem).all()
+        for p in perguntas:
+            if not p.requisito_id:
+                continue
+            if not db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=auditoria_id,requisito_id=p.requisito_id).first():
+                db.add(RespostaAuditoriaEHS(
+                    auditoria_id=auditoria_id, requisito_id=p.requisito_id, aplicavel=True, status="Conforme", nota_maturidade=3,
+                    versao_checklist_id=versao.id, pergunta_snapshot=p.pergunta, criticidade_snapshot=p.criticidade,
+                    evidencia_esperada_snapshot=p.evidencia_esperada, gera_pac_automatico_snapshot=p.gera_pac_automatico
+                ))
+    else:
+        # Fallback para bases antigas: usa RequisitoEHS diretamente, ainda com snapshot.
+        for r in db.query(RequisitoEHS).join(DiretivaEHS).filter(RequisitoEHS.ativo==True,DiretivaEHS.ativo==True):
+            if not db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=auditoria_id,requisito_id=r.id).first():
+                db.add(RespostaAuditoriaEHS(auditoria_id=auditoria_id,requisito_id=r.id,aplicavel=True,status="Conforme",nota_maturidade=3,versao_checklist_id=None,pergunta_snapshot=r.pergunta,criticidade_snapshot=r.criticidade,evidencia_esperada_snapshot=r.evidencia_esperada,gera_pac_automatico_snapshot=getattr(r,"gera_pac_automatico",False)))
     if commit: db.commit()
 
 def ehs_dashboard(db,u):
@@ -2044,34 +2098,93 @@ def ehs_pac(db,u):
                         st.success("Status atualizado.")
                         st.rerun()
 def ehs_base_checklist(db,u):
-    header("Base do Checklist EHS","Visualizar categorias, requisitos, criticidade e evidência esperada")
+    header("Base do Checklist EHS","Base inicial carregada no banco, editável pelo app e versionada para preservar histórico")
+    if not can_edit(u,"auditoria"):
+        alert_card("Seu perfil permite consulta, mas não administração da base de checklists.")
+    versao_ativa = db.query(ChecklistVersaoEHS).filter_by(ativo=True).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).first()
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        kpi_card("Versão ativa", f"v{versao_ativa.versao}" if versao_ativa else "—", "Novas auditorias usarão esta versão")
+    with c2:
+        kpi_card("Requisitos ativos", db.query(RequisitoEHS).filter_by(ativo=True).count(), "Base editável atual")
+    with c3:
+        kpi_card("Categorias", db.query(DiretivaEHS).filter_by(ativo=True).count(), "Diretrizes EHS")
+
+    section("Como funciona")
+    st.caption("Os checklists padrão continuam dentro do código como carga inicial. Depois que o banco é criado, a base passa a ser editável pelo app; as alterações ficam salvas no banco e novas auditorias recebem snapshots da versão ativa.")
+
     reqs=db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem).all()
     df=pd.DataFrame([{"ID":r.id,"Categoria":r.diretiva.categoria,"Ordem":r.ordem,"Requisito":r.pergunta,"Ativo":r.ativo,"Criticidade":r.criticidade,"Evidência esperada":r.evidencia_esperada,"Gerar PAC automático":getattr(r,"gera_pac_automatico",False)} for r in reqs])
     if can_edit(u,"auditoria"):
-        ed=st.data_editor(df,use_container_width=True,hide_index=True,disabled=["ID","Categoria","Ordem"],column_config={"Criticidade":st.column_config.SelectboxColumn("Criticidade",options=CRITICIDADES)})
-        if st.button("Salvar ajustes",use_container_width=True):
-            for _,row in ed.iterrows():
-                r=db.get(RequisitoEHS,int(row["ID"])); r.ativo=bool(row["Ativo"]); r.pergunta=row["Requisito"]; r.criticidade=row["Criticidade"]; r.evidencia_esperada=row["Evidência esperada"]; r.gera_pac_automatico=bool(row.get("Gerar PAC automático", False))
-            registrar_log(db,u,"Auditoria Cruzada","RequisitoEHS",None,"editar",observacao="Base do checklist EHS atualizada")
-            db.commit(); st.success("Base atualizada."); st.rerun()
+        section("Editar base atual")
+        ed=st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["ID"],
+            column_config={"Criticidade":st.column_config.SelectboxColumn("Criticidade",options=CRITICIDADES)},
+            key="editor_base_checklist_ehs_editavel",
+        )
+        csave,cversion = st.columns(2)
+        with csave:
+            if st.button("Salvar base e criar nova versão ativa",use_container_width=True):
+                for _,row in ed.iterrows():
+                    r=db.get(RequisitoEHS,int(row["ID"]))
+                    if not r:
+                        continue
+                    categoria=str(row["Categoria"]).strip() or "Sem categoria"
+                    d=db.query(DiretivaEHS).filter_by(categoria=categoria).first()
+                    if not d:
+                        d=DiretivaEHS(categoria=categoria,descricao=categoria,ativo=True); db.add(d); db.flush()
+                    r.diretiva_id=d.id
+                    r.ordem=int(row["Ordem"]) if pd.notna(row["Ordem"]) else r.ordem
+                    r.pergunta=str(row["Requisito"]).strip()
+                    r.ativo=bool(row["Ativo"])
+                    r.criticidade=row["Criticidade"] if row["Criticidade"] in CRITICIDADES else "Média"
+                    r.evidencia_esperada=row["Evidência esperada"]
+                    r.gera_pac_automatico=bool(row.get("Gerar PAC automático", False))
+                nova = criar_versao_checklist_ehs(db,u.nome,"Versão criada após edição da base EHS")
+                registrar_log(db,u,"Auditoria Cruzada","ChecklistVersaoEHS",nova.id,"criar",observacao="Base EHS editada e nova versão ativa criada")
+                db.commit(); st.success(f"Base atualizada. Nova versão ativa criada: v{nova.versao}."); st.rerun()
+        with cversion:
+            if st.button("Criar nova versão sem alterar a base",use_container_width=True):
+                nova = criar_versao_checklist_ehs(db,u.nome,"Nova versão criada manualmente a partir da base atual")
+                registrar_log(db,u,"Auditoria Cruzada","ChecklistVersaoEHS",nova.id,"criar",observacao="Nova versão EHS criada a partir da base atual")
+                db.commit(); st.success(f"Nova versão ativa criada: v{nova.versao}."); st.rerun()
         with st.expander("Criar novo requisito EHS"):
             cats = [d.categoria for d in db.query(DiretivaEHS).order_by(DiretivaEHS.categoria).all()]
             with st.form("novo_requisito_ehs"):
-                categoria = st.selectbox("Categoria", cats) if cats else st.text_input("Categoria")
+                modo_cat = st.radio("Categoria", ["Usar existente", "Criar nova"], horizontal=True)
+                if modo_cat == "Usar existente" and cats:
+                    categoria = st.selectbox("Categoria existente", cats)
+                else:
+                    categoria = st.text_input("Nova categoria")
                 ordem = st.number_input("Ordem", min_value=1, value=1)
                 pergunta = st.text_area("Requisito / pergunta")
                 criticidade = st.selectbox("Criticidade", CRITICIDADES)
                 evidencia = st.text_area("Evidência esperada")
                 pac_auto = st.checkbox("Gerar PAC automático quando houver não conformidade")
-                if st.form_submit_button("Adicionar requisito", use_container_width=True):
-                    d = db.query(DiretivaEHS).filter_by(categoria=categoria).first()
-                    if not d:
-                        d = DiretivaEHS(categoria=categoria, descricao=categoria, ativo=True); db.add(d); db.flush()
-                    obj = RequisitoEHS(diretiva_id=d.id, ordem=int(ordem), pergunta=pergunta, criticidade=criticidade, evidencia_esperada=evidencia, gera_pac_automatico=pac_auto, ativo=True)
-                    db.add(obj); db.flush()
-                    registrar_log(db,u,"Auditoria Cruzada","RequisitoEHS",obj.id,"criar",observacao="Novo requisito EHS cadastrado")
-                    db.commit(); st.success("Requisito criado."); st.rerun()
-    else: st.dataframe(df,use_container_width=True,hide_index=True)
+                if st.form_submit_button("Adicionar requisito e criar nova versão", use_container_width=True):
+                    if not pergunta.strip() or not categoria.strip():
+                        st.error("Informe categoria e requisito/pergunta.")
+                    else:
+                        d = db.query(DiretivaEHS).filter_by(categoria=categoria.strip()).first()
+                        if not d:
+                            d = DiretivaEHS(categoria=categoria.strip(), descricao=categoria.strip(), ativo=True); db.add(d); db.flush()
+                        obj = RequisitoEHS(diretiva_id=d.id, ordem=int(ordem), pergunta=pergunta.strip(), criticidade=criticidade, evidencia_esperada=evidencia, gera_pac_automatico=pac_auto, ativo=True)
+                        db.add(obj); db.flush()
+                        nova = criar_versao_checklist_ehs(db,u.nome,"Versão criada após inclusão de requisito EHS")
+                        registrar_log(db,u,"Auditoria Cruzada","RequisitoEHS",obj.id,"criar",observacao=f"Novo requisito EHS cadastrado e v{nova.versao} criada")
+                        db.commit(); st.success(f"Requisito criado. Nova versão ativa: v{nova.versao}."); st.rerun()
+    else:
+        st.dataframe(df,use_container_width=True,hide_index=True)
+
+    section("Versões EHS cadastradas")
+    versoes = db.query(ChecklistVersaoEHS).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).all()
+    dfv = pd.DataFrame([{"ID":v.id,"Versão":v.versao,"Ativo":v.ativo,"Criado por":v.criado_por,"Criado em":fmt_date(v.criado_em),"Descrição":v.descricao} for v in versoes])
+    st.dataframe(dfv, use_container_width=True, hide_index=True)
+    download_excel_button("Exportar base do checklist EHS", "base_checklist_ehs.xlsx", {"Base_Atual": df, "Versoes": dfv})
+
 def ehs_relatorios(db,u):
     header("Relatórios Auditoria Cruzada","Exportações em Excel e PDF")
     ids=visible_site_ids(u,db); da=df_aud(db,ids); dp=df_pac_ehs(db,ids)
