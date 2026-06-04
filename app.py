@@ -68,6 +68,52 @@ USUARIOS_PADRAO = [
 ]
 STATUS_MAQUINA = ["Conforme","Não conforme"]
 CRITICIDADES = ["Alta","Média","Baixa"]
+TIPOS_FREQUENCIA_MAQUINAS = ["Checklist operacional","Inspeção de manutenção","Auditoria EHS","Auditoria corporativa","Auditoria extraordinária após incidente/quase-acidente"]
+REGRAS_FREQUENCIA_DEFAULT = {
+    "Checklist operacional": {"Alta": 7, "Média": 15, "Baixa": 30},
+    "Inspeção de manutenção": {"Alta": 30, "Média": 90, "Baixa": 180},
+    "Auditoria EHS": {"Alta": 180, "Média": 365, "Baixa": 730},
+    "Auditoria corporativa": {"Alta": 180, "Média": 365, "Baixa": 730},
+    "Auditoria extraordinária após incidente/quase-acidente": {"Alta": 0, "Média": 0, "Baixa": 0},
+}
+MODULO_COLOR_MAP = {
+    "maquinas": {"border": "#2563eb", "bg": "#eff6ff", "icon": "⚙️"},
+    "energia": {"border": "#16a34a", "bg": "#ecfdf5", "icon": "⚡"},
+    "auditoria": {"border": "#7c3aed", "bg": "#f5f3ff", "icon": "🧭"},
+}
+NR12_HOME_PAGE = "Submódulos da Sustentação"
+NR12_SUBMODULOS = {
+    "Gestão e Performance": {
+        "icone": "📊",
+        "descricao": "Indicadores, visão executiva e relatórios consolidados.",
+        "cor": "#2563eb",
+        "paginas": [NOME_DASH_MAQUINAS, NOME_RELATORIOS_MAQUINAS],
+    },
+    "Inventário e Documentação": {
+        "icone": "🏭",
+        "descricao": "Cadastro das máquinas, documentos técnicos, evidências e validade.",
+        "cor": "#0f766e",
+        "paginas": ["Inventário de Máquinas", NOME_DOCS_MAQUINAS],
+    },
+    "Inspeções e Auditorias": {
+        "icone": "✅",
+        "descricao": "Execução de checklists, histórico de inspeções e calendário.",
+        "cor": "#ea580c",
+        "paginas": ["Checklists e Inspeções", "Calendário de Auditorias e Inspeções"],
+    },
+    "Gestão de Pendências": {
+        "icone": "🛠️",
+        "descricao": "Pendências priorizadas e planos de ação corretiva.",
+        "cor": "#dc2626",
+        "paginas": ["Central de Pendências", NOME_PAC_MAQUINAS],
+    },
+    "Administração e Governança": {
+        "icone": "⚙️",
+        "descricao": "Logs, base de checklists e regras de frequência por criticidade.",
+        "cor": "#475569",
+        "paginas": ["Logs do Sistema", "Base de Checklists de Proteções", "Regras de Frequência de Inspeções"],
+    },
+}
 RISCOS_MAQUINA = ["Apreciação de risco não realizada", "Desprezível", "Atenção", "Significativo", "Alto", "Extremo"]
 STATUS_COLOR_MAP = {
     "Conforme": "#16a34a",
@@ -96,21 +142,6 @@ STATUS_PAC_COLOR_MAP = {"Aberta":"#f97316", "Em andamento":"#3b82f6", "Aguardand
 DOCUMENTOS_ESSENCIAIS = ["Laudo NR-12","ART","Apreciação de risco"]
 TIPOS_DOC_NR12 = ["Inventário NR-12","Apreciação de risco","Laudo NR-12","ART","Projeto mecânico","Projeto elétrico","Diagrama de segurança","Manual de operação","Manual de manutenção","Registro de treinamento","Evidência fotográfica","Checklist de validação","Termo de liberação para uso","Registro de intervenção","Registro de bloqueio/liberação","Outros"]
 TIPOS_VERIFICACAO_NR12 = ["Inspeção de manutenção","Auditoria EHS","Auditoria corporativa","Auditoria extraordinária após incidente/quase-acidente"]
-TIPOS_FREQUENCIA_MAQUINAS = ["Inspeção de manutenção", "Auditoria EHS", "Auditoria corporativa", "Auditoria extraordinária após incidente/quase-acidente"]
-REGRAS_FREQUENCIA_DEFAULT = {
-    ("Alta", "Inspeção de manutenção"): (30, 7),
-    ("Média", "Inspeção de manutenção"): (90, 15),
-    ("Baixa", "Inspeção de manutenção"): (180, 30),
-    ("Alta", "Auditoria EHS"): (90, 15),
-    ("Média", "Auditoria EHS"): (180, 30),
-    ("Baixa", "Auditoria EHS"): (365, 45),
-    ("Alta", "Auditoria corporativa"): (180, 30),
-    ("Média", "Auditoria corporativa"): (365, 45),
-    ("Baixa", "Auditoria corporativa"): (730, 60),
-    ("Alta", "Auditoria extraordinária após incidente/quase-acidente"): (1, 0),
-    ("Média", "Auditoria extraordinária após incidente/quase-acidente"): (1, 0),
-    ("Baixa", "Auditoria extraordinária após incidente/quase-acidente"): (1, 0),
-}
 RESULTADOS_NR12 = ["Conforme","Não conforme"]
 STATUS_PAC = ["Aberta","Em andamento","Aguardando validação","Concluída","Vencida","Cancelada"]
 CLASSIFICACAO_PAC = ["Crítico","Maior","Menor"]
@@ -314,17 +345,18 @@ class LogAuditoriaSistema(Base):
     data_hora=Column(DateTime,default=datetime.utcnow)
     observacao=Column(Text)
 
-class RegraFrequenciaMaquinas(Base):
-    __tablename__="regras_frequencia_maquinas"
+
+class RegraFrequenciaInspecaoMaquinas(Base):
+    __tablename__="regras_frequencia_inspecoes_maquinas"
     id=Column(Integer,primary_key=True)
+    tipo_evento=Column(String(160),nullable=False)
     criticidade=Column(String(20),nullable=False)
-    tipo_verificacao=Column(String(160),nullable=False)
-    dias_maximos=Column(Integer,default=180)
-    dias_alerta=Column(Integer,default=30)
+    dias_periodicidade=Column(Integer,default=180)
     ativo=Column(Boolean,default=True)
     atualizado_em=Column(DateTime,default=datetime.utcnow)
     atualizado_por=Column(String(120))
-    __table_args__=(UniqueConstraint("criticidade","tipo_verificacao",name="uq_freq_maquinas_criticidade_tipo"),)
+    observacoes=Column(Text)
+    __table_args__=(UniqueConstraint("tipo_evento","criticidade",name="uq_freq_tipo_criticidade"),)
 
 
 
@@ -505,38 +537,58 @@ def sync_checklists_base(db):
     db.flush()
     seed_checklist_versions(db)
 
-def seed_regras_frequencia_maquinas(db):
-    """Carrega a matriz inicial de frequência sem sobrescrever ajustes feitos pelo usuário."""
-    for (criticidade, tipo), (dias_max, dias_alerta) in REGRAS_FREQUENCIA_DEFAULT.items():
-        regra = db.query(RegraFrequenciaMaquinas).filter_by(criticidade=criticidade, tipo_verificacao=tipo).first()
-        if not regra:
-            db.add(RegraFrequenciaMaquinas(criticidade=criticidade, tipo_verificacao=tipo, dias_maximos=dias_max, dias_alerta=dias_alerta, ativo=True, atualizado_por="Sistema"))
+
+def seed_regras_frequencia(db):
+    for tipo, regras in REGRAS_FREQUENCIA_DEFAULT.items():
+        for criticidade, dias in regras.items():
+            obj = db.query(RegraFrequenciaInspecaoMaquinas).filter_by(tipo_evento=tipo, criticidade=criticidade).first()
+            if not obj:
+                db.add(RegraFrequenciaInspecaoMaquinas(
+                    tipo_evento=tipo,
+                    criticidade=criticidade,
+                    dias_periodicidade=int(dias),
+                    ativo=True,
+                    atualizado_por="Sistema",
+                    observacoes="Carga inicial padrão"
+                ))
     db.flush()
 
-def regra_frequencia_maquinas(db, criticidade, tipo_verificacao):
-    crit = criticidade if criticidade in CRITICIDADES else "Média"
-    tipo = tipo_verificacao if tipo_verificacao in TIPOS_FREQUENCIA_MAQUINAS else "Auditoria EHS"
-    regra = db.query(RegraFrequenciaMaquinas).filter_by(criticidade=crit, tipo_verificacao=tipo, ativo=True).first()
-    if regra:
-        return regra
-    dias, alerta = REGRAS_FREQUENCIA_DEFAULT.get((crit, tipo), (180, 30))
-    return RegraFrequenciaMaquinas(criticidade=crit, tipo_verificacao=tipo, dias_maximos=dias, dias_alerta=alerta, ativo=True, atualizado_por="Default")
+def regra_frequencia_dias(db, tipo_evento, criticidade):
+    criticidade = criticidade if criticidade in CRITICIDADES else "Média"
+    obj = db.query(RegraFrequenciaInspecaoMaquinas).filter_by(tipo_evento=tipo_evento, criticidade=criticidade, ativo=True).first()
+    if obj and obj.dias_periodicidade is not None:
+        return int(obj.dias_periodicidade)
+    return int(REGRAS_FREQUENCIA_DEFAULT.get(tipo_evento, {}).get(criticidade, 180))
 
-def calcular_proxima_verificacao_por_regra(db, maquina, tipo_verificacao, data_base=None):
+def data_limite_por_frequencia(db, tipo_evento, criticidade, data_base=None):
+    dias = regra_frequencia_dias(db, tipo_evento, criticidade)
     data_base = as_date(data_base) or date.today()
-    regra = regra_frequencia_maquinas(db, getattr(maquina, "criticidade", "Média"), tipo_verificacao)
-    return data_base + timedelta(days=int(regra.dias_maximos or 180))
+    return data_base + timedelta(days=max(0, dias))
 
-def status_prazo_regra(data_limite, dias_alerta=30):
-    d = as_date(data_limite)
-    if not d:
-        return "Sem data"
-    delta = (d - date.today()).days
-    if delta < 0:
-        return "Vencido"
-    if delta <= int(dias_alerta or 0):
-        return "Próximo do vencimento"
-    return "Em dia"
+def validar_data_dentro_limite(db, tipo_evento, criticidade, data_alvo, data_base=None):
+    data_alvo = as_date(data_alvo)
+    limite = data_limite_por_frequencia(db, tipo_evento, criticidade, data_base)
+    if not data_alvo:
+        return False, limite, f"Informe uma data até {fmt_date(limite)}."
+    if data_alvo > limite:
+        return False, limite, f"A data selecionada ultrapassa o limite permitido para criticidade {criticidade}: máximo {fmt_date(limite)}."
+    return True, limite, ""
+
+def df_regras_frequencia(db):
+    rows = []
+    regras = db.query(RegraFrequenciaInspecaoMaquinas).order_by(RegraFrequenciaInspecaoMaquinas.tipo_evento, RegraFrequenciaInspecaoMaquinas.criticidade).all()
+    for r in regras:
+        rows.append({
+            "ID": r.id,
+            "Tipo de evento": r.tipo_evento,
+            "Criticidade": r.criticidade,
+            "Dias máximos": r.dias_periodicidade,
+            "Ativo": r.ativo,
+            "Atualizado em": fmt_date(r.atualizado_em),
+            "Atualizado por": r.atualizado_por,
+            "Observações": r.observacoes,
+        })
+    return pd.DataFrame(rows)
 
 def init_db():
     Base.metadata.create_all(engine); ensure_schema_updates(); db=SessionLocal()
@@ -554,7 +606,7 @@ def init_db():
             if not db.query(Usuario).filter_by(nome=nome).first():
                 stt=db.query(Site).filter_by(codigo=sitecod).first(); db.add(Usuario(nome=nome,perfil=perfil,site_id=stt.id if stt else None))
         sync_checklists_base(db)
-        seed_regras_frequencia_maquinas(db)
+        seed_regras_frequencia(db)
         seed_energia_parametros(db)
         seed_energia_actual_hours_inicial(db)
         for maq in db.query(MaquinaNR12).all():
@@ -1044,26 +1096,20 @@ def kpi_card_colorido(l,v,h="",bg="#ffffff",fg="#111827",border="#e5e7eb"):
         """,
         unsafe_allow_html=True,
     )
-def module_card(t,d,i): st.markdown(f"<div class='card'><h3>{i} {t}</h3><p class='muted'>{d}</p></div>",unsafe_allow_html=True)
-def module_card_contornado(t,d,i,border="#e5e7eb",tag_bg="#f8fafc"):
+def module_card(t,d,i,border="#e5e7eb",bg="#ffffff"):
     st.markdown(
-        f"""
-        <div class='card' style='border:2px solid {border}; box-shadow:0 10px 25px rgba(31,41,55,.08);'>
-            <div style='display:inline-block;border:1px solid {border};background:{tag_bg};color:{border};border-radius:999px;padding:.12rem .55rem;font-size:.70rem;font-weight:900;margin-bottom:.45rem;'>Módulo</div>
-            <h3 style='margin-top:.1rem;'>{html_escape(i)} {html_escape(t)}</h3>
-            <p class='muted'>{html_escape(d)}</p>
-        </div>
-        """, unsafe_allow_html=True
+        f"<div class='card' style='border:2px solid {border}; background:linear-gradient(135deg,{bg},#ffffff);'>"
+        f"<h3 style='margin-top:0;color:#111827;'>{i} {html_escape(t)}</h3>"
+        f"<p class='muted'>{html_escape(d)}</p></div>",
+        unsafe_allow_html=True,
     )
-def submodule_card(t,d,i,border="#2563eb",tag="Submódulo"):
+
+def submodule_card(t,d,i,border="#2563eb"):
     st.markdown(
-        f"""
-        <div class='card' style='border:2px solid {border}; min-height:155px;'>
-            <div style='display:inline-block;border:1px solid {border};background:#f8fafc;color:{border};border-radius:999px;padding:.12rem .55rem;font-size:.70rem;font-weight:900;margin-bottom:.45rem;'>{html_escape(tag)}</div>
-            <h3 style='margin-top:.1rem;'>{html_escape(i)} {html_escape(t)}</h3>
-            <p class='muted'>{html_escape(d)}</p>
-        </div>
-        """, unsafe_allow_html=True
+        f"<div class='card' style='border:2px solid {border}; min-height:155px; background:linear-gradient(135deg,#ffffff,#f8fafc);'>"
+        f"<h3 style='margin-top:0;'>{i} {html_escape(t)}</h3>"
+        f"<p class='muted'>{html_escape(d)}</p></div>",
+        unsafe_allow_html=True,
     )
 def empty_state(t): st.markdown(f"<div class='empty'>{t}</div>",unsafe_allow_html=True)
 def alert_card(t): st.markdown(f"<div class='alert'>{t}</div>",unsafe_allow_html=True)
@@ -1163,153 +1209,57 @@ def home_page(db,u):
     section("Módulos")
     c1,c2=st.columns(2)
     with c1:
-        module_card_contornado(NOME_MODULO_MAQUINAS,"Inventário, documentos, checklists, PAC, pendências e relatórios de proteções de máquinas.","⚙️",border="#2563eb",tag_bg="#eff6ff")
+        mc=MODULO_COLOR_MAP["maquinas"]
+        module_card(NOME_MODULO_MAQUINAS,"Inventário, documentos, checklists, PAC, pendências e relatórios de proteções de máquinas.",mc["icon"],mc["border"],mc["bg"])
         if st.button(f"Acessar {NOME_MODULO_MAQUINAS}",use_container_width=True):
             st.session_state.modulo="nr12"
-            st.session_state.page_nr12="Submódulos da Sustentação"
-            st.session_state.nav_nr12_submodulo="Gestão e Performance"
-            st.session_state.nav_nr12="Dashboard de Proteções de Máquinas"
+            st.session_state.page_nr12=NR12_HOME_PAGE
+            st.session_state.nav_nr12=NR12_HOME_PAGE
+            st.session_state.submodulo_nr12=""
             st.rerun()
-        module_card_contornado("Controle de Energia e Emissões","Consumo de energia, gás natural, CO₂, gastos, eficiência energética, R12, FY e análise I-REC.","⚡",border="#16a34a",tag_bg="#ecfdf5")
+        ec=MODULO_COLOR_MAP["energia"]
+        module_card("Controle de Energia e Emissões","Consumo de energia, gás natural, CO₂, gastos, eficiência energética, R12, FY e análise I-REC.",ec["icon"],ec["border"],ec["bg"])
         if st.button("Acessar Controle de Energia",use_container_width=True):
             st.session_state.modulo="energia"
             st.session_state.page_energia="Dashboard Energia e CO₂"
             st.session_state.nav_energia="Dashboard Energia e CO₂"
             st.rerun()
     with c2:
-        module_card_contornado("Auditoria Cruzada de Diretrizes de EHS","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.","🧭",border="#7c3aed",tag_bg="#f5f3ff")
+        ac=MODULO_COLOR_MAP["auditoria"]
+        module_card("Auditoria Cruzada de Diretrizes de EHS","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.",ac["icon"],ac["border"],ac["bg"])
         if st.button("Acessar Auditoria Cruzada",use_container_width=True):
             st.session_state.modulo="ehs"
             st.session_state.page_ehs="Dashboard Auditoria Cruzada"
             st.session_state.nav_ehs="Dashboard Auditoria Cruzada"
             st.rerun()
-def set_nr12_page(page, submodulo=None):
-    st.session_state.modulo="nr12"
-    st.session_state.page_nr12=page
-    st.session_state.nav_nr12=page
-    if submodulo:
-        st.session_state.nav_nr12_submodulo=submodulo
-    st.rerun()
 
 def nr12_submodulos_home(db,u):
-    header(NOME_MODULO_MAQUINAS,"Escolha o submódulo para consultar, editar ou administrar as informações de sustentação das proteções de máquinas")
+    header(NOME_MODULO_MAQUINAS, "Escolha um submódulo para visualizar, editar ou governar as informações de sustentação.")
     section("Submódulos")
-    c1,c2,c3=st.columns(3)
-    with c1:
-        submodule_card("Gestão e Performance","Dashboard executivo, indicadores, metas de adequação e relatórios consolidados.","📊",border="#2563eb")
-        if st.button("Acessar Gestão e Performance",use_container_width=True,key="btn_sub_gestao_perf"):
-            set_nr12_page(NOME_DASH_MAQUINAS,"Gestão e Performance")
-        submodule_card("Gestão de Pendências","Central de pendências e planos de ação para tratamento de desvios.","🛠️",border="#f97316")
-        if st.button("Acessar Gestão de Pendências",use_container_width=True,key="btn_sub_pendencias"):
-            set_nr12_page("Central de Pendências","Gestão de Pendências")
-    with c2:
-        submodule_card("Inventário e Documentação","Cadastro de máquinas, dados técnicos, status de proteção e documentos de evidência.","🏭",border="#0ea5e9")
-        if st.button("Acessar Inventário e Documentação",use_container_width=True,key="btn_sub_inv_doc"):
-            set_nr12_page("Inventário de Máquinas","Inventário e Documentação")
-        submodule_card("Administração e Governança","Logs, base de checklists e regras de frequência por criticidade.","⚙️",border="#64748b")
-        if st.button("Acessar Administração e Governança",use_container_width=True,key="btn_sub_admin_gov"):
-            set_nr12_page("Regras de Frequência de Inspeções","Administração e Governança")
-    with c3:
-        submodule_card("Inspeções e Auditorias","Execução de checklists, calendário mensal e histórico de verificações.","✅",border="#16a34a")
-        if st.button("Acessar Inspeções e Auditorias",use_container_width=True,key="btn_sub_insp_aud"):
-            set_nr12_page("Checklists e Inspeções","Inspeções e Auditorias")
+    nomes=list(NR12_SUBMODULOS.keys())
+    for base in range(0, len(nomes), 2):
+        cols=st.columns(2)
+        for col, nome in zip(cols, nomes[base:base+2]):
+            cfg=NR12_SUBMODULOS[nome]
+            with col:
+                submodule_card(nome, cfg["descricao"], cfg["icone"], cfg["cor"])
+                if st.button(f"Acessar {nome}", key=f"btn_submodulo_{nome}", use_container_width=True):
+                    destino=cfg["paginas"][0]
+                    if destino=="Logs do Sistema" and not can_admin(u):
+                        destino=cfg["paginas"][1] if len(cfg["paginas"]) > 1 else NR12_HOME_PAGE
+                    st.session_state.submodulo_nr12=nome
+                    st.session_state.page_nr12=destino
+                    st.session_state.nav_nr12=destino
+                    st.rerun()
     section("Resumo rápido")
     ids=visible_site_ids(u,db)
     ms=db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all()
     dfp=df_pac_nr12(db,ids)
-    cols=st.columns(4)
-    with cols[0]: kpi_card_contornado("Máquinas • Total",len(ms),"Inventário",border="#2563eb",tag_bg="#eff6ff")
-    with cols[1]: kpi_card_contornado("Máquinas • Não conformes",sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Não conforme"),"Status de Proteção",border="#2563eb",tag_bg="#eff6ff")
-    with cols[2]: kpi_card_contornado("Pendências • PACs vencidos",0 if dfp.empty else int((dfp["Status"]=="Vencida").sum()),"Gestão de Pendências",border="#f97316",tag_bg="#fff7ed")
-    with cols[3]: kpi_card_contornado("Governança • Regras ativas",db.query(RegraFrequenciaMaquinas).filter_by(ativo=True).count(),"Frequência por criticidade",border="#64748b",tag_bg="#f8fafc")
-
-def nr12_regras_frequencia(db,u):
-    header("Regras de Frequência de Inspeções", "Configuração dos limites máximos de auditorias e inspeções conforme a criticidade da máquina")
-    if not can_edit(u,"nr12_manutencao"):
-        alert_card("Seu perfil permite consulta, mas não alteração das regras de frequência.")
-    seed_regras_frequencia_maquinas(db)
-    db.commit()
-    regras=db.query(RegraFrequenciaMaquinas).order_by(RegraFrequenciaMaquinas.tipo_verificacao, RegraFrequenciaMaquinas.criticidade).all()
-    df=pd.DataFrame([{
-        "ID":r.id,
-        "Tipo de verificação":r.tipo_verificacao,
-        "Criticidade":r.criticidade,
-        "Dias máximos entre verificações":r.dias_maximos,
-        "Alerta antes do vencimento (dias)":r.dias_alerta,
-        "Ativo":r.ativo,
-        "Atualizado por":r.atualizado_por,
-        "Atualizado em":fmt_date(r.atualizado_em),
-    } for r in regras])
-    section("Matriz configurável")
-    st.caption("Quanto maior a criticidade, menor deve ser o intervalo máximo permitido. O sistema usa essas regras para calcular automaticamente a próxima data limite após cada checklist/inspeção registrada.")
-    if df.empty:
-        empty_state("Nenhuma regra cadastrada.")
-        return
-    if can_edit(u,"nr12_manutencao"):
-        ed=st.data_editor(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            disabled=["ID","Atualizado por","Atualizado em"],
-            column_config={
-                "Tipo de verificação":st.column_config.SelectboxColumn("Tipo de verificação",options=TIPOS_FREQUENCIA_MAQUINAS),
-                "Criticidade":st.column_config.SelectboxColumn("Criticidade",options=CRITICIDADES),
-                "Dias máximos entre verificações":st.column_config.NumberColumn("Dias máximos entre verificações",min_value=1,step=1),
-                "Alerta antes do vencimento (dias)":st.column_config.NumberColumn("Alerta antes do vencimento (dias)",min_value=0,step=1),
-            },
-            key="editor_regras_frequencia_maquinas",
-        )
-        c1,c2=st.columns(2)
-        with c1:
-            if st.button("Salvar regras de frequência",use_container_width=True):
-                for _,row in ed.iterrows():
-                    r=db.get(RegraFrequenciaMaquinas,int(row["ID"]))
-                    if r:
-                        antes=f"{r.criticidade}/{r.tipo_verificacao}: {r.dias_maximos} dias"
-                        r.tipo_verificacao=str(row["Tipo de verificação"])
-                        r.criticidade=str(row["Criticidade"])
-                        r.dias_maximos=int(row["Dias máximos entre verificações"]) if pd.notna(row["Dias máximos entre verificações"]) else r.dias_maximos
-                        r.dias_alerta=int(row["Alerta antes do vencimento (dias)"]) if pd.notna(row["Alerta antes do vencimento (dias)"]) else r.dias_alerta
-                        r.ativo=bool(row["Ativo"])
-                        r.atualizado_em=datetime.utcnow()
-                        r.atualizado_por=u.nome if u else "Sistema"
-                        registrar_log(db,u,NOME_MODULO_MAQUINAS,"RegraFrequenciaMaquinas",r.id,"editar","dias_maximos",antes,f"{r.criticidade}/{r.tipo_verificacao}: {r.dias_maximos} dias")
-                db.commit(); st.success("Regras atualizadas."); st.rerun()
-        with c2:
-            if st.button("Restaurar regras padrão faltantes",use_container_width=True):
-                seed_regras_frequencia_maquinas(db); db.commit(); st.success("Regras padrão faltantes restauradas."); st.rerun()
-        with st.expander("Adicionar nova regra"):
-            with st.form("nova_regra_frequencia_maquinas"):
-                cA,cB,cC,cD=st.columns(4)
-                tipo=cA.selectbox("Tipo de verificação",TIPOS_FREQUENCIA_MAQUINAS,key="nova_regra_tipo")
-                crit=cB.selectbox("Criticidade",CRITICIDADES,key="nova_regra_crit")
-                dias=cC.number_input("Dias máximos",min_value=1,value=180,step=1,key="nova_regra_dias")
-                alerta=cD.number_input("Alerta antes",min_value=0,value=30,step=1,key="nova_regra_alerta")
-                if st.form_submit_button("Adicionar regra",use_container_width=True):
-                    existe=db.query(RegraFrequenciaMaquinas).filter_by(tipo_verificacao=tipo,criticidade=crit).first()
-                    if existe:
-                        st.error("Já existe uma regra para essa combinação de tipo e criticidade.")
-                    else:
-                        obj=RegraFrequenciaMaquinas(tipo_verificacao=tipo,criticidade=crit,dias_maximos=int(dias),dias_alerta=int(alerta),ativo=True,atualizado_por=u.nome if u else "Sistema")
-                        db.add(obj); db.flush(); registrar_log(db,u,NOME_MODULO_MAQUINAS,"RegraFrequenciaMaquinas",obj.id,"criar",observacao=f"Regra {tipo}/{crit} criada")
-                        db.commit(); st.success("Regra adicionada."); st.rerun()
-    else:
-        st.dataframe(df,use_container_width=True,hide_index=True)
-    section("Aplicação das regras nas máquinas")
-    ids=visible_site_ids(u,db)
-    rows=[]
-    for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all():
-        for tipo in TIPOS_FREQUENCIA_MAQUINAS:
-            regra=regra_frequencia_maquinas(db,m.criticidade,tipo)
-            base=m.ultima_auditoria or m.criado_em or date.today()
-            limite=calcular_proxima_verificacao_por_regra(db,m,tipo,base)
-            rows.append({"Site":site_code(db,m.site_id),"Máquina":m.codigo,"Criticidade":m.criticidade,"Tipo":tipo,"Última referência":fmt_date(base),"Limite calculado":fmt_date(limite),"Status":status_prazo_regra(limite,regra.dias_alerta),"Dias máximos":regra.dias_maximos})
-    dfa=pd.DataFrame(rows)
-    if not dfa.empty:
-        st.dataframe(dfa,use_container_width=True,hide_index=True)
-        download_excel_button("Exportar matriz e aplicação", "regras_frequencia_inspecoes.xlsx", {"Regras":df, "Aplicacao":dfa})
-    else:
-        empty_state("Nenhuma máquina disponível para demonstrar a aplicação das regras.")
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("Máquinas", len(ms))
+    c2.metric("Não conformes", sum(1 for m in ms if calcular_status_maquina_nr12(db,m)=="Não conforme"))
+    c3.metric("PACs abertos", 0 if dfp.empty else int(dfp["Status"].isin(["Aberta","Em andamento","Aguardando validação"]).sum()))
+    c4.metric("Verificações vencidas", sum(1 for m in ms if m.proxima_auditoria and m.proxima_auditoria<date.today()))
 
 def nr12_dashboard(db,u):
     header("Sustentação de Proteções de Máquinas","Dashboard para acompanhamento de máquinas, proteções e dispositivos de segurança")
@@ -1481,7 +1431,8 @@ def nr12_inventario(db,u):
                 with c:
                     risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA, key="maq_new_risco")
                     status=st.selectbox("Status de Proteção",STATUS_MAQUINA, key="maq_new_status")
-                    prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180), key="maq_new_prox")
+                    limite_prox=data_limite_por_frequencia(db,"Auditoria EHS",crit,date.today())
+                    prox=st.date_input("Próxima auditoria prevista",value=limite_prox, max_value=limite_prox, help=f"Limite pela criticidade {crit}: {fmt_date(limite_prox)}.", key="maq_new_prox")
                     data_prevista_adequacao=None
                     if status!="Conforme":
                         data_prevista_adequacao=st.date_input(
@@ -1495,12 +1446,15 @@ def nr12_inventario(db,u):
                 st.caption("Laudo, ART, apreciação de risco, manual e treinamento devem ser controlados pela aba Documentos de Proteções de Máquinas.")
                 obs=st.text_area("Observações", key="maq_new_obs")
                 if st.button("Salvar máquina",use_container_width=True,key="maq_new_salvar"):
-                    if cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
+                    ok_limite, limite_prox_calc, msg_limite = validar_data_dentro_limite(db,"Auditoria EHS",crit,prox,date.today())
+                    if not ok_limite:
+                        st.error(msg_limite)
+                    elif cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
                         nova=MaquinaNR12(
                             codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,
                             fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,
                             responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,
-                            proxima_auditoria=calcular_proxima_verificacao_por_regra(db, type("Obj", (), {"criticidade": crit})(), "Auditoria EHS", date.today()),data_prevista_adequacao=data_prevista_adequacao,
+                            proxima_auditoria=prox,data_prevista_adequacao=data_prevista_adequacao,
                             possui_laudo=False,possui_art=False,possui_apreciacao_risco=False,
                             possui_manual_atualizado=False,possui_treinamento=False,observacoes=obs,
                         )
@@ -1527,7 +1481,11 @@ def nr12_inventario(db,u):
                 with e2:
                     risco_atual=m.risco_maquina or "Apreciação de risco não realizada"
                     novo_risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0,key=f"editmaq_risco_{m.id}")
-                    nova_proxima_auditoria=st.date_input("Próxima auditoria prevista",value=m.proxima_auditoria or date.today()+timedelta(days=180),key=f"editmaq_prox_{m.id}")
+                    limite_edit=data_limite_por_frequencia(db,"Auditoria EHS",nova_criticidade,m.ultima_auditoria or date.today())
+                    valor_prox_atual=m.proxima_auditoria or limite_edit
+                    if valor_prox_atual > limite_edit:
+                        valor_prox_atual=limite_edit
+                    nova_proxima_auditoria=st.date_input("Próxima auditoria prevista",value=valor_prox_atual,max_value=limite_edit,help=f"Limite pela criticidade {nova_criticidade}: {fmt_date(limite_edit)}.",key=f"editmaq_prox_{m.id}")
                 with e3:
                     nova_data_prevista=None
                     if novo_status!="Conforme":
@@ -1541,12 +1499,15 @@ def nr12_inventario(db,u):
                         st.caption("Máquina conforme: data prevista para adequação será limpa ao salvar.")
                 novas_observacoes=st.text_area("Observações",m.observacoes or "",key=f"editmaq_obs_{m.id}")
                 if st.button("Atualizar máquina",use_container_width=True,key=f"editmaq_atualizar_{m.id}"):
+                    ok_limite, limite_prox_calc, msg_limite = validar_data_dentro_limite(db,"Auditoria EHS",nova_criticidade,nova_proxima_auditoria,m.ultima_auditoria or date.today())
+                    if not ok_limite:
+                        st.error(msg_limite)
+                        st.stop()
                     status_anterior=m.status_nr12
                     m.status_nr12=novo_status
                     m.criticidade=nova_criticidade
                     m.risco_maquina=novo_risco
-                    limite_regra=calcular_proxima_verificacao_por_regra(db, type("Obj", (), {"criticidade": nova_criticidade})(), "Auditoria EHS", date.today())
-                    m.proxima_auditoria=min(nova_proxima_auditoria, limite_regra) if nova_proxima_auditoria else limite_regra
+                    m.proxima_auditoria=nova_proxima_auditoria
                     m.data_prevista_adequacao=None if novo_status=="Conforme" else nova_data_prevista
                     m.observacoes=novas_observacoes
                     registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",m.id,"editar","status_nr12",status_anterior,novo_status,observacao=f"Máquina {m.codigo} atualizada")
@@ -1710,7 +1671,7 @@ def nr12_checklists(db,u):
             temp.append((it, apl, res, com, gp))
         if st.form_submit_button("Salvar verificação", use_container_width=True):
             m = db.get(MaquinaNR12, opts[lab])
-            proxima_data = calcular_proxima_verificacao_por_regra(db, m, tipo, date.today())
+            proxima_data = data_limite_por_frequencia(db, tipo, m.criticidade, date.today())
             v = VerificacaoNR12(
                 maquina_id=m.id, site_id=m.site_id, tipo=tipo, data_verificacao=date.today(),
                 responsavel=resp, observacoes=obs, proxima_verificacao=proxima_data,
@@ -1952,6 +1913,88 @@ def logs_sistema_page(db,u):
     if acoes: f=f[f["Ação"].isin(acoes)]
     st.dataframe(f, use_container_width=True, hide_index=True)
     download_excel_button("Exportar logs", "logs_auditoria_sistema.xlsx", {"Logs": f})
+
+
+def nr12_regras_frequencia(db,u):
+    header("Regras de Frequência de Inspeções", "Matriz configurável de periodicidade máxima por criticidade da máquina")
+    if not can_edit(u,"nr12_manutencao"):
+        alert_card("Seu perfil permite consulta, mas não administração das regras.")
+    section("Matriz de periodicidade máxima")
+    st.caption("Essas regras definem a data limite para checklists, inspeções e auditorias. Quanto maior a criticidade, menor deve ser o intervalo permitido.")
+    df = df_regras_frequencia(db)
+    if df.empty:
+        empty_state("Nenhuma regra cadastrada.")
+        return
+    if can_edit(u,"nr12_manutencao"):
+        ed = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["ID","Atualizado em","Atualizado por"],
+            column_config={
+                "Tipo de evento": st.column_config.SelectboxColumn("Tipo de evento", options=TIPOS_FREQUENCIA_MAQUINAS),
+                "Criticidade": st.column_config.SelectboxColumn("Criticidade", options=CRITICIDADES),
+                "Dias máximos": st.column_config.NumberColumn("Dias máximos", min_value=0, step=1),
+            },
+            key="editor_regras_frequencia_maquinas",
+        )
+        if st.button("Salvar regras de frequência", use_container_width=True):
+            for _, row in ed.iterrows():
+                obj = db.get(RegraFrequenciaInspecaoMaquinas, int(row["ID"]))
+                if obj:
+                    antes = obj.dias_periodicidade
+                    obj.tipo_evento = str(row["Tipo de evento"])
+                    obj.criticidade = str(row["Criticidade"])
+                    obj.dias_periodicidade = int(row["Dias máximos"]) if pd.notna(row["Dias máximos"]) else 0
+                    obj.ativo = bool(row["Ativo"])
+                    obj.observacoes = row["Observações"]
+                    obj.atualizado_em = datetime.utcnow()
+                    obj.atualizado_por = u.nome
+                    if antes != obj.dias_periodicidade:
+                        registrar_log(db,u,NOME_MODULO_MAQUINAS,"RegraFrequenciaInspecaoMaquinas",obj.id,"editar","dias_periodicidade",antes,obj.dias_periodicidade,observacao=f"{obj.tipo_evento} / {obj.criticidade}")
+            db.commit()
+            st.success("Regras atualizadas.")
+            st.rerun()
+        with st.expander("Adicionar nova regra"):
+            with st.form("nova_regra_frequencia"):
+                tipo = st.selectbox("Tipo de evento", TIPOS_FREQUENCIA_MAQUINAS)
+                criticidade = st.selectbox("Criticidade", CRITICIDADES)
+                dias = st.number_input("Dias máximos", min_value=0, value=180, step=1)
+                obs = st.text_area("Observações")
+                if st.form_submit_button("Adicionar regra", use_container_width=True):
+                    if db.query(RegraFrequenciaInspecaoMaquinas).filter_by(tipo_evento=tipo, criticidade=criticidade).first():
+                        st.error("Já existe regra para esse tipo de evento e criticidade.")
+                    else:
+                        obj=RegraFrequenciaInspecaoMaquinas(tipo_evento=tipo,criticidade=criticidade,dias_periodicidade=int(dias),ativo=True,atualizado_por=u.nome,observacoes=obs)
+                        db.add(obj); db.flush()
+                        registrar_log(db,u,NOME_MODULO_MAQUINAS,"RegraFrequenciaInspecaoMaquinas",obj.id,"criar",observacao=f"{tipo} / {criticidade}")
+                        db.commit()
+                        st.success("Regra adicionada.")
+                        st.rerun()
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    section("Aplicação prática nas máquinas")
+    ids=visible_site_ids(u,db)
+    rows=[]
+    for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo):
+        for tipo in ["Inspeção de manutenção","Auditoria EHS"]:
+            limite = data_limite_por_frequencia(db, tipo, m.criticidade, m.ultima_auditoria or m.criado_em or date.today())
+            rows.append({
+                "Máquina": m.codigo,
+                "Site": site_code(db,m.site_id),
+                "Criticidade": m.criticidade,
+                "Tipo": tipo,
+                "Periodicidade máxima (dias)": regra_frequencia_dias(db,tipo,m.criticidade),
+                "Última referência": fmt_date(m.ultima_auditoria or m.criado_em),
+                "Data limite": fmt_date(limite),
+                "Status": "Vencido" if limite < date.today() else "Em dia",
+            })
+    dfa=pd.DataFrame(rows)
+    if not dfa.empty:
+        st.dataframe(dfa, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhuma máquina para aplicar as regras.")
+    download_excel_button("Exportar regras e aplicação", "regras_frequencia_inspecoes.xlsx", {"Regras": df, "Aplicacao": dfa})
 
 def nr12_pac(db,u):
     header("PAC de Proteções de Máquinas","Planos de ação corretiva")
@@ -4905,32 +4948,40 @@ def render_sidebar(db,u):
         st.rerun()
     st.sidebar.divider()
     if mod=="nr12":
-        submods={
-            "Gestão e Performance":[NOME_DASH_MAQUINAS,NOME_RELATORIOS_MAQUINAS],
-            "Inventário e Documentação":["Inventário de Máquinas",NOME_DOCS_MAQUINAS],
-            "Inspeções e Auditorias":["Checklists e Inspeções","Calendário de Auditorias e Inspeções"],
-            "Gestão de Pendências":["Central de Pendências",NOME_PAC_MAQUINAS],
-            "Administração e Governança":["Regras de Frequência de Inspeções","Base de Checklists de Proteções"] + (["Logs do Sistema"] if can_admin(u) else []),
-        }
-        all_pages=["Submódulos da Sustentação"] + [p for pages_sub in submods.values() for p in pages_sub]
-        current=st.session_state.get("page_nr12","Submódulos da Sustentação")
+        all_pages=[NR12_HOME_PAGE]
+        for nome,cfg in NR12_SUBMODULOS.items():
+            for p in cfg["paginas"]:
+                if p=="Logs do Sistema" and not can_admin(u):
+                    continue
+                if p not in all_pages:
+                    all_pages.append(p)
+        current=st.session_state.get("page_nr12",NR12_HOME_PAGE)
         if current not in all_pages:
-            current="Submódulos da Sustentação"
+            current=NR12_HOME_PAGE
             st.session_state.page_nr12=current
-        if st.sidebar.button("📌 Visão dos submódulos",use_container_width=True):
-            st.session_state.page_nr12="Submódulos da Sustentação"
-            st.rerun()
-        sub_atual=st.session_state.get("nav_nr12_submodulo","Gestão e Performance")
-        if current != "Submódulos da Sustentação":
-            for nome_sub,pags in submods.items():
-                if current in pags:
-                    sub_atual=nome_sub
+        if current==NR12_HOME_PAGE:
+            st.sidebar.info("Selecione um submódulo na tela principal.")
+            selected=st.sidebar.radio(NOME_MODULO_MAQUINAS,[NR12_HOME_PAGE],key="nav_nr12_home")
+            st.session_state.page_nr12=selected
+        else:
+            sub_atual=None
+            for nome,cfg in NR12_SUBMODULOS.items():
+                if current in cfg["paginas"]:
+                    sub_atual=nome
                     break
-        sub_selected=st.sidebar.radio(NOME_MODULO_MAQUINAS,list(submods.keys()),index=list(submods.keys()).index(sub_atual) if sub_atual in submods else 0,key="nav_nr12_submodulo")
-        pages=submods[sub_selected]
-        page_current=current if current in pages else pages[0]
-        selected=st.sidebar.radio("Páginas do submódulo",pages,index=pages.index(page_current),key="nav_nr12")
-        st.session_state.page_nr12=selected
+            sub_opcoes=list(NR12_SUBMODULOS.keys())
+            idx=sub_opcoes.index(sub_atual) if sub_atual in sub_opcoes else 0
+            sub=st.sidebar.selectbox("Submódulo",sub_opcoes,index=idx,key="submodulo_nr12")
+            pages=[p for p in NR12_SUBMODULOS[sub]["paginas"] if p!="Logs do Sistema" or can_admin(u)]
+            if current not in pages:
+                current=pages[0] if pages else NR12_HOME_PAGE
+                st.session_state.page_nr12=current
+            selected=st.sidebar.radio(sub,pages,key="nav_nr12")
+            st.session_state.page_nr12=selected
+            if st.sidebar.button("⬅️ Voltar aos submódulos",use_container_width=True):
+                st.session_state.page_nr12=NR12_HOME_PAGE
+                st.session_state.nav_nr12=NR12_HOME_PAGE
+                st.rerun()
     elif mod=="ehs":
         pages=["Dashboard Auditoria Cruzada","Planejamento de Auditorias","Checklist Diretrizes de EHS","PAC Auditoria Cruzada","Base do Checklist EHS","Relatórios Auditoria Cruzada"]
         if can_admin(u):
@@ -4953,11 +5004,27 @@ def render_sidebar(db,u):
             st.session_state.nav_energia=current
         selected=st.sidebar.radio("Controle de Energia e Emissões",pages,key="nav_energia")
         st.session_state.page_energia=selected
+
 def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod=="home": home_page(db,u)
     elif mod=="nr12":
-        {"Submódulos da Sustentação":nr12_submodulos_home,NOME_DASH_MAQUINAS:nr12_dashboard,"Central de Pendências":nr12_central_pendencias,"Calendário de Auditorias e Inspeções":nr12_calendario,"Inventário de Máquinas":nr12_inventario,NOME_DOCS_MAQUINAS:nr12_documentos,"Checklists e Inspeções":nr12_checklists,"Base de Checklists de Proteções":nr12_base_checklists,"Regras de Frequência de Inspeções":nr12_regras_frequencia,NOME_PAC_MAQUINAS:nr12_pac,NOME_RELATORIOS_MAQUINAS:nr12_relatorios,"Logs do Sistema":logs_sistema_page}.get(st.session_state.get("page_nr12","Submódulos da Sustentação"),nr12_submodulos_home)(db,u)
+        paginas={
+            NR12_HOME_PAGE:nr12_submodulos_home,
+            NOME_DASH_MAQUINAS:nr12_dashboard,
+            "Central de Pendências":nr12_central_pendencias,
+            "Calendário de Auditorias e Inspeções":nr12_calendario,
+            "Inventário de Máquinas":nr12_inventario,
+            NOME_DOCS_MAQUINAS:nr12_documentos,
+            "Checklists e Inspeções":nr12_checklists,
+            "Base de Checklists de Proteções":nr12_base_checklists,
+            "Regras de Frequência de Inspeções":nr12_regras_frequencia,
+            NOME_PAC_MAQUINAS:nr12_pac,
+            NOME_RELATORIOS_MAQUINAS:nr12_relatorios,
+            "Logs do Sistema":logs_sistema_page,
+        }
+        page=st.session_state.get("page_nr12",NR12_HOME_PAGE)
+        paginas.get(page,nr12_submodulos_home)(db,u)
     elif mod=="ehs":
         {"Dashboard Auditoria Cruzada":ehs_dashboard,"Planejamento de Auditorias":ehs_planejamento,"Checklist Diretrizes de EHS":ehs_checklist,"PAC Auditoria Cruzada":ehs_pac,"Base do Checklist EHS":ehs_base_checklist,"Relatórios Auditoria Cruzada":ehs_relatorios,"Logs do Sistema":logs_sistema_page}[st.session_state.get("page_ehs","Dashboard Auditoria Cruzada")](db,u)
     elif mod=="energia":
