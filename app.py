@@ -9,7 +9,7 @@ streamlit run plataforma_ehs_integrada.py
 # ============================================================
 # 1. Imports
 # ============================================================
-import os, io, re, math, unicodedata, logging
+import os, io, re, math, unicodedata, logging, calendar
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -956,6 +956,22 @@ def section(t): st.markdown(f"<div class='section-title'>{t}</div>",unsafe_allow
 def kpi_card(l,v,h=""): st.markdown(f"<div class='kpi'><div class='kpi-label'>{l}</div><div class='kpi-value'>{v}</div><div class='muted'>{h}</div></div>",unsafe_allow_html=True)
 def html_escape(v):
     return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+def kpi_card_contornado(l, v, h="", border="#e5e7eb", tag_bg="#f8fafc"):
+    st.markdown(
+        f"""
+        <div class='kpi' style='border:2px solid {border}; box-shadow:0 10px 25px rgba(31,41,55,.08);'>
+            <div style='display:inline-block;border:1px solid {border};background:{tag_bg};color:{border};border-radius:999px;padding:.10rem .48rem;font-size:.68rem;font-weight:900;margin-bottom:.35rem;'>
+                {html_escape(str(l).split('•')[0].strip() if '•' in str(l) else 'Indicador')}
+            </div>
+            <div class='kpi-label'>{html_escape(l)}</div>
+            <div class='kpi-value'>{html_escape(v)}</div>
+            <div class='muted'>{html_escape(h)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def kpi_card_colorido(l,v,h="",bg="#ffffff",fg="#111827",border="#e5e7eb"):
     st.markdown(
         f"""
@@ -1037,11 +1053,18 @@ def dashboard_integrado(db,u):
     ]
     cards.extend(energia_home_kpi_cards(db))
     section("Visão geral integrada")
+    module_colors = {
+        "Máquinas": ("#2563eb", "#eff6ff"),
+        "Auditoria EHS": ("#7c3aed", "#f5f3ff"),
+        "Energia": ("#16a34a", "#ecfdf5"),
+    }
     for base in range(0,len(cards),4):
         cols=st.columns(4)
         for c,(lab,val,help_) in zip(cols,cards[base:base+4]):
             with c:
-                kpi_card(lab,val,help_)
+                modulo = str(lab).split("•")[0].strip() if "•" in str(lab) else "Indicador"
+                border, tag_bg = module_colors.get(modulo, ("#e5e7eb", "#f8fafc"))
+                kpi_card_contornado(lab,val,help_,border,tag_bg)
     alerts=[]
     for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids),PACNR12.status.in_(["Vencida","Aberta","Em andamento"])).limit(5): 
         if p.status=="Vencida" or p.classificacao=="Crítico": alerts.append({"Módulo":"Proteções de Máquinas","Tipo":p.classificacao,"Site":site_code(db,p.site_id),"Descrição":(p.descricao_desvio or "")[:120],"Prazo":fmt_date(p.prazo),"Status":p.status})
@@ -1054,7 +1077,7 @@ def dashboard_integrado(db,u):
         empty_state("Nenhum alerta crítico ou vencido identificado.")
 
 def home_page(db,u):
-    header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas e Controle de Energia e Emissões em uma única aplicação")
+    header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas e Controle de Energia e Emissões")
     dashboard_integrado(db,u)
     section("Módulos")
     c1,c2=st.columns(2)
@@ -1140,12 +1163,11 @@ def nr12_dashboard(db,u):
     risco_dict={r:0 for r in RISCOS_MAQUINA}
     if not risco_counts.empty:
         risco_dict.update(dict(zip(risco_counts["Risco"],risco_counts["Quantidade"])))
-    for base in range(0,len(RISCOS_MAQUINA),3):
-        cols=st.columns(3)
-        for c,risco_nome in zip(cols,RISCOS_MAQUINA[base:base+3]):
-            with c:
-                estilo=RISCO_CARD_STYLE_MAP.get(risco_nome,{"bg":"#ffffff","fg":"#111827","border":"#e5e7eb"})
-                kpi_card_colorido(risco_nome,risco_dict.get(risco_nome,0),"Máquinas nesse nível de risco",estilo["bg"],estilo["fg"],estilo["border"])
+    cols=st.columns(len(RISCOS_MAQUINA))
+    for c,risco_nome in zip(cols,RISCOS_MAQUINA):
+        with c:
+            estilo=RISCO_CARD_STYLE_MAP.get(risco_nome,{"bg":"#ffffff","fg":"#111827","border":"#e5e7eb"})
+            kpi_card_colorido(risco_nome,risco_dict.get(risco_nome,0),"Máquinas nesse nível de risco",estilo["bg"],estilo["fg"],estilo["border"])
 
     section("Gráficos")
     c1,c2=st.columns(2)
@@ -1231,48 +1253,54 @@ def nr12_inventario(db,u):
             alert_card("Nenhum site disponível para cadastro conforme o perfil do usuário.")
         else:
             with st.expander("Cadastrar máquina"):
-                with st.form("maq"):
-                    a,b,c=st.columns(3)
-                    with a:
-                        cod=st.text_input("Código*")
-                        site=st.selectbox("Site*",list(sites))
-                        area=st.text_input("Área/setor")
-                        linha=st.text_input("Linha/processo")
-                        nome=st.text_input("Nome*")
-                        fab=st.text_input("Fabricante")
-                    with b:
-                        mod=st.text_input("Modelo")
-                        serie=st.text_input("Número de série")
-                        ano=st.text_input("Ano")
-                        tipo=st.text_input("Tipo de equipamento")
-                        resp=st.text_input("Responsável da área")
-                        crit=st.selectbox("Criticidade",CRITICIDADES)
-                    with c:
-                        risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA)
-                        status=st.selectbox("Status de Proteção",STATUS_MAQUINA)
-                        prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180))
-                        data_prevista_adequacao=None
-                        if status!="Conforme":
-                            data_prevista_adequacao=st.date_input("Data prevista para adequação",value=date.today()+timedelta(days=90),help="Obrigatória para máquinas com status diferente de Conforme.")
-                        else:
-                            st.caption("Máquina conforme: data prevista para adequação não aplicável.")
-                    ck=st.columns(5)
-                    laudo=ck[0].checkbox("Laudo")
-                    art=ck[1].checkbox("ART")
-                    apr=ck[2].checkbox("Apreciação")
-                    man=ck[3].checkbox("Manual")
-                    tre=ck[4].checkbox("Treinamento")
-                    obs=st.text_area("Observações")
-                    if st.form_submit_button("Salvar",use_container_width=True):
-                        if cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
-                            db.add(MaquinaNR12(codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,proxima_auditoria=prox,data_prevista_adequacao=data_prevista_adequacao,possui_laudo=laudo,possui_art=art,possui_apreciacao_risco=apr,possui_manual_atualizado=man,possui_treinamento=tre,observacoes=obs))
-                            db.flush()
-                            registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",db.query(MaquinaNR12).filter_by(codigo=cod).first().id if db.query(MaquinaNR12).filter_by(codigo=cod).first() else None,"criar",observacao=f"Máquina {cod} cadastrada")
-                            db.commit()
-                            st.success("Máquina cadastrada.")
-                            st.rerun()
-                        else:
-                            st.error("Preencha código/nome e evite código duplicado.")
+                a,b,c=st.columns(3)
+                with a:
+                    cod=st.text_input("Código*", key="maq_new_codigo")
+                    site=st.selectbox("Site*",list(sites), key="maq_new_site")
+                    area=st.text_input("Área/setor", key="maq_new_area")
+                    linha=st.text_input("Linha/processo", key="maq_new_linha")
+                    nome=st.text_input("Nome*", key="maq_new_nome")
+                    fab=st.text_input("Fabricante", key="maq_new_fabricante")
+                with b:
+                    mod=st.text_input("Modelo", key="maq_new_modelo")
+                    serie=st.text_input("Número de série", key="maq_new_serie")
+                    ano=st.text_input("Ano", key="maq_new_ano")
+                    tipo=st.text_input("Tipo de equipamento", key="maq_new_tipo")
+                    resp=st.text_input("Responsável da área", key="maq_new_resp")
+                    crit=st.selectbox("Criticidade",CRITICIDADES, key="maq_new_criticidade")
+                with c:
+                    risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA, key="maq_new_risco")
+                    status=st.selectbox("Status de Proteção",STATUS_MAQUINA, key="maq_new_status")
+                    prox=st.date_input("Próxima auditoria prevista",value=date.today()+timedelta(days=180), key="maq_new_prox")
+                    data_prevista_adequacao=None
+                    if status!="Conforme":
+                        data_prevista_adequacao=st.date_input(
+                            "Data prevista para adequação",
+                            value=date.today()+timedelta(days=90),
+                            help="Obrigatória para máquinas com status diferente de Conforme.",
+                            key="maq_new_data_prevista_adequacao",
+                        )
+                    else:
+                        st.caption("Máquina conforme: data prevista para adequação não aplicável.")
+                st.caption("Laudo, ART, apreciação de risco, manual e treinamento devem ser controlados pela aba Documentos de Proteções de Máquinas.")
+                obs=st.text_area("Observações", key="maq_new_obs")
+                if st.button("Salvar máquina",use_container_width=True,key="maq_new_salvar"):
+                    if cod and nome and not db.query(MaquinaNR12).filter_by(codigo=cod).first():
+                        nova=MaquinaNR12(
+                            codigo=cod,site_id=sites[site],area_setor=area,linha_processo=linha,nome=nome,
+                            fabricante=fab,modelo=mod,numero_serie=serie,ano=ano,tipo_equipamento=tipo,
+                            responsavel_area=resp,criticidade=crit,risco_maquina=risco,status_nr12=status,
+                            proxima_auditoria=prox,data_prevista_adequacao=data_prevista_adequacao,
+                            possui_laudo=False,possui_art=False,possui_apreciacao_risco=False,
+                            possui_manual_atualizado=False,possui_treinamento=False,observacoes=obs,
+                        )
+                        db.add(nova); db.flush()
+                        registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",nova.id,"criar",observacao=f"Máquina {cod} cadastrada")
+                        db.commit()
+                        st.success("Máquina cadastrada.")
+                        st.rerun()
+                    else:
+                        st.error("Preencha código/nome e evite código duplicado.")
 
     # 3) Editar máquina
     if can_edit(u,"nr12_manutencao"):
@@ -1281,30 +1309,39 @@ def nr12_inventario(db,u):
             with st.expander("Editar máquina"):
                 lab=st.selectbox("Máquina",list(opts),key="nr12_editar_maquina_select")
                 m=db.get(MaquinaNR12,opts[lab])
-                with st.form("editmaq"):
-                    status_atual=normalizar_status_nr12(m.status_nr12)
-                    novo_status=st.selectbox("Status",STATUS_MAQUINA,index=STATUS_MAQUINA.index(status_atual))
-                    nova_criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1)
+                status_atual=normalizar_status_nr12(m.status_nr12)
+                e1,e2,e3=st.columns(3)
+                with e1:
+                    novo_status=st.selectbox("Status de Proteção",STATUS_MAQUINA,index=STATUS_MAQUINA.index(status_atual),key=f"editmaq_status_{m.id}")
+                    nova_criticidade=st.selectbox("Criticidade",CRITICIDADES,index=CRITICIDADES.index(m.criticidade) if m.criticidade in CRITICIDADES else 1,key=f"editmaq_criticidade_{m.id}")
+                with e2:
                     risco_atual=m.risco_maquina or "Apreciação de risco não realizada"
-                    novo_risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0)
-                    nova_proxima_auditoria=st.date_input("Próxima auditoria prevista",value=m.proxima_auditoria or date.today()+timedelta(days=180))
+                    novo_risco=st.selectbox("Risco da máquina",RISCOS_MAQUINA,index=RISCOS_MAQUINA.index(risco_atual) if risco_atual in RISCOS_MAQUINA else 0,key=f"editmaq_risco_{m.id}")
+                    nova_proxima_auditoria=st.date_input("Próxima auditoria prevista",value=m.proxima_auditoria or date.today()+timedelta(days=180),key=f"editmaq_prox_{m.id}")
+                with e3:
                     nova_data_prevista=None
                     if novo_status!="Conforme":
-                        nova_data_prevista=st.date_input("Data prevista para adequação",value=m.data_prevista_adequacao or date.today()+timedelta(days=90),help="Use esta data para compor a meta e a evolução esperada de adequação.")
+                        nova_data_prevista=st.date_input(
+                            "Data prevista para adequação",
+                            value=m.data_prevista_adequacao or date.today()+timedelta(days=90),
+                            help="Use esta data para compor a meta e a evolução esperada de adequação.",
+                            key=f"editmaq_data_prevista_{m.id}",
+                        )
                     else:
                         st.caption("Máquina conforme: data prevista para adequação será limpa ao salvar.")
-                    novas_observacoes=st.text_area("Observações",m.observacoes or "")
-                    if st.form_submit_button("Atualizar",use_container_width=True):
-                        m.status_nr12=novo_status
-                        m.criticidade=nova_criticidade
-                        m.risco_maquina=novo_risco
-                        m.proxima_auditoria=nova_proxima_auditoria
-                        m.data_prevista_adequacao=None if novo_status=="Conforme" else nova_data_prevista
-                        m.observacoes=novas_observacoes
-                        registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",m.id,"editar",observacao=f"Máquina {m.codigo} atualizada")
-                        db.commit()
-                        st.success("Atualizado.")
-                        st.rerun()
+                novas_observacoes=st.text_area("Observações",m.observacoes or "",key=f"editmaq_obs_{m.id}")
+                if st.button("Atualizar máquina",use_container_width=True,key=f"editmaq_atualizar_{m.id}"):
+                    status_anterior=m.status_nr12
+                    m.status_nr12=novo_status
+                    m.criticidade=nova_criticidade
+                    m.risco_maquina=novo_risco
+                    m.proxima_auditoria=nova_proxima_auditoria
+                    m.data_prevista_adequacao=None if novo_status=="Conforme" else nova_data_prevista
+                    m.observacoes=novas_observacoes
+                    registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",m.id,"editar","status_nr12",status_anterior,novo_status,observacao=f"Máquina {m.codigo} atualizada")
+                    db.commit()
+                    st.success("Atualizado.")
+                    st.rerun()
 
 def nr12_documentos(db,u):
     header("Documentos de Proteções de Máquinas","Controle de documentos essenciais, validade, evidências e anexos")
@@ -1493,10 +1530,9 @@ def nr12_checklists(db,u):
             st.rerun()
 
 def nr12_base_checklists(db,u):
-    header("Base de Checklists de Proteções", "Base inicial carregada no banco, editável pelo app e versionada para preservar histórico")
+    header("Base de Checklists de Proteções", "Gestão da base editável e versionada de perguntas")
     if not can_edit(u,"nr12_manutencao"):
         alert_card("Seu perfil permite consulta, mas não administração da base de checklists.")
-    st.caption("Os checklists padrão continuam dentro do código como carga inicial. Depois que o banco é criado, a base passa a ser editável pelo app; as alterações ficam salvas no banco e as verificações mantêm snapshot da pergunta usada.")
     tipos = sorted({t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()} | {t for t, in db.query(ChecklistVersaoMaquinas.tipo_checklist).distinct().all()} | set(TIPOS_VERIFICACAO_NR12))
     if not tipos:
         empty_state("Nenhum tipo de checklist cadastrado.")
@@ -1506,26 +1542,29 @@ def nr12_base_checklists(db,u):
     versoes = db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo).order_by(ChecklistVersaoMaquinas.versao.desc()).all()
     ativa = get_versao_ativa_maquinas(db,tipo)
     c2.metric("Versão ativa", f"v{ativa.versao}" if ativa else "—")
+
     if can_edit(u,"nr12_manutencao"):
-        ac1,ac2,ac3 = st.columns(3)
+        ac1,ac2 = st.columns(2)
         with ac1:
             if st.button("Criar nova versão a partir da ativa", use_container_width=True):
                 nova = criar_versao_checklist_maquinas(db,tipo,u.nome,"Nova versão criada pelo app",ativa)
                 registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistVersaoMaquinas",nova.id,"criar",observacao=f"Nova versão v{nova.versao} para {tipo}")
                 db.commit(); st.success(f"Versão v{nova.versao} criada e ativada."); st.rerun()
         with ac2:
-            novo_tipo = st.text_input("Novo tipo de checklist", key="novo_tipo_checklist")
-            if st.button("Criar tipo", use_container_width=True) and novo_tipo.strip():
+            if ativa and st.button("Inativar versão ativa", use_container_width=True):
+                ativa.ativo=False
+                registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistVersaoMaquinas",ativa.id,"inativar",observacao=f"Versão v{ativa.versao} inativada")
+                db.commit(); st.warning("Versão inativada. Crie/ative outra versão antes de novos registros."); st.rerun()
+        with st.expander("Criar novo tipo de checklist", expanded=False):
+            nt1,nt2=st.columns([3,1])
+            novo_tipo = nt1.text_input("Nome do novo tipo de checklist", key="novo_tipo_checklist")
+            if nt2.button("Criar tipo", use_container_width=True) and novo_tipo.strip():
                 item = ChecklistItemNR12(tipo_checklist=novo_tipo.strip(), ordem=1, pergunta="Nova pergunta a editar", item_critico=False, gera_pac_automatico=False, ativo=True)
                 db.add(item); db.flush()
                 nova = criar_versao_checklist_maquinas(db,novo_tipo.strip(),u.nome,"Versão inicial criada pelo app")
                 registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistVersaoMaquinas",nova.id,"criar",observacao=f"Tipo {novo_tipo} criado")
                 db.commit(); st.success("Tipo criado."); st.rerun()
-        with ac3:
-            if ativa and st.button("Inativar versão ativa", use_container_width=True):
-                ativa.ativo=False
-                registrar_log(db,u,NOME_CHECKLISTS_MAQUINAS,"ChecklistVersaoMaquinas",ativa.id,"inativar",observacao=f"Versão v{ativa.versao} inativada")
-                db.commit(); st.warning("Versão inativada. Crie/ative outra versão antes de novos registros."); st.rerun()
+
     section("Versões cadastradas")
     dfv = pd.DataFrame([{"ID":v.id,"Tipo":v.tipo_checklist,"Versão":v.versao,"Ativo":v.ativo,"Criado por":v.criado_por,"Criado em":fmt_date(v.criado_em),"Descrição":v.descricao} for v in versoes])
     st.dataframe(dfv, use_container_width=True, hide_index=True)
@@ -1579,6 +1618,58 @@ def nr12_base_checklists(db,u):
             st.dataframe(dfp, use_container_width=True, hide_index=True)
         download_excel_button("Exportar base de checklists", "base_checklists_protecoes.xlsx", {"Versoes": dfv, "Perguntas_Ativas": dfp})
 
+def render_calendario_mensal(df_eventos, mes_ref):
+    mes_ref = as_date(mes_ref) or date.today().replace(day=1)
+    ano, mes = mes_ref.year, mes_ref.month
+    cal = calendar.Calendar(firstweekday=0)
+    semanas = cal.monthdatescalendar(ano, mes)
+    df = df_eventos.copy() if df_eventos is not None else pd.DataFrame()
+    if not df.empty:
+        df["Data"] = pd.to_datetime(df["Data"]).dt.date
+    eventos_por_data = {}
+    for _, row in df.iterrows() if not df.empty else []:
+        eventos_por_data.setdefault(row["Data"], []).append(row)
+    status_colors = {"Planejada":"#2563eb", "Vencida":"#dc2626", "Concluída":"#16a34a"}
+    dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+    html = ["""
+    <style>
+      .calendar-wrap{background:#fff;border:1px solid #e5e7eb;border-radius:22px;padding:1rem;box-shadow:0 10px 25px rgba(31,41,55,.07);}
+      .calendar-title{font-size:1.15rem;font-weight:900;color:#111827;margin-bottom:.7rem;}
+      .calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:.55rem;}
+      .calendar-head{font-size:.76rem;font-weight:900;color:#475569;text-align:center;padding:.35rem;background:#f8fafc;border-radius:12px;border:1px solid #edf2f7;}
+      .calendar-day{min-height:122px;border:1px solid #e5e7eb;border-radius:16px;background:#ffffff;padding:.55rem;overflow:hidden;}
+      .calendar-day.off{background:#f8fafc;color:#94a3b8;}
+      .calendar-day.today{border:2px solid #d9a514;background:#fff8e3;}
+      .day-number{font-weight:900;font-size:.90rem;margin-bottom:.35rem;color:#111827;}
+      .event-badge{display:block;border-radius:10px;padding:.24rem .34rem;margin:.22rem 0;font-size:.68rem;font-weight:750;color:#fff;line-height:1.15;white-space:normal;}
+      .event-more{font-size:.68rem;color:#475569;font-weight:800;margin-top:.2rem;}
+      @media(max-width:900px){.calendar-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.calendar-head{display:none}.calendar-day{min-height:100px;}}
+    </style>
+    """]
+    html.append(f"<div class='calendar-wrap'><div class='calendar-title'>{calendar.month_name[mes].capitalize()} / {ano}</div><div class='calendar-grid'>")
+    for dsem in dias_semana:
+        html.append(f"<div class='calendar-head'>{dsem}</div>")
+    hoje = date.today()
+    for semana in semanas:
+        for dia in semana:
+            classes = ["calendar-day"]
+            if dia.month != mes:
+                classes.append("off")
+            if dia == hoje:
+                classes.append("today")
+            html.append(f"<div class='{' '.join(classes)}'><div class='day-number'>{dia.day}</div>")
+            eventos = eventos_por_data.get(dia, [])
+            for ev in eventos[:3]:
+                cor = status_colors.get(str(ev.get("Status", "")), "#64748b")
+                titulo = f"{ev.get('Máquina','—')} • {ev.get('Status','—')}"
+                detalhe = f"{ev.get('Responsável','—')}"
+                html.append(f"<span class='event-badge' style='background:{cor};'>{html_escape(titulo)}<br><span style='font-weight:600;opacity:.92'>{html_escape(detalhe)}</span></span>")
+            if len(eventos) > 3:
+                html.append(f"<div class='event-more'>+{len(eventos)-3} evento(s)</div>")
+            html.append("</div>")
+    html.append("</div></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
 def nr12_calendario(db,u):
     header("Calendário de Auditorias e Inspeções", "Visão mensal, por unidade e por responsável das auditorias e inspeções de proteções de máquinas")
     ids = visible_site_ids(u,db)
@@ -1612,8 +1703,10 @@ def nr12_calendario(db,u):
     k1.metric("Planejadas", int((f["Status"]=="Planejada").sum()))
     k2.metric("Vencidas", int((f["Status"]=="Vencida").sum()))
     k3.metric("Concluídas", int((f["Status"]=="Concluída").sum()))
-    t1,t2,t3=st.tabs(["Visão mensal","Por site","Por responsável"])
+    t1,t2,t3=st.tabs(["Calendário mensal","Por site","Por responsável"])
     with t1:
+        render_calendario_mensal(f, mes_ref)
+        st.caption("A tabela abaixo mantém a rastreabilidade dos eventos exibidos no calendário.")
         st.dataframe(f.sort_values("Data"), use_container_width=True, hide_index=True)
     with t2:
         agg=f.groupby(["Site","Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
