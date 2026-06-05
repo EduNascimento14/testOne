@@ -1037,6 +1037,117 @@ def energia_bar_sem_decimal(fig):
     fig.update_layout(uniformtext_minsize=8, uniformtext_mode="hide")
     return fig
 
+def energia_mapa_sites_df(r12_site):
+    """Monta a base geográfica por site para o mapa executivo de energia e emissões."""
+    if r12_site is None or r12_site.empty:
+        return pd.DataFrame()
+    rows = []
+    for _, r in r12_site.iterrows():
+        site = str(r.get("Site", "")).strip()
+        coord = ENERGIA_SITE_COORDS.get(site)
+        if not coord:
+            continue
+        consumo_total = float(r.get("consumo_total_kwh", 0) or 0)
+        actual_hours = float(r.get("actual_hours", 0) or 0)
+        eficiencia = r.get("eficiencia_energetica", None)
+        if eficiencia is None or pd.isna(eficiencia):
+            eficiencia = consumo_total / actual_hours if actual_hours else None
+        rows.append({
+            "Site": site,
+            "Unidade": energia_site_nome(site),
+            "Cidade/UF": f"{coord['cidade']}/{coord['uf']}",
+            "Grupo": energia_site_grupo(site),
+            "Latitude": coord["latitude"],
+            "Longitude": coord["longitude"],
+            "consumo_eletrico_kwh": float(r.get("consumo_eletrico_kwh", 0) or 0),
+            "consumo_gas_kwh": float(r.get("consumo_gas_kwh", 0) or 0),
+            "consumo_total_kwh": consumo_total,
+            "emissao_total_tco2e": float(r.get("emissao_total_tco2e", 0) or 0),
+            "emissao_total_com_irec_tco2e": float(r.get("emissao_total_com_irec_tco2e", 0) or 0),
+            "custo_total_brl": float(r.get("custo_total_brl", 0) or 0),
+            "actual_hours": actual_hours,
+            "eficiencia_energetica": eficiencia,
+        })
+    return pd.DataFrame(rows)
+
+def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
+    """Cria mapa do Brasil com bolhas por unidade produtiva.
+
+    Usa scatter_geo para não depender de token de mapa ou internet.
+    """
+    if map_df is None or map_df.empty:
+        return None
+    metric_col, unidade = ENERGIA_MAP_METRICAS.get(metrica_label, ("consumo_total_kwh", "kWh"))
+    df = map_df.copy()
+    if metric_col not in df.columns:
+        df[metric_col] = 0
+    df["Valor selecionado"] = pd.to_numeric(df[metric_col], errors="coerce").fillna(0)
+    # Para eficiência, a cor representa a taxa e o tamanho representa consumo total, evitando bolha nula/invertida.
+    df["Tamanho da bolha"] = df["Valor selecionado"].abs()
+    if metrica_label == "Eficiência energética R12":
+        df["Tamanho da bolha"] = pd.to_numeric(df["consumo_total_kwh"], errors="coerce").fillna(0).abs()
+    if float(df["Tamanho da bolha"].max() or 0) <= 0:
+        df["Tamanho da bolha"] = 1
+    df["Valor formatado"] = df["Valor selecionado"].apply(lambda x: energia_fmt_val(x, "money" if unidade == "BRL" else "numero"))
+    fig = px.scatter_geo(
+        df,
+        lat="Latitude",
+        lon="Longitude",
+        size="Tamanho da bolha",
+        color="Valor selecionado",
+        text="Site",
+        hover_name="Unidade",
+        hover_data={
+            "Site": True,
+            "Cidade/UF": True,
+            "Grupo": True,
+            "Valor formatado": True,
+            "Latitude": False,
+            "Longitude": False,
+            "Tamanho da bolha": False,
+            "Valor selecionado": False,
+        },
+        color_continuous_scale="YlOrRd",
+        size_max=54,
+        title=f"Mapa Brasil — {metrica_label}",
+    )
+    fig.update_traces(
+        textposition="top center",
+        marker=dict(line=dict(width=1.2, color="#ffffff"), opacity=0.88),
+        hovertemplate="<b>%{hovertext}</b><br>Site: %{customdata[0]}<br>Local: %{customdata[1]}<br>Grupo: %{customdata[2]}<br>Valor: %{customdata[3]} " + unidade + "<extra></extra>",
+    )
+    fig.update_geos(
+        projection_type="mercator",
+        showland=True,
+        landcolor="#f8fafc",
+        showocean=True,
+        oceancolor="#e0f2fe",
+        showcountries=True,
+        countrycolor="#94a3b8",
+        showsubunits=True,
+        subunitcolor="#cbd5e1",
+        showframe=False,
+        showcoastlines=True,
+        coastlinecolor="#94a3b8",
+        lataxis_range=[-35, 6],
+        lonaxis_range=[-75, -33],
+    )
+    fig.update_layout(
+        template="plotly_white",
+        height=560,
+        margin=dict(l=0, r=0, t=60, b=0),
+        coloraxis_colorbar=dict(title=unidade),
+        title=dict(x=0.02, xanchor="left"),
+    )
+    if usar_irec and "I-REC" in metrica_label:
+        fig.add_annotation(
+            text="I-REC considerado conforme data configurada nos parâmetros.",
+            x=0.01, y=0.02, xref="paper", yref="paper", showarrow=False,
+            bgcolor="rgba(236,253,245,0.92)", bordercolor="#16a34a", borderwidth=1,
+            font=dict(size=11, color="#166534"),
+        )
+    return fig
+
 def energia_tendencia_metas(df_scope, usar_irec=False, db=None):
     """Gera séries mensais R12 de emissões e eficiência comparadas contra a meta.
 
@@ -2894,6 +3005,23 @@ ENERGIA_RESOURCE_SITE_PATTERNS = {
     "DIA": ["diadema"],
     "JUN": ["jundiai", "jundiaí"],
     "PER": ["sao paulo", "são paulo", "perus"],
+}
+ENERGIA_SITE_COORDS = {
+    # Coordenadas aproximadas das unidades produtivas para visualização geográfica executiva.
+    "CAC": {"latitude": -29.9511, "longitude": -51.0930, "cidade": "Cachoeirinha", "uf": "RS"},
+    "JAC": {"latitude": -23.3053, "longitude": -45.9658, "cidade": "Jacareí", "uf": "SP"},
+    "JUN": {"latitude": -23.1857, "longitude": -46.8978, "cidade": "Jundiaí", "uf": "SP"},
+    "PER": {"latitude": -23.4082, "longitude": -46.7465, "cidade": "Perus", "uf": "SP"},
+    "SJC": {"latitude": -23.2237, "longitude": -45.9009, "cidade": "São José dos Campos", "uf": "SP"},
+    "DIA": {"latitude": -23.6865, "longitude": -46.6234, "cidade": "Diadema", "uf": "SP"},
+}
+ENERGIA_MAP_METRICAS = {
+    "Consumo elétrico R12": ("consumo_eletrico_kwh", "kWh"),
+    "Consumo total R12": ("consumo_total_kwh", "kWh"),
+    "Emissões CO₂ R12": ("emissao_total_tco2e", "tCO₂e"),
+    "Emissões CO₂ R12 com I-REC": ("emissao_total_com_irec_tco2e", "tCO₂e"),
+    "Custo total R12": ("custo_total_brl", "BRL"),
+    "Eficiência energética R12": ("eficiencia_energetica", "kWh/Actual Hour"),
 }
 ENERGIA_ABSORPTION_SHEETS = {
     "FCG": "DIA",
@@ -5164,67 +5292,126 @@ def energia_dashboard(db,u):
             with c:
                 kpi_card(lab, val, help_)
 
-    section("Gráficos executivos")
-    c1, c2 = st.columns(2)
     mensal_site = f.groupby(["Mês", "Site"], as_index=False).agg({
         "consumo_eletrico_kwh": "sum", "consumo_gas_kwh": "sum", "emissao_total_tco2e": "sum", "emissao_total_com_irec_tco2e": "sum", "custo_total_brl": "sum", "consumo_total_kwh": "sum", "actual_hours": "sum"
     })
     mensal_site["eficiencia_energetica"] = mensal_site.apply(lambda r: r["consumo_total_kwh"]/r["actual_hours"] if r["actual_hours"] else None, axis=1)
-    with c1:
-        st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_eletrico_kwh", color="Site", markers=True, title="Consumo elétrico mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
-    with c2:
-        st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_gas_kwh", color="Site", markers=True, title="Consumo de gás natural mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
-    c3, c4 = st.columns(2)
-    with c3:
-        emis = mensal_site.groupby("Mês", as_index=False)[["emissao_total_tco2e", "emissao_total_com_irec_tco2e"]].sum()
-        emis_long = emis.melt(id_vars="Mês", value_vars=["emissao_total_tco2e", "emissao_total_com_irec_tco2e"], var_name="Cenário", value_name="tCO₂e")
-        emis_long["Cenário"] = emis_long["Cenário"].map({"emissao_total_tco2e": "Sem I-REC", "emissao_total_com_irec_tco2e": "Com I-REC"})
-        st.plotly_chart(px.line(emis_long, x="Mês", y="tCO₂e", color="Cenário", markers=True, title="Emissões mensais de CO₂ — com e sem I-REC").update_layout(template="plotly_white"), use_container_width=True)
-    with c4:
-        ref_ini = energia_r12_start(r12_mes)
-        r12 = f[(pd.to_datetime(f["Mês"]) >= pd.to_datetime(ref_ini)) & (pd.to_datetime(f["Mês"]) <= pd.to_datetime(r12_mes))]
-        r12_site = r12.groupby("Site", as_index=False).agg({"consumo_total_kwh":"sum", "emissao_total_tco2e":"sum", "custo_total_brl":"sum", "actual_hours":"sum"})
+    ref_ini = energia_r12_start(r12_mes)
+    r12 = f[(pd.to_datetime(f["Mês"]) >= pd.to_datetime(ref_ini)) & (pd.to_datetime(f["Mês"]) <= pd.to_datetime(r12_mes))]
+    r12_site = r12.groupby("Site", as_index=False).agg({
+        "consumo_eletrico_kwh":"sum", "consumo_gas_kwh":"sum", "consumo_total_kwh":"sum",
+        "emissao_total_tco2e":"sum", "emissao_total_com_irec_tco2e":"sum",
+        "custo_total_brl":"sum", "actual_hours":"sum"
+    }) if not r12.empty else pd.DataFrame()
+    if not r12_site.empty:
         r12_site["eficiencia_energetica"] = r12_site.apply(lambda r: r["consumo_total_kwh"]/r["actual_hours"] if r["actual_hours"] else None, axis=1)
-        fig = px.bar(r12_site.sort_values("consumo_total_kwh", ascending=False), x="Site", y="consumo_total_kwh", text="consumo_total_kwh", title="Consumo total R12 por site").update_layout(template="plotly_white", yaxis_title="kWh")
-        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
-    c5, c6 = st.columns(2)
-    with c5:
-        fig = px.bar(r12_site.sort_values("custo_total_brl", ascending=False), x="Site", y="custo_total_brl", text="custo_total_brl", title="Custo total R12 por site").update_layout(template="plotly_white", yaxis_title="BRL")
-        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
-    with c6:
-        fig = px.bar(r12_site.sort_values("eficiencia_energetica", ascending=True), x="Site", y="eficiencia_energetica", text="eficiencia_energetica", title="Eficiência energética R12 por site — menor é melhor").update_layout(template="plotly_white", yaxis_title="kWh/Actual Hour")
-        st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+    map_df = energia_mapa_sites_df(r12_site)
 
-    section("Metas ao longo do tempo")
-    df_scope = df.copy()
-    sites_sel = st.session_state.get("energia_dash_sites", [])
-    grupos_sel = st.session_state.get("energia_dash_grupos", [])
-    if sites_sel:
-        df_scope = df_scope[df_scope["Site"].isin(sites_sel)]
-    if grupos_sel and "LAG" not in grupos_sel:
-        df_scope = df_scope[df_scope["Grupo"].isin(grupos_sel)]
-    metas = energia_tendencia_metas(df_scope, usar_irec, db)
-    if metas.empty:
-        empty_state("Sem dados suficientes para gerar a tendência de metas.")
-    else:
-        c7, c8 = st.columns(2)
-        with c7:
-            emis_meta = metas[["Mês","Emissões R12","Meta emissões"]].melt(id_vars="Mês", var_name="Série", value_name="tCO₂e")
-            st.plotly_chart(px.line(emis_meta, x="Mês", y="tCO₂e", color="Série", markers=True, title="Emissões R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
-        with c8:
-            eff_meta = metas[["Mês","Eficiência energética R12","Meta eficiência energética"]].melt(id_vars="Mês", var_name="Série", value_name="kWh/Actual Hour")
-            st.plotly_chart(px.line(eff_meta, x="Mês", y="kWh/Actual Hour", color="Série", markers=True, title="Eficiência energética R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
+    section("Mapa geográfico e visão executiva")
+    st.caption("As bolhas mostram a distribuição local por unidade produtiva no Brasil. Use o seletor para alternar entre consumo, emissões, custo e eficiência.")
+    mapa_col, resumo_col = st.columns([2.25, 1])
+    with mapa_col:
+        metrica_mapa = st.selectbox(
+            "Métrica do mapa",
+            list(ENERGIA_MAP_METRICAS.keys()),
+            index=list(ENERGIA_MAP_METRICAS.keys()).index("Emissões CO₂ R12 com I-REC") if usar_irec else list(ENERGIA_MAP_METRICAS.keys()).index("Emissões CO₂ R12"),
+            key="energia_mapa_metrica",
+        )
+        fig_mapa = energia_mapa_brasil_fig(map_df, metrica_mapa, usar_irec)
+        if fig_mapa is not None:
+            st.plotly_chart(fig_mapa, use_container_width=True)
+        else:
+            empty_state("Sem coordenadas ou dados suficientes para gerar o mapa geográfico.")
+    with resumo_col:
+        if not map_df.empty:
+            map_col, map_unit = ENERGIA_MAP_METRICAS.get(st.session_state.get("energia_mapa_metrica", "Consumo total R12"), ("consumo_total_kwh", "kWh"))
+            ranking_map = map_df.sort_values(map_col, ascending=(map_col == "eficiencia_energetica")).copy()
+            maior = ranking_map.iloc[0] if map_col == "eficiencia_energetica" else ranking_map.sort_values(map_col, ascending=False).iloc[0]
+            menor = ranking_map.iloc[0] if map_col != "eficiencia_energetica" else ranking_map.sort_values(map_col, ascending=False).iloc[0]
+            kpi_card("Maior contribuição", maior["Site"], f"{energia_fmt_val(maior[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
+            kpi_card("Menor contribuição", menor["Site"], f"{energia_fmt_val(menor[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
+            ranking_cols = ["Site", "Unidade", map_col]
+            ranking_show = ranking_map[ranking_cols].rename(columns={map_col: st.session_state.get("energia_mapa_metrica", "Métrica")}).head(6)
+            st.dataframe(ranking_show, use_container_width=True, hide_index=True)
+        else:
+            empty_state("Sem dados para ranking geográfico.")
 
-    section("Exportação")
-    tabela_exec = energia_executive_table(db, "Emissões de CO₂ considerando I-REC" if usar_irec else "Emissões de CO₂", r12_mes, usar_irec)
-    download_excel_button("Exportar relatório Excel", "relatorio_energia_co2.xlsx", {
-        "Consolidado_Filtrado": f,
-        "KPIs": kpis,
-        "Tabela_Executiva": tabela_exec.drop(columns=["_grupo"], errors="ignore"),
-        "Base_Energia": energia_df_registros(db),
-        "Base_Actual_Hours": energia_df_actual_hours(db),
-        "Premissas": pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in db.query(EnergiaParametro).all()]),
-    })
+    abas_dash = st.tabs(["Tendências mensais", "Ranking R12", "Metas", "Exportação"])
+    with abas_dash[0]:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_eletrico_kwh", color="Site", markers=True, title="Consumo elétrico mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+        with c2:
+            st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_gas_kwh", color="Site", markers=True, title="Consumo de gás natural mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+        c3, c4 = st.columns(2)
+        with c3:
+            emis = mensal_site.groupby("Mês", as_index=False)[["emissao_total_tco2e", "emissao_total_com_irec_tco2e"]].sum()
+            emis_long = emis.melt(id_vars="Mês", value_vars=["emissao_total_tco2e", "emissao_total_com_irec_tco2e"], var_name="Cenário", value_name="tCO₂e")
+            emis_long["Cenário"] = emis_long["Cenário"].map({"emissao_total_tco2e": "Sem I-REC", "emissao_total_com_irec_tco2e": "Com I-REC"})
+            st.plotly_chart(px.line(emis_long, x="Mês", y="tCO₂e", color="Cenário", markers=True, title="Emissões mensais de CO₂ — com e sem I-REC").update_layout(template="plotly_white"), use_container_width=True)
+        with c4:
+            if not r12_site.empty:
+                fig = px.bar(r12_site.sort_values("consumo_total_kwh", ascending=False), x="Site", y="consumo_total_kwh", text="consumo_total_kwh", title="Consumo total R12 por site").update_layout(template="plotly_white", yaxis_title="kWh")
+                st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+            else:
+                empty_state("Sem dados R12 para consumo por site.")
+    with abas_dash[1]:
+        c5, c6 = st.columns(2)
+        with c5:
+            if not r12_site.empty:
+                fig = px.bar(r12_site.sort_values("custo_total_brl", ascending=False), x="Site", y="custo_total_brl", text="custo_total_brl", title="Custo total R12 por site").update_layout(template="plotly_white", yaxis_title="BRL")
+                st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+            else:
+                empty_state("Sem dados R12 para custo por site.")
+        with c6:
+            if not r12_site.empty:
+                fig = px.bar(r12_site.sort_values("eficiencia_energetica", ascending=True), x="Site", y="eficiencia_energetica", text="eficiencia_energetica", title="Eficiência energética R12 por site — menor é melhor").update_layout(template="plotly_white", yaxis_title="kWh/Actual Hour")
+                st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+            else:
+                empty_state("Sem dados R12 para eficiência por site.")
+        if not r12_site.empty:
+            ranking = r12_site.copy()
+            ranking["Site nome"] = ranking["Site"].map(lambda x: energia_site_nome(x))
+            ranking["CO₂ considerado"] = ranking["emissao_total_com_irec_tco2e"] if usar_irec else ranking["emissao_total_tco2e"]
+            st.dataframe(
+                ranking[["Site", "Site nome", "consumo_eletrico_kwh", "consumo_gas_kwh", "consumo_total_kwh", "CO₂ considerado", "custo_total_brl", "eficiencia_energetica"]]
+                    .sort_values("consumo_total_kwh", ascending=False),
+                use_container_width=True, hide_index=True
+            )
+
+    with abas_dash[2]:
+        section("Metas ao longo do tempo")
+        df_scope = df.copy()
+        sites_sel = st.session_state.get("energia_dash_sites", [])
+        grupos_sel = st.session_state.get("energia_dash_grupos", [])
+        if sites_sel:
+            df_scope = df_scope[df_scope["Site"].isin(sites_sel)]
+        if grupos_sel and "LAG" not in grupos_sel:
+            df_scope = df_scope[df_scope["Grupo"].isin(grupos_sel)]
+        metas = energia_tendencia_metas(df_scope, usar_irec, db)
+        if metas.empty:
+            empty_state("Sem dados suficientes para gerar a tendência de metas.")
+        else:
+            c7, c8 = st.columns(2)
+            with c7:
+                emis_meta = metas[["Mês","Emissões R12","Meta emissões"]].melt(id_vars="Mês", var_name="Série", value_name="tCO₂e")
+                st.plotly_chart(px.line(emis_meta, x="Mês", y="tCO₂e", color="Série", markers=True, title="Emissões R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
+            with c8:
+                eff_meta = metas[["Mês","Eficiência energética R12","Meta eficiência energética"]].melt(id_vars="Mês", var_name="Série", value_name="kWh/Actual Hour")
+                st.plotly_chart(px.line(eff_meta, x="Mês", y="kWh/Actual Hour", color="Série", markers=True, title="Eficiência energética R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
+
+    with abas_dash[3]:
+        section("Exportação")
+        tabela_exec = energia_executive_table(db, "Emissões de CO₂ considerando I-REC" if usar_irec else "Emissões de CO₂", r12_mes, usar_irec)
+        download_excel_button("Exportar relatório Excel", "relatorio_energia_co2.xlsx", {
+            "Consolidado_Filtrado": f,
+            "KPIs": kpis,
+            "Tabela_Executiva": tabela_exec.drop(columns=["_grupo"], errors="ignore"),
+            "Mapa_Geografico": map_df,
+            "Base_Energia": energia_df_registros(db),
+            "Base_Actual_Hours": energia_df_actual_hours(db),
+            "Premissas": pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in db.query(EnergiaParametro).all()]),
+        })
 
 
 def energia_atualizar_base(db,u):
