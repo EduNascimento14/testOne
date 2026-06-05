@@ -1074,8 +1074,9 @@ def energia_mapa_sites_df(r12_site):
 def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
     """Cria mapa do Brasil com bolhas por unidade produtiva.
 
-    O mapa é offline: usa Plotly geo, linhas simplificadas dos estados onde há
-    unidades produtivas e rótulos de cidade/UF para melhorar a leitura local.
+    O mapa é offline e usa a camada geográfica nativa do Plotly, sem polígonos
+    estaduais manuais. Isso evita linhas desconfiguradas e mantém a visualização
+    limpa, com foco nas unidades produtivas, cidades e métricas executivas.
     """
     if map_df is None or map_df.empty:
         return None
@@ -1095,18 +1096,7 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
 
     fig = go.Figure()
 
-    # Linhas simplificadas de estados. Evita depender de internet, token ou geojson externo.
-    for uf, geo in ENERGIA_UF_BOUNDARIES.items():
-        fig.add_trace(go.Scattergeo(
-            lon=geo["lon"], lat=geo["lat"], mode="lines",
-            line=dict(width=1.15, color="rgba(71,85,105,0.55)"),
-            hoverinfo="skip", showlegend=False,
-        ))
-        fig.add_trace(go.Scattergeo(
-            lon=[sum(geo["lon"]) / len(geo["lon"])], lat=[sum(geo["lat"]) / len(geo["lat"])],
-            mode="text", text=[uf], textfont=dict(size=10, color="#475569"),
-            hoverinfo="skip", showlegend=False,
-        ))
+    # Mantém o mapa limpo usando apenas a base geográfica nativa e os pontos das unidades.
 
     # Marcadores discretos de cidades para dar contexto local.
     fig.add_trace(go.Scattergeo(
@@ -1140,9 +1130,7 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
         showcountries=True,
         countrycolor="#64748b",
         countrywidth=1.2,
-        showsubunits=True,
-        subunitcolor="#94a3b8",
-        subunitwidth=0.8,
+        showsubunits=False,
         showframe=False,
         showcoastlines=True,
         coastlinecolor="#64748b",
@@ -5374,7 +5362,7 @@ def energia_dashboard(db,u):
     map_df = energia_mapa_sites_df(r12_site)
 
     section("Mapa geográfico e visão executiva")
-    st.caption("As bolhas mostram a distribuição local por unidade produtiva no Brasil. O mapa inclui linhas estaduais simplificadas e rótulos de cidade/UF para facilitar a leitura regional.")
+    st.caption("As bolhas mostram a distribuição local por unidade produtiva no Brasil. Para evitar distorções visuais, o mapa usa a base geográfica nativa do Plotly e destaca cidades/unidades com rótulos e ranking executivo.")
     mapa_col, resumo_col = st.columns([2.25, 1])
     with mapa_col:
         metrica_mapa = st.selectbox(
