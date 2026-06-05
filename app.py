@@ -144,6 +144,7 @@ EHS_SUBMODULOS = {
 }
 
 ENERGIA_HOME_PAGE = "Submódulos de Energia e Emissões"
+AJUDA_PAGE = "Ajuda rápida"
 ENERGIA_SUBMODULOS = {
     "Gestão e Performance": {
         "icone": "📊",
@@ -358,6 +359,12 @@ def apply_theme():
     .check-q{font-weight:850;color:#111827;font-size:1rem;margin-bottom:.4rem}
     .check-meta{display:inline-block;border-radius:999px;padding:.12rem .5rem;font-size:.72rem;font-weight:800;background:#fff7df;color:#7a5400;border:1px solid #f3d27a;margin-left:.4rem}
     .check-category{margin:1rem 0 .35rem;padding:.55rem .8rem;border-radius:14px;background:#eef2ff;color:#1e293b;font-weight:900;border:1px solid #dbe3ff}
+    .breadcrumb-wrap{position:sticky;top:.35rem;z-index:999;background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;padding:.58rem .85rem;margin:.15rem 0 .9rem 0;box-shadow:0 8px 20px rgba(31,41,55,.055);font-size:.84rem;color:#475569;font-weight:800;}
+    .breadcrumb-wrap span{color:#0f172a;}
+    .breadcrumb-wrap .sep{color:#94a3b8;padding:0 .35rem;}
+    .quick-help-card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:1rem;box-shadow:0 10px 25px rgba(31,41,55,.06);min-height:145px;}
+    .quick-help-card h4{margin:.1rem 0 .45rem 0;color:#111827;font-weight:900;}
+    .quick-help-card p,.quick-help-card li{color:#475569;font-size:.92rem;}
     </style>""", unsafe_allow_html=True)
 def hide_sidebar_on_home():
     """Oculta a barra lateral nas telas de escolha principal.
@@ -1370,6 +1377,58 @@ def submodule_card(t,d,i,border="#2563eb"):
         f"<p class='muted'>{html_escape(d)}</p></div>",
         unsafe_allow_html=True,
     )
+
+def descobrir_submodulo_por_pagina(modulo, pagina):
+    if modulo == "nr12":
+        for nome, cfg in NR12_SUBMODULOS.items():
+            if pagina in cfg.get("paginas", []):
+                return nome
+    if modulo == "ehs":
+        for nome, cfg in EHS_SUBMODULOS.items():
+            if pagina in cfg.get("paginas", []):
+                return nome
+    if modulo == "energia":
+        for nome, cfg in ENERGIA_SUBMODULOS.items():
+            if pagina in cfg.get("paginas", []):
+                return nome
+    return None
+
+def nome_modulo_visual(modulo):
+    return {
+        "nr12": NOME_MODULO_MAQUINAS,
+        "ehs": "Auditoria Cruzada de Diretrizes EHS",
+        "energia": "Controle de Energia e Emissões",
+        "ajuda": AJUDA_PAGE,
+    }.get(modulo, "Página inicial")
+
+def render_breadcrumb():
+    modulo = st.session_state.get("modulo", "home")
+    if modulo == "home":
+        return
+    if modulo == "nr12":
+        pagina = st.session_state.get("page_nr12", NR12_HOME_PAGE)
+        home_mod = NR12_HOME_PAGE
+    elif modulo == "ehs":
+        pagina = st.session_state.get("page_ehs", EHS_HOME_PAGE)
+        home_mod = EHS_HOME_PAGE
+    elif modulo == "energia":
+        pagina = st.session_state.get("page_energia", ENERGIA_HOME_PAGE)
+        home_mod = ENERGIA_HOME_PAGE
+    elif modulo == "ajuda":
+        pagina = AJUDA_PAGE
+        home_mod = AJUDA_PAGE
+    else:
+        pagina = "—"
+        home_mod = "—"
+    partes = ["Início", nome_modulo_visual(modulo)]
+    sub = descobrir_submodulo_por_pagina(modulo, pagina)
+    if sub:
+        partes.append(sub)
+    if pagina and pagina not in [home_mod, sub]:
+        partes.append(pagina)
+    html = "<span>" + "</span><span class='sep'>›</span><span>".join(html_escape(x) for x in partes if x) + "</span>"
+    st.markdown(f"<div class='breadcrumb-wrap'>{html}</div>", unsafe_allow_html=True)
+
 def empty_state(t): st.markdown(f"<div class='empty'>{t}</div>",unsafe_allow_html=True)
 def alert_card(t): st.markdown(f"<div class='alert'>{t}</div>",unsafe_allow_html=True)
 def user_selector(db, location="sidebar"):
@@ -1492,6 +1551,13 @@ def home_page(db,u):
             st.session_state.page_ehs=EHS_HOME_PAGE
             st.session_state.nav_ehs=EHS_HOME_PAGE
             st.session_state.submodulo_ehs=""
+            st.rerun()
+
+    section("Ajuda")
+    c_help, c_empty = st.columns([1,3])
+    with c_help:
+        if st.button("❔ Abrir ajuda rápida", use_container_width=True, key="home_ajuda_rapida"):
+            st.session_state.modulo="ajuda"
             st.rerun()
 
 def nr12_submodulos_home(db,u):
@@ -6201,6 +6267,100 @@ def energia_relatorios_page(db,u):
     with c3:
         download_excel_button("Consolidado", "consolidado_energia.xlsx", {"Consolidado": df_cons})
 
+
+
+def ajuda_rapida_page(db,u):
+    header("Ajuda rápida", "Guia simples para usar a Plataforma Integrada EHS")
+    section("Como navegar")
+    c1,c2,c3=st.columns(3)
+    with c1:
+        st.markdown("""
+        <div class='quick-help-card'>
+        <h4>1. Escolha o módulo</h4>
+        <p>Na página inicial, entre em Sustentação de Proteções de Máquinas, Auditoria Cruzada ou Controle de Energia e Emissões.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        st.markdown("""
+        <div class='quick-help-card'>
+        <h4>2. Escolha o submódulo</h4>
+        <p>Cada módulo possui uma tela intermediária com áreas como Gestão e Performance, Execução, Pendências e Administração.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with c3:
+        st.markdown("""
+        <div class='quick-help-card'>
+        <h4>3. Use filtros e exportações</h4>
+        <p>Nos dashboards e tabelas, filtre por site, período, status, responsável ou criticidade e exporte quando necessário.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    section("Guia por módulo")
+    tabs=st.tabs(["Proteções de Máquinas", "Auditoria Cruzada EHS", "Energia e Emissões", "Dicas gerais"])
+    with tabs[0]:
+        st.markdown(f"""
+        **Objetivo:** sustentar a conformidade de proteções de máquinas por meio de inventário, documentos, checklists, calendário e PACs.
+
+        **Fluxo recomendado:**
+        1. Cadastre ou revise a máquina em **Inventário de Máquinas**.
+        2. Anexe laudos, ARTs e apreciações em **{NOME_DOCS_MAQUINAS}**.
+        3. Registre inspeções em **Checklists e Inspeções**.
+        4. Acompanhe prazos no **Calendário de Auditorias e Inspeções**.
+        5. Trate desvios no **{NOME_PAC_MAQUINAS}**.
+        """)
+    with tabs[1]:
+        st.markdown("""
+        **Objetivo:** planejar, executar e acompanhar auditorias cruzadas de Diretrizes EHS entre sites.
+
+        **Fluxo recomendado:**
+        1. Crie o ciclo em **Planejamento de Auditorias**.
+        2. Acompanhe datas no **Calendário de Auditorias**.
+        3. Preencha o **Checklist Diretrizes de EHS** com evidências e maturidade.
+        4. Trate gaps no **PAC Auditoria Cruzada**.
+        5. Acompanhe desempenho no **Dashboard Auditoria Cruzada**.
+        """)
+    with tabs[2]:
+        st.markdown("""
+        **Objetivo:** acompanhar consumo de energia, gás natural, emissões, custos, eficiência energética, R12, FY e análise com I-REC.
+
+        **Fluxo recomendado:**
+        1. Atualize os arquivos em **Atualizar Base**.
+        2. Revise horas trabalhadas em **Actual Hours**.
+        3. Analise indicadores no **Dashboard Energia e CO₂**.
+        4. Use a **Tabela Executiva** para visão comparativa por FY/R12.
+        5. Baixe bases e relatórios em **Relatórios Energia**.
+        """)
+    with tabs[3]:
+        st.markdown("""
+        - Use o breadcrumb no topo para entender onde você está.
+        - Use o botão **Voltar aos submódulos** na barra lateral para trocar de área dentro do mesmo módulo.
+        - Campos críticos como máquina não conforme, PAC crítico e datas vencidas exigem mais atenção.
+        - Quando houver dúvida sobre um indicador, confira filtros, período de referência e base utilizada.
+        - Para auditoria e governança, prefira sempre registrar evidências e observações objetivas.
+        """)
+
+    section("Ações rápidas")
+    c1,c2,c3,c4=st.columns(4)
+    with c1:
+        if st.button("🏠 Página inicial",use_container_width=True,key="ajuda_voltar_home"):
+            st.session_state.modulo="home"
+            st.rerun()
+    with c2:
+        if st.button(f"⚙️ {NOME_MODULO_MAQUINAS}",use_container_width=True,key="ajuda_ir_maquinas"):
+            st.session_state.modulo="nr12"
+            st.session_state.page_nr12=NR12_HOME_PAGE
+            st.rerun()
+    with c3:
+        if st.button("🧭 Auditoria EHS",use_container_width=True,key="ajuda_ir_ehs"):
+            st.session_state.modulo="ehs"
+            st.session_state.page_ehs=EHS_HOME_PAGE
+            st.rerun()
+    with c4:
+        if st.button("⚡ Energia e Emissões",use_container_width=True,key="ajuda_ir_energia"):
+            st.session_state.modulo="energia"
+            st.session_state.page_energia=ENERGIA_HOME_PAGE
+            st.rerun()
+
 # ============================================================
 # 15. Roteamento principal
 # ============================================================
@@ -6220,7 +6380,12 @@ def render_sidebar(db,u):
     if st.sidebar.button("🏠 Voltar para a tela inicial",use_container_width=True):
         st.session_state.modulo="home"
         st.rerun()
+    if st.sidebar.button("❔ Ajuda rápida", use_container_width=True, key="sidebar_ajuda_rapida"):
+        st.session_state.modulo="ajuda"
+        st.rerun()
     st.sidebar.divider()
+    if mod=="ajuda":
+        return
     if mod=="nr12":
         all_pages=[NR12_HOME_PAGE]
         for nome,cfg in NR12_SUBMODULOS.items():
@@ -6330,7 +6495,11 @@ def render_sidebar(db,u):
 
 def route(db,u):
     mod=st.session_state.get("modulo","home")
+    if mod != "home":
+        render_breadcrumb()
     if mod=="home": home_page(db,u)
+    elif mod=="ajuda":
+        ajuda_rapida_page(db,u)
     elif mod=="nr12":
         paginas={
             NR12_HOME_PAGE:nr12_submodulos_home,
