@@ -1074,9 +1074,10 @@ def energia_mapa_sites_df(r12_site):
 def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
     """Cria mapa executivo do Brasil com limites estaduais e bolhas por unidade.
 
-    O contorno estadual usa um GeoJSON otimizado e embutido no próprio código,
-    evitando dependência de internet ou arquivos externos. As unidades produtivas
-    aparecem como bolhas proporcionais à métrica selecionada.
+    O mapa usa somente o GeoJSON otimizado dos estados brasileiros para a malha
+    territorial. As camadas nativas de contorno de países/costa/subunidades ficam
+    desligadas para evitar sobreposição visual de linhas. As unidades produtivas
+    aparecem como uma única camada de bolhas, com apenas um rótulo por localidade.
     """
     if map_df is None or map_df.empty:
         return None
@@ -1093,10 +1094,11 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
         df["Tamanho da bolha"] = 1
     df["Valor formatado"] = df["Valor selecionado"].apply(lambda x: energia_fmt_val(x, "money" if unidade == "BRL" else "numero"))
     df["Cidade"] = df["Cidade/UF"].astype(str).str.split("/").str[0]
+    df["Rótulo mapa"] = df.apply(lambda r: f"{r['Site']}<br>{r['Cidade']}", axis=1)
 
     fig = go.Figure()
 
-    # Camada oficial/simplificada de estados brasileiros.
+    # Malha única do mapa: apenas GeoJSON dos estados brasileiros.
     uf_geojson = energia_br_states_geojson()
     uf_features = uf_geojson.get("features", []) if isinstance(uf_geojson, dict) else []
     if uf_features:
@@ -1107,35 +1109,27 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
             locations=uf_locations,
             z=[1] * len(uf_locations),
             featureidkey="properties.SIGLA",
-            colorscale=[[0, "rgba(241,245,249,0.45)"], [1, "rgba(226,232,240,0.60)"]],
-            marker_line_color="rgba(71,85,105,0.70)",
-            marker_line_width=0.65,
+            colorscale=[[0, "rgba(248,250,252,0.96)"], [1, "rgba(226,232,240,0.96)"]],
+            marker_line_color="rgba(51,65,85,0.82)",
+            marker_line_width=0.72,
             showscale=False,
             showlegend=False,
             customdata=uf_estados,
             hovertemplate="<b>%{customdata}</b><br>UF: %{location}<extra></extra>",
-            name="Estados",
+            name="Estados brasileiros",
         ))
 
-    # Marcadores discretos de cidades para dar contexto local.
+    # Uma única camada de localidades evita duplicidade de nomes no mapa.
     fig.add_trace(go.Scattergeo(
         lon=df["Longitude"], lat=df["Latitude"], mode="markers+text",
-        text=df["Cidade"], textposition="bottom center",
-        marker=dict(size=6, color="rgba(15,23,42,0.60)", line=dict(width=1, color="#ffffff")),
-        textfont=dict(size=10, color="#334155"),
-        hoverinfo="skip", showlegend=False,
-        name="Cidades",
-    ))
-
-    fig.add_trace(go.Scattergeo(
-        lon=df["Longitude"], lat=df["Latitude"], mode="markers+text",
-        text=df["Site"], textposition="top center",
+        text=df["Rótulo mapa"], textposition="top center",
         marker=dict(
             size=(df["Tamanho da bolha"] / max(df["Tamanho da bolha"].max(), 1) * 44 + 12),
             color=df["Valor selecionado"], colorscale="YlOrRd", showscale=True,
             colorbar=dict(title=unidade), opacity=0.90,
-            line=dict(width=1.6, color="#ffffff")
+            line=dict(width=1.7, color="#ffffff")
         ),
+        textfont=dict(size=10, color="#0f172a"),
         customdata=df[["Site", "Cidade/UF", "Grupo", "Valor formatado", "Unidade"]].values,
         hovertemplate="<b>%{customdata[4]}</b><br>Site: %{customdata[0]}<br>Local: %{customdata[1]}<br>Grupo: %{customdata[2]}<br>Valor: %{customdata[3]} " + unidade + "<extra></extra>",
         showlegend=False,
@@ -1144,18 +1138,14 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
 
     fig.update_geos(
         projection_type="mercator",
-        showland=True,
-        landcolor="#f8fafc",
+        showland=False,
         showocean=True,
         oceancolor="#e0f2fe",
-        showcountries=True,
-        countrycolor="#334155",
-        countrywidth=1.1,
+        showcountries=False,
         showsubunits=False,
         showframe=False,
-        showcoastlines=True,
-        coastlinecolor="#64748b",
-        coastlinewidth=1.0,
+        showcoastlines=False,
+        bgcolor="#e0f2fe",
         lataxis_range=[-35, 6],
         lonaxis_range=[-75, -33],
     )
@@ -1168,9 +1158,9 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
         plot_bgcolor="#ffffff",
     )
     fig.add_annotation(
-        text="Contornos estaduais em GeoJSON otimizado; bolhas proporcionais à métrica selecionada.",
+        text="Mapa baseado somente no GeoJSON otimizado dos estados; bolhas proporcionais à métrica selecionada.",
         x=0.01, y=0.02, xref="paper", yref="paper", showarrow=False,
-        bgcolor="rgba(255,255,255,0.88)", bordercolor="#cbd5e1", borderwidth=1,
+        bgcolor="rgba(255,255,255,0.90)", bordercolor="#cbd5e1", borderwidth=1,
         font=dict(size=10, color="#334155"),
     )
     if usar_irec and "I-REC" in metrica_label:
