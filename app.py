@@ -1071,18 +1071,23 @@ def energia_mapa_sites_df(r12_site):
         })
     return pd.DataFrame(rows)
 
-def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
-    """Cria mapa executivo do Brasil com limites estaduais e bolhas por unidade.
+def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True, titulo=None, ufs=None, lat_range=None, lon_range=None, height=520):
+    """Cria mapa executivo regional com limites estaduais e bolhas por localidade.
 
     O mapa usa somente o GeoJSON otimizado dos estados brasileiros para a malha
     territorial. As camadas nativas de contorno de países/costa/subunidades ficam
-    desligadas para evitar sobreposição visual de linhas. As unidades produtivas
-    aparecem como uma única camada de bolhas, com apenas um rótulo por localidade.
+    desligadas para evitar sobreposição visual de linhas. A camada de pontos exibe
+    apenas a localidade no rótulo visível, sem repetir o código do site.
     """
     if map_df is None or map_df.empty:
         return None
     metric_col, unidade = ENERGIA_MAP_METRICAS.get(metrica_label, ("consumo_total_kwh", "kWh"))
     df = map_df.copy()
+    if ufs:
+        ufs_set = {str(x).upper() for x in ufs}
+        df = df[df["Cidade/UF"].astype(str).str.split("/").str[-1].str.upper().isin(ufs_set)].copy()
+    if df.empty:
+        return None
     if metric_col not in df.columns:
         df[metric_col] = 0
     df["Valor selecionado"] = pd.to_numeric(df[metric_col], errors="coerce").fillna(0)
@@ -1094,13 +1099,17 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
         df["Tamanho da bolha"] = 1
     df["Valor formatado"] = df["Valor selecionado"].apply(lambda x: energia_fmt_val(x, "money" if unidade == "BRL" else "numero"))
     df["Cidade"] = df["Cidade/UF"].astype(str).str.split("/").str[0]
-    df["Rótulo mapa"] = df.apply(lambda r: f"{r['Site']}<br>{r['Cidade']}", axis=1)
+    df["Rótulo mapa"] = df["Cidade"]
 
     fig = go.Figure()
 
     # Malha única do mapa: apenas GeoJSON dos estados brasileiros.
     uf_geojson = energia_br_states_geojson()
     uf_features = uf_geojson.get("features", []) if isinstance(uf_geojson, dict) else []
+    if ufs:
+        ufs_set = {str(x).upper() for x in ufs}
+        uf_features = [f for f in uf_features if str(f.get("properties", {}).get("SIGLA", f.get("id"))).upper() in ufs_set]
+        uf_geojson = {"type": "FeatureCollection", "features": uf_features}
     if uf_features:
         uf_locations = [f.get("properties", {}).get("SIGLA", f.get("id")) for f in uf_features]
         uf_estados = [f.get("properties", {}).get("Estado", f.get("id")) for f in uf_features]
@@ -1109,9 +1118,9 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
             locations=uf_locations,
             z=[1] * len(uf_locations),
             featureidkey="properties.SIGLA",
-            colorscale=[[0, "rgba(248,250,252,0.96)"], [1, "rgba(226,232,240,0.96)"]],
-            marker_line_color="rgba(51,65,85,0.82)",
-            marker_line_width=0.72,
+            colorscale=[[0, "rgba(248,250,252,0.98)"], [1, "rgba(226,232,240,0.98)"]],
+            marker_line_color="rgba(51,65,85,0.86)",
+            marker_line_width=0.90,
             showscale=False,
             showlegend=False,
             customdata=uf_estados,
@@ -1124,16 +1133,16 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
         lon=df["Longitude"], lat=df["Latitude"], mode="markers+text",
         text=df["Rótulo mapa"], textposition="top center",
         marker=dict(
-            size=(df["Tamanho da bolha"] / max(df["Tamanho da bolha"].max(), 1) * 44 + 12),
+            size=(df["Tamanho da bolha"] / max(df["Tamanho da bolha"].max(), 1) * 42 + 13),
             color=df["Valor selecionado"], colorscale="YlOrRd", showscale=True,
-            colorbar=dict(title=unidade), opacity=0.90,
+            colorbar=dict(title=unidade, len=0.72, thickness=12), opacity=0.91,
             line=dict(width=1.7, color="#ffffff")
         ),
         textfont=dict(size=10, color="#0f172a"),
-        customdata=df[["Site", "Cidade/UF", "Grupo", "Valor formatado", "Unidade"]].values,
-        hovertemplate="<b>%{customdata[4]}</b><br>Site: %{customdata[0]}<br>Local: %{customdata[1]}<br>Grupo: %{customdata[2]}<br>Valor: %{customdata[3]} " + unidade + "<extra></extra>",
+        customdata=df[["Cidade/UF", "Grupo", "Valor formatado", "Unidade"]].values,
+        hovertemplate="<b>%{customdata[3]}</b><br>Local: %{customdata[0]}<br>Grupo: %{customdata[1]}<br>Valor: %{customdata[2]} " + unidade + "<extra></extra>",
         showlegend=False,
-        name="Unidades produtivas",
+        name="Localidades",
     ))
 
     fig.update_geos(
@@ -1146,29 +1155,23 @@ def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True):
         showframe=False,
         showcoastlines=False,
         bgcolor="#e0f2fe",
-        lataxis_range=[-35, 6],
-        lonaxis_range=[-75, -33],
+        lataxis_range=lat_range if lat_range else [-35, 6],
+        lonaxis_range=lon_range if lon_range else [-75, -33],
     )
     fig.update_layout(
         template="plotly_white",
-        height=610,
-        margin=dict(l=0, r=0, t=62, b=0),
-        title=dict(text=f"Mapa Brasil — {metrica_label}", x=0.02, xanchor="left"),
+        height=height,
+        margin=dict(l=0, r=0, t=58, b=0),
+        title=dict(text=titulo or f"Mapa — {metrica_label}", x=0.02, xanchor="left"),
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
     )
-    fig.add_annotation(
-        text="Mapa baseado somente no GeoJSON otimizado dos estados; bolhas proporcionais à métrica selecionada.",
-        x=0.01, y=0.02, xref="paper", yref="paper", showarrow=False,
-        bgcolor="rgba(255,255,255,0.90)", bordercolor="#cbd5e1", borderwidth=1,
-        font=dict(size=10, color="#334155"),
-    )
     if usar_irec and "I-REC" in metrica_label:
         fig.add_annotation(
-            text="I-REC considerado conforme data configurada nos parâmetros.",
-            x=0.01, y=0.08, xref="paper", yref="paper", showarrow=False,
+            text="I-REC considerado conforme data configurada.",
+            x=0.01, y=0.02, xref="paper", yref="paper", showarrow=False,
             bgcolor="rgba(236,253,245,0.92)", bordercolor="#16a34a", borderwidth=1,
-            font=dict(size=11, color="#166534"),
+            font=dict(size=10, color="#166534"),
         )
     return fig
 
@@ -5860,40 +5863,67 @@ def energia_dashboard(db,u):
     map_df = energia_mapa_sites_df(r12_site)
 
     section("Mapa geográfico e visão executiva")
-    st.caption("As bolhas mostram a distribuição local por unidade produtiva no Brasil. Para evitar distorções visuais, o mapa usa a base geográfica nativa do Plotly e destaca cidades/unidades com rótulos e ranking executivo.")
-    mapa_col, resumo_col = st.columns([2.25, 1])
-    with mapa_col:
-        metrica_mapa = st.selectbox(
-            "Métrica do mapa",
-            list(ENERGIA_MAP_METRICAS.keys()),
-            index=list(ENERGIA_MAP_METRICAS.keys()).index("Emissões CO₂ R12 com I-REC") if usar_irec else list(ENERGIA_MAP_METRICAS.keys()).index("Emissões CO₂ R12"),
-            key="energia_mapa_metrica",
+    st.caption("Visualização regional com dois mapas: São Paulo, onde estão cinco unidades, e Rio Grande do Sul, onde está Cachoeirinha. Os rótulos mostram somente a localidade.")
+    metrica_mapa = st.selectbox(
+        "Métrica do mapa",
+        list(ENERGIA_MAP_METRICAS.keys()),
+        index=list(ENERGIA_MAP_METRICAS.keys()).index("Emissões CO₂ R12 com I-REC") if usar_irec else list(ENERGIA_MAP_METRICAS.keys()).index("Emissões CO₂ R12"),
+        key="energia_mapa_metrica",
+    )
+    mapa_sp_col, mapa_rs_col = st.columns([1.45, 1])
+    with mapa_sp_col:
+        fig_mapa_sp = energia_mapa_brasil_fig(
+            map_df,
+            metrica_mapa,
+            usar_irec,
+            titulo=f"São Paulo — {metrica_mapa}",
+            ufs=["SP"],
+            lat_range=[-24.15, -22.55],
+            lon_range=[-47.25, -45.45],
+            height=525,
         )
-        fig_mapa = energia_mapa_brasil_fig(map_df, metrica_mapa, usar_irec)
-        if fig_mapa is not None:
-            st.plotly_chart(fig_mapa, use_container_width=True)
+        if fig_mapa_sp is not None:
+            st.plotly_chart(fig_mapa_sp, use_container_width=True)
         else:
-            empty_state("Sem coordenadas ou dados suficientes para gerar o mapa geográfico.")
-    with resumo_col:
-        if not map_df.empty:
-            map_col, map_unit = ENERGIA_MAP_METRICAS.get(st.session_state.get("energia_mapa_metrica", "Consumo total R12"), ("consumo_total_kwh", "kWh"))
-            ranking_map = map_df.sort_values(map_col, ascending=(map_col == "eficiencia_energetica")).copy()
-            maior = ranking_map.iloc[0] if map_col == "eficiencia_energetica" else ranking_map.sort_values(map_col, ascending=False).iloc[0]
-            menor = ranking_map.iloc[0] if map_col != "eficiencia_energetica" else ranking_map.sort_values(map_col, ascending=False).iloc[0]
-            kpi_card("Maior contribuição", maior["Site"], f"{energia_fmt_val(maior[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
-            kpi_card("Menor contribuição", menor["Site"], f"{energia_fmt_val(menor[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
-            ranking_cols = ["Unidade", "Cidade/UF", map_col]
-            ranking_show = ranking_map[ranking_cols].rename(columns={map_col: st.session_state.get("energia_mapa_metrica", "Métrica")}).head(6)
-            metrica_nome = st.session_state.get("energia_mapa_metrica", "Métrica")
-            ranking_show = energia_formatar_tabela_visual(
-                ranking_show,
-                money_cols=[metrica_nome] if map_unit == "BRL" else [],
-                integer_cols=[metrica_nome] if map_unit in ["kWh", "tCO₂e"] else [],
-                decimal_cols=[metrica_nome] if map_unit not in ["BRL", "kWh", "tCO₂e"] else [],
-            )
-            st.dataframe(ranking_show, use_container_width=True, hide_index=True)
+            empty_state("Sem dados suficientes para o mapa de São Paulo.")
+    with mapa_rs_col:
+        fig_mapa_rs = energia_mapa_brasil_fig(
+            map_df,
+            metrica_mapa,
+            usar_irec,
+            titulo=f"Rio Grande do Sul — {metrica_mapa}",
+            ufs=["RS"],
+            lat_range=[-30.45, -29.45],
+            lon_range=[-51.65, -50.55],
+            height=525,
+        )
+        if fig_mapa_rs is not None:
+            st.plotly_chart(fig_mapa_rs, use_container_width=True)
         else:
-            empty_state("Sem dados para ranking geográfico.")
+            empty_state("Sem dados suficientes para o mapa do Rio Grande do Sul.")
+
+    if not map_df.empty:
+        map_col, map_unit = ENERGIA_MAP_METRICAS.get(st.session_state.get("energia_mapa_metrica", "Consumo total R12"), ("consumo_total_kwh", "kWh"))
+        ranking_map = map_df.sort_values(map_col, ascending=(map_col == "eficiencia_energetica")).copy()
+        maior = ranking_map.iloc[0] if map_col == "eficiencia_energetica" else ranking_map.sort_values(map_col, ascending=False).iloc[0]
+        menor = ranking_map.iloc[0] if map_col != "eficiencia_energetica" else ranking_map.sort_values(map_col, ascending=False).iloc[0]
+        r1, r2 = st.columns(2)
+        with r1:
+            kpi_card("Maior contribuição", maior["Cidade/UF"], f"{energia_fmt_val(maior[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
+        with r2:
+            kpi_card("Menor contribuição", menor["Cidade/UF"], f"{energia_fmt_val(menor[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
+        ranking_cols = ["Unidade", "Cidade/UF", map_col]
+        ranking_show = ranking_map[ranking_cols].rename(columns={map_col: st.session_state.get("energia_mapa_metrica", "Métrica")}).head(6)
+        metrica_nome = st.session_state.get("energia_mapa_metrica", "Métrica")
+        ranking_show = energia_formatar_tabela_visual(
+            ranking_show,
+            money_cols=[metrica_nome] if map_unit == "BRL" else [],
+            integer_cols=[metrica_nome] if map_unit in ["kWh", "tCO₂e"] else [],
+            decimal_cols=[metrica_nome] if map_unit not in ["BRL", "kWh", "tCO₂e"] else [],
+        )
+        st.dataframe(ranking_show, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Sem dados para ranking geográfico.")
 
     abas_dash = st.tabs(["Tendências mensais", "Ranking R12", "Metas", "Exportação"])
     with abas_dash[0]:
