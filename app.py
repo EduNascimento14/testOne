@@ -1005,8 +1005,7 @@ def energia_bar_sem_decimal(fig):
     fig.update_layout(uniformtext_minsize=8, uniformtext_mode="hide")
     return fig
 
-def energia_mapa_sites_df(r12_site):
-    """Monta a base geográfica por site para o mapa executivo de energia e emissões."""
+def energia_localidades_df(r12_site):
     if r12_site is None or r12_site.empty:
         return pd.DataFrame()
     rows = []
@@ -1038,172 +1037,97 @@ def energia_mapa_sites_df(r12_site):
         })
     return pd.DataFrame(rows)
 
-def energia_mapa_brasil_fig(map_df, metrica_label, usar_irec=True, titulo=None, ufs=None, lat_range=None, lon_range=None, height=520):
-    if map_df is None or map_df.empty:
+def energia_ranking_localidades_fig(local_df, metrica_label, comparar_df=None, usar_irec=True, titulo=None, height=430):
+    if local_df is None or local_df.empty:
         return None
     metric_col, unidade = ENERGIA_MAP_METRICAS.get(metrica_label, ("consumo_total_kwh", "kWh"))
-    df = map_df.copy()
-    if ufs:
-        ufs_set = {str(x).upper() for x in ufs}
-        df = df[df["Cidade/UF"].astype(str).str.split("/").str[-1].str.upper().isin(ufs_set)].copy()
-    if df.empty:
-        return None
+    df = local_df.copy()
     if metric_col not in df.columns:
         df[metric_col] = 0
-    df["Valor selecionado"] = pd.to_numeric(df[metric_col], errors="coerce").fillna(0)
-    df["Tamanho da bolha"] = df["Valor selecionado"].abs()
-    if metrica_label == "Eficiência energética R12":
-        df["Tamanho da bolha"] = pd.to_numeric(df["consumo_total_kwh"], errors="coerce").fillna(0).abs()
-    if float(df["Tamanho da bolha"].max() or 0) <= 0:
-        df["Tamanho da bolha"] = 1
-    df["Valor formatado"] = df["Valor selecionado"].apply(lambda x: energia_fmt_val(x, "money" if unidade == "BRL" else "numero"))
-    df["Cidade"] = df["Cidade/UF"].astype(str).str.split("/").str[0]
-    df["Rótulo mapa"] = df["Cidade"]
+    df["Localidade"] = df["Cidade/UF"].astype(str).str.split("/").str[0]
+    df["Valor R12"] = pd.to_numeric(df[metric_col], errors="coerce").fillna(0)
+    menor_melhor = metric_col == "eficiencia_energetica"
+    df = df.sort_values("Valor R12", ascending=menor_melhor).copy()
+
+    if comparar_df is not None and not comparar_df.empty:
+        comp = comparar_df.copy()
+        if metric_col not in comp.columns:
+            comp[metric_col] = 0
+        comp["Valor FY anterior"] = pd.to_numeric(comp[metric_col], errors="coerce").fillna(0)
+        df = df.merge(comp[["Site", "Valor FY anterior"]], on="Site", how="left")
+    else:
+        df["Valor FY anterior"] = None
+
+    df["Variação %"] = df.apply(
+        lambda r: energia_pct_change(r["Valor R12"], r["Valor FY anterior"]) if pd.notna(r.get("Valor FY anterior")) else None,
+        axis=1,
+    )
+    fmt_tipo = "money" if unidade == "BRL" else "numero"
+    df["Valor formatado"] = df["Valor R12"].apply(lambda x: energia_fmt_val(x, fmt_tipo))
+    df["FY anterior formatado"] = df["Valor FY anterior"].apply(lambda x: energia_fmt_val(x, fmt_tipo) if pd.notna(x) else "—")
+    df["Variação formatada"] = df["Variação %"].apply(lambda x: energia_fmt_val(x, "percent") if pd.notna(x) else "—")
 
     fig = go.Figure()
-
-    uf_geojson = energia_br_states_geojson()
-    uf_features = uf_geojson.get("features", []) if isinstance(uf_geojson, dict) else []
-    if ufs:
-        ufs_set = {str(x).upper() for x in ufs}
-        uf_features = [f for f in uf_features if str(f.get("properties", {}).get("SIGLA", f.get("id"))).upper() in ufs_set]
-        uf_geojson = {"type": "FeatureCollection", "features": uf_features}
-    if uf_features:
-        uf_locations = [f.get("properties", {}).get("SIGLA", f.get("id")) for f in uf_features]
-        uf_estados = [f.get("properties", {}).get("Estado", f.get("id")) for f in uf_features]
-        fig.add_trace(go.Choropleth(
-            geojson=uf_geojson,
-            locations=uf_locations,
-            z=[1] * len(uf_locations),
-            featureidkey="properties.SIGLA",
-            colorscale=[[0, "rgba(248,250,252,0.98)"], [1, "rgba(226,232,240,0.98)"]],
-            marker_line_color="rgba(51,65,85,0.86)",
-            marker_line_width=0.90,
-            showscale=False,
-            showlegend=False,
-            customdata=uf_estados,
-            hovertemplate="<b>%{customdata}</b><br>UF: %{location}<extra></extra>",
-            name="Estados brasileiros",
-        ))
-
-    fig.add_trace(go.Scattergeo(
-        lon=df["Longitude"], lat=df["Latitude"], mode="markers+text",
-        text=df["Rótulo mapa"], textposition="top center",
-        marker=dict(
-            size=(df["Tamanho da bolha"] / max(df["Tamanho da bolha"].max(), 1) * 42 + 13),
-            color=df["Valor selecionado"], colorscale="YlOrRd", showscale=True,
-            colorbar=dict(title=unidade, len=0.72, thickness=12), opacity=0.91,
-            line=dict(width=1.7, color="#ffffff")
-        ),
-        textfont=dict(size=10, color="#0f172a"),
-        customdata=df[["Cidade/UF", "Grupo", "Valor formatado", "Unidade"]].values,
-        hovertemplate="<b>%{customdata[3]}</b><br>Local: %{customdata[0]}<br>Grupo: %{customdata[1]}<br>Valor: %{customdata[2]} " + unidade + "<extra></extra>",
-        showlegend=False,
-        name="Localidades",
+    fig.add_trace(go.Bar(
+        x=df["Valor R12"],
+        y=df["Localidade"],
+        orientation="h",
+        name="R12 atual",
+        text=df["Valor formatado"],
+        textposition="outside",
+        marker=dict(color="#1d4ed8", line=dict(color="#ffffff", width=1)),
+        customdata=df[["Grupo", "Cidade/UF", "Valor formatado", "Variação formatada"]].values,
+        hovertemplate="<b>%{y}</b><br>Grupo: %{customdata[0]}<br>Local: %{customdata[1]}<br>R12 atual: %{customdata[2]} " + unidade + "<br>Variação vs FY anterior: %{customdata[3]}<extra></extra>",
     ))
 
-    fig.update_geos(
-        projection_type="mercator",
-        showland=False,
-        showocean=True,
-        oceancolor="#e0f2fe",
-        showcountries=False,
-        showsubunits=False,
-        showframe=False,
-        showcoastlines=False,
-        bgcolor="#e0f2fe",
-        lataxis_range=lat_range if lat_range else [-35, 6],
-        lonaxis_range=lon_range if lon_range else [-75, -33],
-    )
+    if df["Valor FY anterior"].notna().any() and float(pd.to_numeric(df["Valor FY anterior"], errors="coerce").fillna(0).abs().sum()) > 0:
+        fig.add_trace(go.Scatter(
+            x=df["Valor FY anterior"],
+            y=df["Localidade"],
+            mode="markers",
+            name="FY anterior",
+            marker=dict(symbol="diamond", size=12, color="#f59e0b", line=dict(color="#92400e", width=1)),
+            customdata=df[["FY anterior formatado"]].values,
+            hovertemplate="<b>%{y}</b><br>FY anterior: %{customdata[0]} " + unidade + "<extra></extra>",
+        ))
+
+    fig.update_yaxes(autorange="reversed", title=None)
+    fig.update_xaxes(title=unidade, showgrid=True, gridcolor="rgba(148,163,184,0.22)")
     fig.update_layout(
         template="plotly_white",
         height=height,
-        margin=dict(l=0, r=0, t=58, b=0),
-        title=dict(text=titulo or f"Mapa — {metrica_label}", x=0.02, xanchor="left"),
+        margin=dict(l=8, r=32, t=62, b=24),
+        title=dict(text=titulo or f"Ranking por localidade — {metrica_label}", x=0.02, xanchor="left"),
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hoverlabel=dict(bgcolor="#ffffff", font_size=12, font_color="#0f172a"),
+        bargap=0.28,
+        uniformtext_minsize=9,
+        uniformtext_mode="hide",
     )
     if usar_irec and "I-REC" in metrica_label:
         fig.add_annotation(
-            text="I-REC considerado conforme data configurada.",
-            x=0.01, y=0.02, xref="paper", yref="paper", showarrow=False,
+            text="I-REC considerado",
+            x=0.01, y=-0.16, xref="paper", yref="paper", showarrow=False,
             bgcolor="rgba(236,253,245,0.92)", bordercolor="#16a34a", borderwidth=1,
             font=dict(size=10, color="#166534"),
         )
     return fig
 
-
-def energia_bolhas_localizacao_fig(map_df, metrica_label, usar_irec=True, titulo=None, height=560):
-    if map_df is None or map_df.empty:
-        return None
-    metric_col, unidade = ENERGIA_MAP_METRICAS.get(metrica_label, ("consumo_total_kwh", "kWh"))
-    df = map_df.copy()
-    if metric_col not in df.columns:
-        df[metric_col] = 0
-    df["Localidade"] = df["Cidade/UF"].astype(str).str.split("/").str[0]
-    df["UF"] = df["Cidade/UF"].astype(str).str.split("/").str[-1]
-    posicoes = {
-        "CAC": {"x": 1.0, "y": 3.05, "estado": "Rio Grande do Sul"},
-        "JUN": {"x": 3.0, "y": 3.28, "estado": "São Paulo"},
-        "PER": {"x": 3.9, "y": 3.05, "estado": "São Paulo"},
-        "DIA": {"x": 4.8, "y": 2.78, "estado": "São Paulo"},
-        "JAC": {"x": 5.7, "y": 3.08, "estado": "São Paulo"},
-        "SJC": {"x": 6.6, "y": 2.78, "estado": "São Paulo"},
-    }
-    df["x"] = df["Site"].map(lambda s: posicoes.get(str(s), {}).get("x"))
-    df["y"] = df["Site"].map(lambda s: posicoes.get(str(s), {}).get("y"))
-    df["Estado"] = df["Site"].map(lambda s: posicoes.get(str(s), {}).get("estado", ""))
-    df = df.dropna(subset=["x", "y"]).copy()
-    if df.empty:
-        return None
-    df["Valor selecionado"] = pd.to_numeric(df[metric_col], errors="coerce").fillna(0)
-    df["Base tamanho"] = df["Valor selecionado"].abs()
-    if metrica_label == "Eficiência energética R12":
-        df["Base tamanho"] = pd.to_numeric(df["consumo_total_kwh"], errors="coerce").fillna(0).abs()
-    max_size = float(df["Base tamanho"].max() or 0)
-    if max_size <= 0:
-        df["Tamanho"] = 32
-    else:
-        df["Tamanho"] = 24 + (df["Base tamanho"] / max_size) * 64
-    df["Valor formatado"] = df["Valor selecionado"].apply(lambda x: energia_fmt_val(x, "money" if unidade == "BRL" else "numero"))
-    df["Texto"] = df["Localidade"]
-
-    fig = go.Figure()
-    fig.add_shape(type="rect", x0=0.35, y0=2.48, x1=1.75, y1=3.58, line=dict(color="#94a3b8", width=1.2), fillcolor="rgba(226,232,240,0.45)", layer="below")
-    fig.add_shape(type="rect", x0=2.35, y0=2.48, x1=7.05, y1=3.58, line=dict(color="#94a3b8", width=1.2), fillcolor="rgba(219,234,254,0.42)", layer="below")
-    fig.add_annotation(x=1.05, y=3.50, text="Rio Grande do Sul", showarrow=False, font=dict(size=13, color="#334155"), bgcolor="rgba(255,255,255,0.65)", borderpad=4)
-    fig.add_annotation(x=4.70, y=3.50, text="São Paulo", showarrow=False, font=dict(size=13, color="#334155"), bgcolor="rgba(255,255,255,0.65)", borderpad=4)
-
-    fig.add_trace(go.Scatter(
-        x=df["x"], y=df["y"], mode="markers+text",
-        text=df["Texto"], textposition="top center",
-        marker=dict(
-            size=df["Tamanho"],
-            color=df["Valor selecionado"],
-            colorscale="YlOrRd",
-            showscale=True,
-            colorbar=dict(title=unidade, len=0.70, thickness=12),
-            opacity=0.90,
-            line=dict(width=2.2, color="#ffffff"),
-            sizemode="diameter",
-        ),
-        textfont=dict(size=12, color="#0f172a"),
-        customdata=df[["Localidade", "UF", "Grupo", "Valor formatado", "Unidade", "Estado"]].values,
-        hovertemplate="<b>%{customdata[0]}</b><br>Estado: %{customdata[5]}<br>Grupo: %{customdata[2]}<br>Valor: %{customdata[3]} " + unidade + "<extra></extra>",
-        showlegend=False,
-    ))
-    fig.update_xaxes(visible=False, range=[0.10, 7.35], fixedrange=True)
-    fig.update_yaxes(visible=False, range=[2.35, 3.70], fixedrange=True)
-    fig.update_layout(
-        template="plotly_white",
-        height=height,
-        margin=dict(l=8, r=8, t=62, b=8),
-        title=dict(text=titulo or f"Localidades — {metrica_label}", x=0.02, xanchor="left"),
-        paper_bgcolor="#ffffff",
-        plot_bgcolor="#ffffff",
-        hoverlabel=dict(bgcolor="#ffffff", font_size=12, font_color="#0f172a"),
-    )
-    return fig
+def energia_agregar_site_periodo(df_scope, data_ini, data_fim):
+    if df_scope is None or df_scope.empty or data_ini is None or data_fim is None:
+        return pd.DataFrame()
+    periodo = df_scope[(pd.to_datetime(df_scope["Mês"]) >= pd.to_datetime(data_ini)) & (pd.to_datetime(df_scope["Mês"]) <= pd.to_datetime(data_fim))].copy()
+    if periodo.empty:
+        return pd.DataFrame()
+    resumo = periodo.groupby("Site", as_index=False).agg({
+        "consumo_eletrico_kwh":"sum", "consumo_gas_kwh":"sum", "consumo_total_kwh":"sum",
+        "emissao_total_tco2e":"sum", "emissao_total_com_irec_tco2e":"sum",
+        "custo_total_brl":"sum", "actual_hours":"sum"
+    })
+    resumo["eficiencia_energetica"] = resumo.apply(lambda r: r["consumo_total_kwh"] / r["actual_hours"] if r["actual_hours"] else None, axis=1)
+    return resumo
 
 def energia_tendencia_metas(df_scope, usar_irec=False, db=None, limite_mes=None):
     """Gera séries mensais R12 de emissões e eficiência comparadas contra a meta.
@@ -3077,8 +3001,8 @@ ENERGIA_LINHAS_EXECUTIVAS = [
     ("Brasil", ["CAC", "JAC", "JUN", "PER", "SJC", "DIA"], True),
 ]
 ENERGIA_DEFAULT_PARAMS = {
-    "fator_emissao_eletricidade_kgco2_kwh": ("0", "Legado: não utilizado no cálculo. As emissões de energia elétrica são importadas da planilha EMISSOES."),
-    "fator_emissao_gas_kgco2_kwh": ("0", "Legado: não utilizado no cálculo. As emissões de gás natural são importadas da planilha EMISSOES."),
+    "fator_emissao_eletricidade_kgco2_kwh": ("0", "Parâmetro mantido para compatibilidade histórica."),
+    "fator_emissao_gas_kgco2_kwh": ("0", "Parâmetro mantido para compatibilidade histórica."),
     "meta_reducao_co2_percentual": ("5", "Meta percentual de redução para emissões de CO₂."),
     "meta_reducao_eficiencia_percentual": ("5", "Meta percentual de redução para taxa de eficiência energética."),
     "conversao_mmbtu_kwh": ("293.071", "Conversão de MMBtu para kWh, usada somente para converter consumo de gás para eficiência energética."),
@@ -3111,16 +3035,6 @@ ENERGIA_SITE_COORDS = {
     "SJC": {"latitude": -23.2237, "longitude": -45.9009, "cidade": "São José dos Campos", "uf": "SP"},
     "DIA": {"latitude": -23.6865, "longitude": -46.6234, "cidade": "Diadema", "uf": "SP"},
 }
-ENERGIA_BR_STATES_GEOJSON_B64 = ""
-
-@st.cache_data(show_spinner=False)
-def energia_br_states_geojson():
-    try:
-        return json.loads(zlib.decompress(base64.b64decode(ENERGIA_BR_STATES_GEOJSON_B64)).decode("utf-8"))
-    except Exception:
-        logging.exception("Falha ao carregar GeoJSON otimizado dos estados brasileiros")
-        return {"type": "FeatureCollection", "features": []}
-
 ENERGIA_MAP_METRICAS = {
     "Consumo elétrico R12": ("consumo_eletrico_kwh", "kWh"),
     "Consumo de gás natural R12": ("consumo_gas_kwh", "kWh"),
@@ -5433,39 +5347,53 @@ def energia_dashboard(db,u):
     }) if not r12.empty else pd.DataFrame()
     if not r12_site.empty:
         r12_site["eficiencia_energetica"] = r12_site.apply(lambda r: r["consumo_total_kwh"]/r["actual_hours"] if r["actual_hours"] else None, axis=1)
-    map_df = energia_mapa_sites_df(r12_site)
+    local_df = energia_localidades_df(r12_site)
 
-    section("Visão por localização")
-    metrica_mapa = st.selectbox(
-        "Métrica do gráfico de bolhas",
+    section("Ranking por localidade")
+    metrica_localidade = st.selectbox(
+        "Métrica do ranking",
         list(ENERGIA_MAP_METRICAS.keys()),
         index=list(ENERGIA_MAP_METRICAS.keys()).index("Emissões CO₂ R12 com I-REC") if usar_irec else list(ENERGIA_MAP_METRICAS.keys()).index("Emissões CO₂ R12"),
         key="energia_mapa_metrica",
     )
-    fig_bolhas = energia_bolhas_localizacao_fig(
-        map_df,
-        metrica_mapa,
-        usar_irec,
-        titulo=f"Localidades — {metrica_mapa}",
-        height=560,
-    )
-    if fig_bolhas is not None:
-        st.plotly_chart(fig_bolhas, use_container_width=True, config={"displayModeBar": False})
-    else:
-        empty_state("Sem dados suficientes para a visão por localização.")
 
-    if not map_df.empty:
+    base_scope = df.copy()
+    sites_sel = st.session_state.get("energia_dash_sites", [])
+    grupos_sel = st.session_state.get("energia_dash_grupos", [])
+    if sites_sel:
+        base_scope = base_scope[base_scope["Site"].isin(sites_sel)]
+    if grupos_sel and "LAG" not in grupos_sel:
+        base_scope = base_scope[base_scope["Grupo"].isin(grupos_sel)]
+    fy_ref = energia_fiscal_year(r12_mes) or int(energia_param_float(db, "fy_atual", 26)) + 2000
+    fy_anterior = int(str(fy_ref)[-2:]) - 1
+    base_ini, base_fim = energia_intervalo_fy(fy_anterior)
+    comparativo_df = energia_localidades_df(energia_agregar_site_periodo(base_scope, base_ini, base_fim))
+
+    fig_ranking_local = energia_ranking_localidades_fig(
+        local_df,
+        metrica_localidade,
+        comparativo_df,
+        usar_irec,
+        titulo=f"Ranking por localidade — {metrica_localidade}",
+        height=430,
+    )
+    if fig_ranking_local is not None:
+        st.plotly_chart(fig_ranking_local, use_container_width=True, config={"displayModeBar": False})
+    else:
+        empty_state("Sem dados suficientes para o ranking por localidade.")
+
+    if not local_df.empty:
         map_col, map_unit = ENERGIA_MAP_METRICAS.get(st.session_state.get("energia_mapa_metrica", "Consumo total R12"), ("consumo_total_kwh", "kWh"))
-        ranking_map = map_df.sort_values(map_col, ascending=(map_col == "eficiencia_energetica")).copy()
-        maior = ranking_map.iloc[0] if map_col == "eficiencia_energetica" else ranking_map.sort_values(map_col, ascending=False).iloc[0]
-        menor = ranking_map.iloc[0] if map_col != "eficiencia_energetica" else ranking_map.sort_values(map_col, ascending=False).iloc[0]
+        ranking_local = local_df.sort_values(map_col, ascending=(map_col == "eficiencia_energetica")).copy()
+        destaque_maior = ranking_local.iloc[0] if map_col == "eficiencia_energetica" else ranking_local.sort_values(map_col, ascending=False).iloc[0]
+        destaque_menor = ranking_local.iloc[0] if map_col != "eficiencia_energetica" else ranking_local.sort_values(map_col, ascending=False).iloc[0]
         r1, r2 = st.columns(2)
         with r1:
-            kpi_card("Maior contribuição", maior["Cidade/UF"], f"{energia_fmt_val(maior[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
+            kpi_card("Maior valor", destaque_maior["Cidade/UF"], f"{energia_fmt_val(destaque_maior[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
         with r2:
-            kpi_card("Menor contribuição", menor["Cidade/UF"], f"{energia_fmt_val(menor[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
+            kpi_card("Menor valor", destaque_menor["Cidade/UF"], f"{energia_fmt_val(destaque_menor[map_col], 'money' if map_unit == 'BRL' else 'numero')} {map_unit}")
         ranking_cols = ["Unidade", "Cidade/UF", map_col]
-        ranking_show = ranking_map[ranking_cols].rename(columns={map_col: st.session_state.get("energia_mapa_metrica", "Métrica")}).head(6)
+        ranking_show = ranking_local[ranking_cols].rename(columns={map_col: st.session_state.get("energia_mapa_metrica", "Métrica")}).head(6)
         metrica_nome = st.session_state.get("energia_mapa_metrica", "Métrica")
         ranking_show = energia_formatar_tabela_visual(
             ranking_show,
@@ -5475,7 +5403,7 @@ def energia_dashboard(db,u):
         )
         st.dataframe(ranking_show, use_container_width=True, hide_index=True)
     else:
-        empty_state("Sem dados para ranking geográfico.")
+        empty_state("Sem dados para ranking por localidade.")
 
     aba_dash = st.radio(
         "Seção do dashboard",
@@ -5563,7 +5491,7 @@ def energia_dashboard(db,u):
             "Consolidado_Filtrado": f,
             "KPIs": kpis,
             "Tabela_Executiva": tabela_exec.drop(columns=["_grupo"], errors="ignore"),
-            "Bolhas_Localizacao": map_df,
+            "Ranking_Localidades": local_df,
             "Base_Energia": energia_df_registros(db),
             "Base_Actual_Hours": energia_df_actual_hours(db),
             "Premissas": pd.DataFrame([{"Parâmetro": p.chave, "Valor": p.valor, "Descrição": p.descricao} for p in db.query(EnergiaParametro).all()]),
