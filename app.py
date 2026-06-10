@@ -194,9 +194,9 @@ NEARMISS_SUBMODULOS = {
 
 NEAR_MISS_META_FECHAMENTO_PRAZO = 95
 NEAR_MISS_ALERTA_FECHAMENTO_PRAZO = 85
-NEAR_MISS_STATUS_ORDER = ["Aberto em prazo", "Aberto vencido", "Fechado fora do prazo", "Fechado no prazo", "Aberto sem prazo"]
+NEAR_MISS_STATUS_ORDER = ["Aberto no prazo", "Aberto vencido", "Fechado fora do prazo", "Fechado no prazo", "Aberto sem prazo"]
 NEAR_MISS_STATUS_COLOR_MAP = {
-    "Aberto em prazo": "#fef3c7",
+    "Aberto no prazo": "#fef3c7",
     "Aberto vencido": "#7f1d1d",
     "Fechado fora do prazo": "#ef4444",
     "Fechado no prazo": "#16a34a",
@@ -5921,7 +5921,7 @@ def near_miss_status_prazo(row):
         return "Aberto sem prazo"
     if due < date.today():
         return "Aberto vencido"
-    return "Aberto em prazo"
+    return "Aberto no prazo"
 
 def near_miss_acompanhamento(row):
     stp = near_miss_status_prazo(row)
@@ -6065,6 +6065,32 @@ def near_miss_filtrar_df(df, periodo=None, sites=None, divisoes=None, tipos=None
         out=out[out["Concern Report?"]=="Near Miss"]
     return out
 
+def near_miss_fy_num(d):
+    d = pd.to_datetime(d, errors="coerce")
+    if pd.isna(d):
+        d = pd.Timestamp(date.today())
+    return int(d.year + 1 if d.month >= 7 else d.year)
+
+def near_miss_fy_label(ano_fy):
+    return f"FY{str(int(ano_fy))[-2:]}"
+
+def near_miss_fy_range(label):
+    yy = int(str(label).replace("FY", ""))
+    ano_fy = 2000 + yy if yy < 70 else 1900 + yy
+    return date(ano_fy - 1, 7, 1), date(ano_fy, 6, 30)
+
+def near_miss_fy_options(min_data, max_data):
+    ini = near_miss_fy_num(min_data)
+    fim = max(near_miss_fy_num(max_data), near_miss_fy_num(date.today()))
+    return [near_miss_fy_label(y) for y in range(fim, ini - 1, -1)]
+
+def near_miss_r12_range(max_data):
+    fim = pd.to_datetime(max_data, errors="coerce")
+    if pd.isna(fim):
+        fim = pd.Timestamp(date.today())
+    ini = fim - pd.DateOffset(months=12) + pd.DateOffset(days=1)
+    return ini.date(), fim.date()
+
 def near_miss_cor_taxa(valor):
     if valor >= NEAR_MISS_META_FECHAMENTO_PRAZO:
         return "#16a34a"
@@ -6072,7 +6098,7 @@ def near_miss_cor_taxa(valor):
         return "#facc15"
     return "#dc2626"
 
-def near_miss_taxa_site_df(df):
+def near_miss_taxa_site_df(df, incluir_lag=False):
     if df.empty or "Fechamento" not in df:
         return pd.DataFrame()
     rows=[]
@@ -6084,7 +6110,14 @@ def near_miss_taxa_site_df(df):
         rows.append({"Site":site,"Taxa no prazo %":taxa,"Fechados":total,"No prazo":no_prazo,"Cor":near_miss_cor_taxa(taxa)})
     if not rows:
         return pd.DataFrame()
-    return pd.DataFrame(rows).sort_values("Taxa no prazo %", ascending=True)
+    out=pd.DataFrame(rows).sort_values("Taxa no prazo %", ascending=True)
+    if incluir_lag and not fechados.empty:
+        total=len(fechados)
+        no_prazo=int((fechados["Status do prazo"]=="Fechado no prazo").sum())
+        taxa=round(no_prazo/total*100,1) if total else 0
+        lag=pd.DataFrame([{"Site":"LAG","Taxa no prazo %":taxa,"Fechados":total,"No prazo":no_prazo,"Cor":near_miss_cor_taxa(taxa)}])
+        out=pd.concat([out, lag], ignore_index=True)
+    return out
 
 def near_miss_taxa_divisao_df(df):
     if df.empty or "Fechamento" not in df or "Divisão" not in df:
@@ -6117,6 +6150,7 @@ def near_miss_fig_taxa_fechamento_site(tdf, titulo="Taxa de fechamento no prazo 
     fig=px.bar(tdf,x="Taxa no prazo %",y="Site",orientation="h",text="Taxa no prazo %",title=titulo, custom_data=["Fechados","No prazo"])
     fig.update_traces(texttemplate="%{text:.1f}%",textposition="outside", marker_color=tdf["Cor"].tolist(), hovertemplate="%{y}<br>Taxa no prazo: %{x:.1f}%<br>Fechados: %{customdata[0]}<br>No prazo: %{customdata[1]}<extra></extra>")
     fig.add_vline(x=NEAR_MISS_META_FECHAMENTO_PRAZO, line_dash="dash", line_color="#16a34a", annotation_text="Meta > 95%", annotation_position="top")
+    fig.update_yaxes(categoryorder="array", categoryarray=tdf["Site"].tolist())
     fig.update_layout(height=altura,xaxis_range=[0,105],margin=dict(l=10,r=50,t=50,b=10),showlegend=False)
     return fig
 
@@ -6219,10 +6253,11 @@ def near_miss_dashboard(db,u):
         return
     min_data=df["Data"].dropna().min().date() if df["Data"].notna().any() else date.today()-timedelta(days=365)
     max_data=df["Data"].dropna().max().date() if df["Data"].notna().any() else date.today()
+    opcoes_periodo=["R12 (últimos 12 meses)"] + near_miss_fy_options(min_data, max_data) + ["Personalizado"]
     with st.expander("Filtros", expanded=True):
         c1,c2,c3,c4=st.columns(4)
         with c1:
-            periodo=st.date_input("Período", value=(min_data,max_data), key="nm_periodo")
+            modo_periodo=st.selectbox("Período de análise", opcoes_periodo, index=0, key="nm_modo_periodo")
         with c2:
             sites=st.multiselect("Site", sorted(df["Site código"].dropna().unique()), default=sorted(df["Site código"].dropna().unique()), key="nm_sites")
         with c3:
@@ -6234,7 +6269,14 @@ def near_miss_dashboard(db,u):
             divisoes=st.multiselect("Divisão", sorted(df["Divisão"].dropna().unique()), key="nm_divisoes")
         with c6:
             somente_nearmiss=st.toggle("Mostrar somente tipo Near Miss", value=False, key="nm_only")
-    periodo_tuple = periodo if isinstance(periodo, tuple) and len(periodo)==2 else (min_data,max_data)
+        if modo_periodo == "R12 (últimos 12 meses)":
+            periodo_tuple = near_miss_r12_range(max_data)
+        elif modo_periodo == "Personalizado":
+            periodo=st.date_input("Período personalizado", value=(min_data,max_data), key="nm_periodo_custom")
+            periodo_tuple = periodo if isinstance(periodo, tuple) and len(periodo)==2 else (min_data,max_data)
+        else:
+            periodo_tuple = near_miss_fy_range(modo_periodo)
+        st.caption(f"Período aplicado: {periodo_tuple[0].strftime('%d/%m/%Y')} a {periodo_tuple[1].strftime('%d/%m/%Y')}")
     fdf=near_miss_filtrar_df(df, periodo_tuple, sites, divisoes, tipos, status_prazo, somente_nearmiss)
     total=len(fdf)
     fechados=fdf[fdf["Fechamento"].notna()]
@@ -6250,7 +6292,7 @@ def near_miss_dashboard(db,u):
     tabs=st.tabs(["Resumo", "Prazos", "Insights", "Tendência", "Detalhamento"])
     with tabs[0]:
         section("Resumo executivo")
-        tdf_resumo=near_miss_taxa_site_df(fdf)
+        tdf_resumo=near_miss_taxa_site_df(fdf, incluir_lag=True)
         c1,c2=st.columns(2)
         with c1:
             fig=near_miss_fig_taxa_fechamento_site(tdf_resumo, altura=390)
@@ -6340,11 +6382,11 @@ def near_miss_dashboard(db,u):
                 fig.update_layout(height=380, margin=dict(l=10,r=30,t=50,b=10), showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
         with c4:
-            top_open = abertos_base.sort_values("Dias em aberto", ascending=True).tail(10) if not abertos_base.empty and "Dias em aberto" in abertos_base else pd.DataFrame()
-            if not top_open.empty:
-                fig = px.bar(top_open, x="Dias em aberto", y="Descrição", orientation="h", color="Status do prazo", text="Dias em aberto", title="Itens abertos há mais tempo", color_discrete_map=NEAR_MISS_STATUS_COLOR_MAP, category_orders={"Status do prazo": NEAR_MISS_STATUS_ORDER})
-                fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
-                fig.update_layout(height=380, margin=dict(l=10,r=30,t=50,b=10), showlegend=True, yaxis_title="")
+            top_hazard = fdf.groupby("Hazard Type", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
+            if not top_hazard.empty:
+                fig = px.bar(top_hazard, x="Quantidade", y="Hazard Type", orientation="h", text="Quantidade", title="Top hazards por volume")
+                fig.update_traces(texttemplate="%{text:.0f}", textposition="outside", marker_color="#7c3aed")
+                fig.update_layout(height=380, margin=dict(l=10,r=30,t=50,b=10), showlegend=False, yaxis_title="")
                 st.plotly_chart(fig, use_container_width=True)
     with tabs[3]:
         mensal=fdf.dropna(subset=["Mês"]).groupby("Mês").size().reset_index(name="Quantidade")
