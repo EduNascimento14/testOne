@@ -239,8 +239,19 @@ def gerar_excel_download(base_final: pd.DataFrame, log_df: pd.DataFrame) -> byte
             for col_idx, col_name in enumerate(df.columns):
                 worksheet.write(0, col_idx, col_name, formato_titulo)
 
-                amostra = df[col_name].astype(str).head(500).tolist() if not df.empty else []
-                largura = max([len(str(col_name))] + [len(x) for x in amostra]) + 2
+                # Ajuste robusto de largura: trata números, datas, NaN/NA e qualquer objeto
+                # sem depender de len() diretamente no valor original.
+                if not df.empty:
+                    serie_coluna = df.iloc[:, col_idx]
+                    amostra = serie_coluna.head(500).map(
+                        lambda valor: "" if pd.isna(valor) else str(valor)
+                    ).tolist()
+                else:
+                    amostra = []
+
+                tamanhos = [len(str(col_name))]
+                tamanhos.extend(len(str(valor)) for valor in amostra)
+                largura = max(tamanhos) + 2
                 largura = min(max(largura, 10), 45)
                 worksheet.set_column(col_idx, col_idx, largura, formato_texto)
 
