@@ -178,6 +178,12 @@ NEARMISS_SUBMODULOS = {
         "cor": "#2563eb",
         "paginas": ["Atualizar Base Near Miss"],
     },
+    "Gestão de Pendências": {
+        "icone": "🚦",
+        "descricao": "Central operacional para acompanhar reports vencidos, próximos do prazo e previstos para vencer no mês.",
+        "cor": "#dc2626",
+        "paginas": ["Central de Pendências Near Miss"],
+    },
     "Análise e Relatórios": {
         "icone": "🔎",
         "descricao": "Consulta da base consolidada, itens em acompanhamento e exportações.",
@@ -187,6 +193,7 @@ NEARMISS_SUBMODULOS = {
 }
 
 NEAR_MISS_META_FECHAMENTO_PRAZO = 95
+NEAR_MISS_ALERTA_FECHAMENTO_PRAZO = 85
 NEAR_MISS_STATUS_ORDER = ["Aberto em prazo", "Aberto vencido", "Fechado fora do prazo", "Fechado no prazo", "Aberto sem prazo"]
 NEAR_MISS_STATUS_COLOR_MAP = {
     "Aberto em prazo": "#fef3c7",
@@ -6058,6 +6065,91 @@ def near_miss_filtrar_df(df, periodo=None, sites=None, divisoes=None, tipos=None
         out=out[out["Concern Report?"]=="Near Miss"]
     return out
 
+def near_miss_cor_taxa(valor):
+    if valor >= NEAR_MISS_META_FECHAMENTO_PRAZO:
+        return "#16a34a"
+    if valor >= NEAR_MISS_ALERTA_FECHAMENTO_PRAZO:
+        return "#facc15"
+    return "#dc2626"
+
+def near_miss_taxa_site_df(df):
+    if df.empty or "Fechamento" not in df:
+        return pd.DataFrame()
+    rows=[]
+    fechados=df[df["Fechamento"].notna()]
+    for site,g in fechados.groupby("Site", dropna=False):
+        total=len(g)
+        no_prazo=int((g["Status do prazo"]=="Fechado no prazo").sum())
+        taxa=round(no_prazo/total*100,1) if total else 0
+        rows.append({"Site":site,"Taxa no prazo %":taxa,"Fechados":total,"No prazo":no_prazo,"Cor":near_miss_cor_taxa(taxa)})
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("Taxa no prazo %", ascending=True)
+
+def near_miss_fig_taxa_fechamento_site(tdf, titulo="Taxa de fechamento no prazo por site — meta > 95%", altura=380):
+    if tdf.empty:
+        return None
+    fig=px.bar(tdf,x="Taxa no prazo %",y="Site",orientation="h",text="Taxa no prazo %",title=titulo, custom_data=["Fechados","No prazo"])
+    fig.update_traces(texttemplate="%{text:.1f}%",textposition="outside", marker_color=tdf["Cor"].tolist(), hovertemplate="%{y}<br>Taxa no prazo: %{x:.1f}%<br>Fechados: %{customdata[0]}<br>No prazo: %{customdata[1]}<extra></extra>")
+    fig.add_vline(x=NEAR_MISS_META_FECHAMENTO_PRAZO, line_dash="dash", line_color="#16a34a", annotation_text="Meta > 95%", annotation_position="top")
+    fig.update_layout(height=altura,xaxis_range=[0,105],margin=dict(l=10,r=50,t=50,b=10),showlegend=False)
+    return fig
+
+def near_miss_criticos_prazo_df(df):
+    if df.empty:
+        return df
+    return df[df["Status do prazo"].isin(["Aberto vencido", "Aberto sem prazo", "Fechado fora do prazo"])].copy()
+
+def near_miss_fig_sites_criticos(df, titulo="Sites com mais itens críticos de prazo", altura=360):
+    criticos=near_miss_criticos_prazo_df(df)
+    if criticos.empty:
+        return None
+    top=criticos.groupby("Site", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
+    if top.empty:
+        return None
+    fig=px.bar(top,x="Quantidade",y="Site",orientation="h",text="Quantidade",title=titulo)
+    fig.update_traces(texttemplate="%{text:.0f}",textposition="outside",marker_color="#dc2626",hovertemplate="%{y}<br>Itens críticos: %{x}<extra></extra>")
+    fig.update_layout(height=altura,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
+    return fig
+
+def near_miss_pendencias_abertas_df(df):
+    if df.empty:
+        return df
+    pend=df[df["Fechamento"].isna()].copy()
+    if pend.empty:
+        return pend
+    hoje=pd.Timestamp(date.today())
+    pend["Dias para vencer"]=(pend["Prazo"]-hoje).dt.days
+    pend["Dias em aberto"]=(hoje-pend["Data"]).dt.days
+    mes_atual=hoje.month
+    ano_atual=hoje.year
+    def categoria(row):
+        stp=row.get("Status do prazo")
+        dias=row.get("Dias para vencer")
+        prazo=row.get("Prazo")
+        if stp=="Aberto vencido":
+            return "Vencido"
+        if stp=="Aberto sem prazo" or pd.isna(prazo):
+            return "Sem prazo"
+        if pd.notna(prazo) and prazo.month==mes_atual and prazo.year==ano_atual:
+            return "Vence este mês"
+        if pd.notna(dias) and 0 <= dias <= 15:
+            return "Próximo do vencimento"
+        return "Em prazo"
+    pend["Categoria de pendência"]=pend.apply(categoria, axis=1)
+    return pend
+
+def near_miss_formata_tabela_pendencias(df):
+    if df.empty:
+        return df
+    cols=["Descrição","Categoria de pendência","Status do prazo","Prazo","Fechamento","Data","Dias para vencer","Dias em aberto","ID","Tipo","Site","Divisão","Status","Responsável","Hazard Type"]
+    cols=[c for c in cols if c in df.columns]
+    show=df[cols].copy().rename(columns={"Data":"Data da abertura"})
+    for c in ["Prazo","Fechamento","Data da abertura"]:
+        if c in show.columns:
+            show[c]=pd.to_datetime(show[c], errors="coerce").dt.strftime("%d/%m/%Y").fillna("—")
+    return show
+
 def near_miss_home_kpi_cards(db):
     df=near_miss_df(db)
     if df.empty:
@@ -6132,36 +6224,37 @@ def near_miss_dashboard(db,u):
         with c: kpi_card(l,v,h)
     tabs=st.tabs(["Resumo", "Prazos", "Insights", "Tendência", "Detalhamento"])
     with tabs[0]:
+        section("Resumo executivo")
+        tdf_resumo=near_miss_taxa_site_df(fdf)
         c1,c2=st.columns(2)
         with c1:
+            fig=near_miss_fig_taxa_fechamento_site(tdf_resumo, altura=390)
+            if fig is not None:
+                st.plotly_chart(fig,use_container_width=True)
+            else:
+                empty_state("Ainda não há itens fechados para calcular a taxa por site.")
+        with c2:
+            fig=near_miss_fig_sites_criticos(fdf, altura=390)
+            if fig is not None:
+                st.plotly_chart(fig,use_container_width=True)
+            else:
+                empty_state("Nenhum item crítico de prazo nos filtros aplicados.")
+        c3,c4=st.columns(2)
+        with c3:
             by_site=fdf.groupby("Site",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=True)
             if not by_site.empty:
                 fig=px.bar(by_site,x="Quantidade",y="Site",orientation="h",text="Quantidade",title="Quantidade de reports por site")
-                fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
-                fig.update_layout(height=420,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
+                fig.update_traces(texttemplate="%{text:.0f}",textposition="outside", marker_color="#2563eb")
+                fig.update_layout(height=360,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
                 st.plotly_chart(fig,use_container_width=True)
-        with c2:
+        with c4:
             by_div=fdf.groupby("Divisão",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=True)
             if not by_div.empty:
                 fig=px.bar(by_div,x="Quantidade",y="Divisão",orientation="h",text="Quantidade",title="Quantidade de reports por divisão")
-                fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
-                fig.update_layout(height=420,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
+                fig.update_traces(texttemplate="%{text:.0f}",textposition="outside", marker_color="#0f766e")
+                fig.update_layout(height=360,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
                 st.plotly_chart(fig,use_container_width=True)
-        c3,c4=st.columns(2)
-        with c3:
-            by_tipo=fdf.groupby("Tipo",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=False).head(12)
-            if not by_tipo.empty:
-                fig=px.bar(by_tipo,x="Tipo",y="Quantidade",text="Quantidade",title="Reports por tipo")
-                fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
-                fig.update_layout(height=380,margin=dict(l=10,r=10,t=50,b=80),xaxis_tickangle=-35,showlegend=False)
-                st.plotly_chart(fig,use_container_width=True)
-        with c4:
-            by_hazard=fdf.groupby("Hazard Type",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=True).tail(10)
-            if not by_hazard.empty:
-                fig=px.bar(by_hazard,x="Quantidade",y="Hazard Type",orientation="h",text="Quantidade",title="Top 10 Hazard Types")
-                fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
-                fig.update_layout(height=380,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
-                st.plotly_chart(fig,use_container_width=True)
+
     with tabs[1]:
         prazo=fdf.groupby(["Site","Status do prazo"],dropna=False).size().reset_index(name="Quantidade")
         if not prazo.empty:
@@ -6169,20 +6262,13 @@ def near_miss_dashboard(db,u):
             fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
             fig.update_layout(height=430,margin=dict(l=10,r=10,t=50,b=70),xaxis_tickangle=-25)
             st.plotly_chart(fig,use_container_width=True)
-        taxa_site=[]
-        for site,g in fdf[fdf["Fechamento"].notna()].groupby("Site"):
-            n=len(g); ok=int((g["Status do prazo"]=="Fechado no prazo").sum())
-            taxa_site.append({"Site":site,"Taxa no prazo %":round(ok/n*100,1) if n else 0,"Fechados":n})
-        tdf=pd.DataFrame(taxa_site).sort_values("Taxa no prazo %",ascending=True) if taxa_site else pd.DataFrame()
-        if not tdf.empty:
-            fig=px.bar(tdf,x="Taxa no prazo %",y="Site",orientation="h",text="Taxa no prazo %",title="Taxa de fechamento no prazo por site — meta > 95%")
-            fig.update_traces(texttemplate="%{text:.1f}%",textposition="outside", marker_color="#2563eb")
-            fig.add_vline(x=NEAR_MISS_META_FECHAMENTO_PRAZO, line_dash="dash", line_color="#16a34a", annotation_text="Meta > 95%", annotation_position="top")
-            fig.update_layout(height=380,xaxis_range=[0,105],margin=dict(l=10,r=40,t=50,b=10),showlegend=False)
+        tdf=near_miss_taxa_site_df(fdf)
+        fig=near_miss_fig_taxa_fechamento_site(tdf, altura=380)
+        if fig is not None:
             st.plotly_chart(fig,use_container_width=True)
     with tabs[2]:
         section("Insights executivos")
-        criticos = fdf[fdf["Status do prazo"].isin(["Aberto vencido", "Fechado fora do prazo"])]
+        criticos = near_miss_criticos_prazo_df(fdf)
         site_critico = criticos.groupby("Site").size().sort_values(ascending=False)
         hazard_critico = criticos.groupby("Hazard Type").size().sort_values(ascending=False)
         dept_critico = criticos.groupby("Departamento").size().sort_values(ascending=False)
@@ -6211,11 +6297,8 @@ def near_miss_dashboard(db,u):
                 fig.update_layout(height=360, margin=dict(l=10,r=10,t=50,b=60), showlegend=False, xaxis_tickangle=-20)
                 st.plotly_chart(fig, use_container_width=True)
         with c2:
-            top_acomp = criticos.groupby("Site", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
-            if not top_acomp.empty:
-                fig = px.bar(top_acomp, x="Quantidade", y="Site", orientation="h", text="Quantidade", title="Sites com mais itens críticos de prazo")
-                fig.update_traces(texttemplate="%{text:.0f}", textposition="outside", marker_color="#ef4444")
-                fig.update_layout(height=360, margin=dict(l=10,r=30,t=50,b=10), showlegend=False)
+            fig=near_miss_fig_sites_criticos(fdf, altura=360)
+            if fig is not None:
                 st.plotly_chart(fig, use_container_width=True)
         c3,c4 = st.columns(2)
         with c3:
@@ -6255,6 +6338,81 @@ def near_miss_dashboard(db,u):
                 show[c]=show[c].dt.strftime("%d/%m/%Y").fillna("—")
             st.dataframe(show, use_container_width=True, hide_index=True)
             download_excel_button("Baixar itens para acompanhamento", "near_miss_acompanhamento.xlsx", {"Acompanhamento": show})
+
+def near_miss_central_pendencias(db,u):
+    header("Central de Pendências Near Miss", "Acompanhamento operacional de Concern Reports abertos, vencidos, próximos do prazo e previstos para vencer no mês.")
+    df=near_miss_df(db)
+    if df.empty:
+        empty_state("Base de Concern Reports ainda não carregada.")
+        return
+    pend=near_miss_pendencias_abertas_df(df)
+    if pend.empty:
+        kpi_card("Pendências abertas", 0, "Nenhum Concern Report aberto")
+        empty_state("Não há itens abertos para acompanhamento.")
+        return
+    with st.expander("Filtros", expanded=True):
+        c1,c2,c3=st.columns(3)
+        with c1:
+            sites=st.multiselect("Site", sorted(pend["Site código"].dropna().unique()), default=sorted(pend["Site código"].dropna().unique()), key="nm_pend_sites")
+        with c2:
+            categorias=st.multiselect("Categoria", ["Vencido","Próximo do vencimento","Vence este mês","Sem prazo","Em prazo"], default=["Vencido","Próximo do vencimento","Vence este mês","Sem prazo"], key="nm_pend_categorias")
+        with c3:
+            responsaveis=st.multiselect("Responsável", sorted(pend["Responsável"].dropna().unique()), key="nm_pend_resp")
+    if sites:
+        pend=pend[pend["Site código"].isin(sites)]
+    if categorias:
+        pend=pend[pend["Categoria de pendência"].isin(categorias)]
+    if responsaveis:
+        pend=pend[pend["Responsável"].isin(responsaveis)]
+    total=len(pend)
+    vencidos=int((pend["Categoria de pendência"]=="Vencido").sum())
+    prox=int((pend["Categoria de pendência"]=="Próximo do vencimento").sum())
+    mes=int((pend["Categoria de pendência"]=="Vence este mês").sum())
+    sem=int((pend["Categoria de pendência"]=="Sem prazo").sum())
+    cols=st.columns(5)
+    for col,(label,val,help_txt) in zip(cols,[
+        ("Abertos monitorados",total,"Itens sem data de fechamento"),
+        ("Vencidos",vencidos,"Prazo já excedido"),
+        ("Próximos 15 dias",prox,"Itens próximos do vencimento"),
+        ("Vencem no mês",mes,"Prazo dentro do mês atual"),
+        ("Sem prazo",sem,"Itens abertos sem prazo informado"),
+    ]):
+        with col:
+            kpi_card(label,val,help_txt)
+    c1,c2=st.columns(2)
+    with c1:
+        cat=pend.groupby("Categoria de pendência", dropna=False).size().reset_index(name="Quantidade")
+        ordem=["Vencido","Próximo do vencimento","Vence este mês","Sem prazo","Em prazo"]
+        cat["Categoria de pendência"]=pd.Categorical(cat["Categoria de pendência"], categories=ordem, ordered=True)
+        cat=cat.sort_values("Categoria de pendência")
+        cores={"Vencido":"#7f1d1d","Próximo do vencimento":"#facc15","Vence este mês":"#fb923c","Sem prazo":"#94a3b8","Em prazo":"#fde68a"}
+        fig=px.bar(cat,x="Categoria de pendência",y="Quantidade",color="Categoria de pendência",text="Quantidade",title="Pendências por criticidade",color_discrete_map=cores)
+        fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
+        fig.update_layout(height=360,margin=dict(l=10,r=10,t=50,b=70),showlegend=False,xaxis_tickangle=-25)
+        st.plotly_chart(fig,use_container_width=True)
+    with c2:
+        site=pend[pend["Categoria de pendência"].isin(["Vencido","Próximo do vencimento","Vence este mês","Sem prazo"])].groupby("Site", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
+        if not site.empty:
+            fig=px.bar(site,x="Quantidade",y="Site",orientation="h",text="Quantidade",title="Sites com mais pendências")
+            fig.update_traces(texttemplate="%{text:.0f}",textposition="outside",marker_color="#dc2626")
+            fig.update_layout(height=360,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
+            st.plotly_chart(fig,use_container_width=True)
+    tabs=st.tabs(["Vencidos", "Próximos do vencimento", "Vencem no mês", "Todos os abertos"])
+    conjuntos=[
+        pend[pend["Categoria de pendência"]=="Vencido"],
+        pend[pend["Categoria de pendência"]=="Próximo do vencimento"],
+        pend[pend["Categoria de pendência"]=="Vence este mês"],
+        pend,
+    ]
+    for tab,base in zip(tabs,conjuntos):
+        with tab:
+            if base.empty:
+                empty_state("Nenhum item nesta categoria.")
+            else:
+                base=base.sort_values(["Categoria de pendência","Prazo","Dias em aberto"], ascending=[True, True, False], na_position="last")
+                show=near_miss_formata_tabela_pendencias(base)
+                st.dataframe(show,use_container_width=True,hide_index=True)
+                download_excel_button("Baixar lista", "near_miss_pendencias.xlsx", {"Pendencias": show})
 
 def near_miss_atualizar_base(db,u):
     header("Atualizar Base Near Miss", "Importe um ou mais arquivos Excel de Concern Reports para sobrescrever a base atual do módulo.")
@@ -6551,6 +6709,7 @@ def route(db,u):
         paginas={
             NEARMISS_HOME_PAGE: near_miss_submodulos_home,
             "Dashboard Near Miss": near_miss_dashboard,
+            "Central de Pendências Near Miss": near_miss_central_pendencias,
             "Atualizar Base Near Miss": near_miss_atualizar_base,
             "Base de Concern Reports": near_miss_base_page,
             "Relatórios Near Miss": near_miss_relatorios_page,
