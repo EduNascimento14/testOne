@@ -1479,7 +1479,7 @@ def user_selector(db, location="sidebar"):
         st.sidebar.caption(f"Perfil: {u.perfil} | Site: {u.site.codigo if u and u.site else '—'}")
     st.session_state.usuario_nome=sel
     return u
-def download_excel_button(label,file,sheets): st.download_button(label,gerar_excel(sheets),file,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+def download_excel_button(label,file,sheets,key=None): st.download_button(label,gerar_excel(sheets),file,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True,key=key)
 def download_pdf_button(label,file,pdf): st.download_button(label,pdf,file,mime="application/pdf",use_container_width=True)
 
 def df_maquinas(db,ids):
@@ -6086,6 +6086,31 @@ def near_miss_taxa_site_df(df):
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("Taxa no prazo %", ascending=True)
 
+def near_miss_taxa_divisao_df(df):
+    if df.empty or "Fechamento" not in df or "Divisão" not in df:
+        return pd.DataFrame()
+    fechados=df[df["Fechamento"].notna()]
+    if fechados.empty:
+        return pd.DataFrame()
+    rows=[]
+    for divisao,g in fechados.groupby("Divisão", dropna=False):
+        total=len(g)
+        no_prazo=int((g["Status do prazo"]=="Fechado no prazo").sum())
+        taxa=round(no_prazo/total*100,1) if total else 0
+        rows.append({"Divisão":divisao,"Taxa no prazo %":taxa,"Fechados":total,"No prazo":no_prazo,"Cor":near_miss_cor_taxa(taxa)})
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("Taxa no prazo %", ascending=True)
+
+def near_miss_fig_taxa_fechamento_divisao(tdf, titulo="Taxa de fechamento no prazo por divisão — meta > 95%", altura=360):
+    if tdf.empty:
+        return None
+    fig=px.bar(tdf,x="Taxa no prazo %",y="Divisão",orientation="h",text="Taxa no prazo %",title=titulo, custom_data=["Fechados","No prazo"])
+    fig.update_traces(texttemplate="%{text:.1f}%",textposition="outside", marker_color=tdf["Cor"].tolist(), hovertemplate="%{y}<br>Taxa no prazo: %{x:.1f}%<br>Fechados: %{customdata[0]}<br>No prazo: %{customdata[1]}<extra></extra>")
+    fig.add_vline(x=NEAR_MISS_META_FECHAMENTO_PRAZO, line_dash="dash", line_color="#16a34a", annotation_text="Meta > 95%", annotation_position="top")
+    fig.update_layout(height=altura,xaxis_range=[0,105],margin=dict(l=10,r=50,t=50,b=10),showlegend=False)
+    return fig
+
 def near_miss_fig_taxa_fechamento_site(tdf, titulo="Taxa de fechamento no prazo por site — meta > 95%", altura=380):
     if tdf.empty:
         return None
@@ -6239,6 +6264,12 @@ def near_miss_dashboard(db,u):
                 st.plotly_chart(fig,use_container_width=True)
             else:
                 empty_state("Nenhum item crítico de prazo nos filtros aplicados.")
+        tdf_divisao_resumo=near_miss_taxa_divisao_df(fdf)
+        fig_div=near_miss_fig_taxa_fechamento_divisao(tdf_divisao_resumo, altura=340)
+        if fig_div is not None:
+            st.plotly_chart(fig_div,use_container_width=True)
+        else:
+            empty_state("Ainda não há itens fechados para calcular a taxa consolidada por divisão.")
         c3,c4=st.columns(2)
         with c3:
             by_site=fdf.groupby("Site",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=True)
@@ -6404,7 +6435,7 @@ def near_miss_central_pendencias(db,u):
         pend[pend["Categoria de pendência"]=="Vence este mês"],
         pend,
     ]
-    for tab,base in zip(tabs,conjuntos):
+    for i,(tab,base) in enumerate(zip(tabs,conjuntos)):
         with tab:
             if base.empty:
                 empty_state("Nenhum item nesta categoria.")
@@ -6412,7 +6443,7 @@ def near_miss_central_pendencias(db,u):
                 base=base.sort_values(["Categoria de pendência","Prazo","Dias em aberto"], ascending=[True, True, False], na_position="last")
                 show=near_miss_formata_tabela_pendencias(base)
                 st.dataframe(show,use_container_width=True,hide_index=True)
-                download_excel_button("Baixar lista", "near_miss_pendencias.xlsx", {"Pendencias": show})
+                download_excel_button("Baixar lista", f"near_miss_pendencias_{i+1}.xlsx", {"Pendencias": show}, key=f"nm_pend_download_{i}")
 
 def near_miss_atualizar_base(db,u):
     header("Atualizar Base Near Miss", "Importe um ou mais arquivos Excel de Concern Reports para sobrescrever a base atual do módulo.")
