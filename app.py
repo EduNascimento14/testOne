@@ -1480,8 +1480,26 @@ def user_selector(db, location="sidebar"):
         st.sidebar.caption(f"Perfil: {u.perfil} | Site: {u.site.codigo if u and u.site else '—'}")
     st.session_state.usuario_nome=sel
     return u
-def download_excel_button(label,file,sheets,key=None): st.download_button(label,gerar_excel(sheets),file,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True,key=key)
-def download_pdf_button(label,file,pdf): st.download_button(label,pdf,file,mime="application/pdf",use_container_width=True)
+def _auto_streamlit_key(prefix, base=""):
+    chave_contador = f"_{prefix}_auto_counter"
+    st.session_state[chave_contador] = int(st.session_state.get(chave_contador, 0)) + 1
+    base_txt = str(base or prefix).encode("utf-8", errors="ignore")
+    return f"{prefix}_{zlib.crc32(base_txt)}_{st.session_state[chave_contador]}"
+
+def plotly_chart_safe(fig, *args, **kwargs):
+    if kwargs.get("key") is None:
+        kwargs["key"] = _auto_streamlit_key("plotly_chart", getattr(fig, "layout", ""))
+    return st.__getattribute__("plotly_chart")(fig, *args, **kwargs)
+
+def download_excel_button(label,file,sheets,key=None):
+    if key is None:
+        key = _auto_streamlit_key("download_excel", f"{label}|{file}")
+    st.download_button(label,gerar_excel(sheets),file,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True,key=key)
+
+def download_pdf_button(label,file,pdf,key=None):
+    if key is None:
+        key = _auto_streamlit_key("download_pdf", f"{label}|{file}")
+    st.download_button(label,pdf,file,mime="application/pdf",use_container_width=True,key=key)
 
 def df_maquinas(db,ids):
     rows = []
@@ -1701,7 +1719,7 @@ def nr12_dashboard(db,u):
     section("Gráficos")
     c1,c2=st.columns(2)
     with c1:
-        st.plotly_chart(px.histogram(dfm, x="Site", color="Status de Proteção", barmode="group", title="Status de conformidade por unidade", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
+        plotly_chart_safe(px.histogram(dfm, x="Site", color="Status de Proteção", barmode="group", title="Status de conformidade por unidade", color_discrete_map=STATUS_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
     with c2:
         fig_risco = px.bar(
             risco_counts,
@@ -1720,23 +1738,23 @@ def nr12_dashboard(db,u):
             yaxis_title="Máquinas",
             showlegend=False,
         )
-        st.plotly_chart(fig_risco, use_container_width=True)
+        plotly_chart_safe(fig_risco, use_container_width=True)
     c3,c4=st.columns(2)
     with c3:
         if not dfp.empty:
-            st.plotly_chart(px.histogram(dfp, x="Status", color="Classificação", barmode="group", title="PAC por status/classificação", color_discrete_map=PAC_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
+            plotly_chart_safe(px.histogram(dfp, x="Status", color="Classificação", barmode="group", title="PAC por status/classificação", color_discrete_map=PAC_COLOR_MAP).update_layout(template="plotly_white"), use_container_width=True)
         else:
             empty_state("Sem PACs para os filtros selecionados.")
     with c4:
         verificacoes_vencidas=sum(1 for m in ms if m.proxima_auditoria and m.proxima_auditoria<date.today())
         verificacoes_proximas=sum(1 for m in ms if m.proxima_auditoria and date.today()<=m.proxima_auditoria<=date.today()+timedelta(days=60))
         dv=pd.DataFrame([{"Tipo":"Vencidas","Qtd":verificacoes_vencidas},{"Tipo":"Próximas","Qtd":verificacoes_proximas}])
-        st.plotly_chart(px.bar(dv,x="Tipo",y="Qtd",color="Tipo",title="Verificações vencidas/próximas", color_discrete_map={"Vencidas":"#dc2626","Próximas":"#f59e0b"}).update_layout(template="plotly_white", showlegend=False),use_container_width=True)
+        plotly_chart_safe(px.bar(dv,x="Tipo",y="Qtd",color="Tipo",title="Verificações vencidas/próximas", color_discrete_map={"Vencidas":"#dc2626","Próximas":"#f59e0b"}).update_layout(template="plotly_white", showlegend=False),use_container_width=True)
 
     section("Evolução esperada da adequação de proteções de máquinas")
     evolucao=montar_evolucao_adequacao_nr12(db,ms)
     if not evolucao.empty:
-        st.plotly_chart(
+        plotly_chart_safe(
             px.line(evolucao, x="Data", y="% Adequação", color="Série", markers=True,
                     hover_data=["Quantidade"], title="Evolução esperada da adequação com base na Data Prevista para Adequação")
               .update_layout(template="plotly_white", yaxis_range=[0,100], xaxis_title="Data", yaxis_title="% de máquinas adequadas"),
@@ -2244,11 +2262,11 @@ def nr12_calendario(db,u):
         st.dataframe(f.sort_values("Data"), use_container_width=True, hide_index=True)
     with t2:
         agg=f.groupby(["Site","Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
-        if not agg.empty: st.plotly_chart(px.bar(agg,x="Site",y="Quantidade",color="Status",barmode="group",title="Eventos por site e status").update_layout(template="plotly_white"), use_container_width=True)
+        if not agg.empty: plotly_chart_safe(px.bar(agg,x="Site",y="Quantidade",color="Status",barmode="group",title="Eventos por site e status").update_layout(template="plotly_white"), use_container_width=True)
         st.dataframe(agg, use_container_width=True, hide_index=True)
     with t3:
         agg=f.groupby(["Responsável","Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
-        if not agg.empty: st.plotly_chart(px.bar(agg,x="Responsável",y="Quantidade",color="Status",barmode="group",title="Eventos por responsável e status").update_layout(template="plotly_white"), use_container_width=True)
+        if not agg.empty: plotly_chart_safe(px.bar(agg,x="Responsável",y="Quantidade",color="Status",barmode="group",title="Eventos por responsável e status").update_layout(template="plotly_white"), use_container_width=True)
         st.dataframe(agg, use_container_width=True, hide_index=True)
     download_excel_button("Exportar calendário", "calendario_auditorias_inspecoes.xlsx", {"Calendario": f})
 
@@ -2631,7 +2649,7 @@ def ehs_dashboard(db,u):
             })
         latest_df=pd.DataFrame(rows)
         if not latest_df.empty:
-            st.plotly_chart(
+            plotly_chart_safe(
                 px.bar(latest_df, x="Site auditado", y="Conformidade %", color="Conformidade %",
                        hover_data=["Auditoria","Data de referência","Status","Maturidade"],
                        title="Conformidade por site — última auditoria registrada").update_layout(template="plotly_white", yaxis_range=[0,100]),
@@ -2641,7 +2659,7 @@ def ehs_dashboard(db,u):
             empty_state("Sem auditorias.")
     with c2:
         if not dp.empty:
-            st.plotly_chart(px.histogram(dp, x="Status", color="Prioridade", barmode="group", title="PAC por status").update_layout(template="plotly_white"), use_container_width=True)
+            plotly_chart_safe(px.histogram(dp, x="Status", color="Prioridade", barmode="group", title="PAC por status").update_layout(template="plotly_white"), use_container_width=True)
         else:
             empty_state("Sem PACs.")
 
@@ -2768,14 +2786,14 @@ def ehs_calendario(db,u):
     with t2:
         agg = f.groupby(["Site", "Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
         if not agg.empty:
-            st.plotly_chart(px.bar(agg, x="Site", y="Quantidade", color="Status", barmode="group", title="Auditorias por site e status").update_layout(template="plotly_white"), use_container_width=True)
+            plotly_chart_safe(px.bar(agg, x="Site", y="Quantidade", color="Status", barmode="group", title="Auditorias por site e status").update_layout(template="plotly_white"), use_container_width=True)
         else:
             empty_state("Sem dados para os filtros selecionados.")
         st.dataframe(agg, use_container_width=True, hide_index=True)
     with t3:
         agg = f.groupby(["Responsável", "Status"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
         if not agg.empty:
-            st.plotly_chart(px.bar(agg, x="Responsável", y="Quantidade", color="Status", barmode="group", title="Auditorias por responsável e status").update_layout(template="plotly_white"), use_container_width=True)
+            plotly_chart_safe(px.bar(agg, x="Responsável", y="Quantidade", color="Status", barmode="group", title="Auditorias por responsável e status").update_layout(template="plotly_white"), use_container_width=True)
         else:
             empty_state("Sem dados para os filtros selecionados.")
         st.dataframe(agg, use_container_width=True, hide_index=True)
@@ -5477,7 +5495,7 @@ def energia_dashboard(db,u):
         height=430,
     )
     if fig_ranking_local is not None:
-        st.plotly_chart(fig_ranking_local, use_container_width=True, config={"displayModeBar": False})
+        plotly_chart_safe(fig_ranking_local, use_container_width=True, config={"displayModeBar": False})
     else:
         empty_state("Sem dados suficientes para o ranking por localidade.")
 
@@ -5513,19 +5531,19 @@ def energia_dashboard(db,u):
     if aba_dash == "Tendências mensais":
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_eletrico_kwh", color="Site", markers=True, title="Consumo elétrico mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+            plotly_chart_safe(px.line(mensal_site, x="Mês", y="consumo_eletrico_kwh", color="Site", markers=True, title="Consumo elétrico mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
         with c2:
-            st.plotly_chart(px.line(mensal_site, x="Mês", y="consumo_gas_kwh", color="Site", markers=True, title="Consumo de gás natural mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
+            plotly_chart_safe(px.line(mensal_site, x="Mês", y="consumo_gas_kwh", color="Site", markers=True, title="Consumo de gás natural mensal por site").update_layout(template="plotly_white", yaxis_title="kWh"), use_container_width=True)
         c3, c4 = st.columns(2)
         with c3:
             emis = mensal_site.groupby("Mês", as_index=False)[["emissao_total_tco2e", "emissao_total_com_irec_tco2e"]].sum()
             emis_long = emis.melt(id_vars="Mês", value_vars=["emissao_total_tco2e", "emissao_total_com_irec_tco2e"], var_name="Cenário", value_name="tCO₂e")
             emis_long["Cenário"] = emis_long["Cenário"].map({"emissao_total_tco2e": "Sem I-REC", "emissao_total_com_irec_tco2e": "Com I-REC"})
-            st.plotly_chart(px.line(emis_long, x="Mês", y="tCO₂e", color="Cenário", markers=True, title="Emissões mensais de CO₂ — com e sem I-REC").update_layout(template="plotly_white"), use_container_width=True)
+            plotly_chart_safe(px.line(emis_long, x="Mês", y="tCO₂e", color="Cenário", markers=True, title="Emissões mensais de CO₂ — com e sem I-REC").update_layout(template="plotly_white"), use_container_width=True)
         with c4:
             if not r12_site.empty:
                 fig = px.bar(r12_site.sort_values("consumo_total_kwh", ascending=False), x="Site", y="consumo_total_kwh", text="consumo_total_kwh", title="Consumo total R12 por site").update_layout(template="plotly_white", yaxis_title="kWh")
-                st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+                plotly_chart_safe(energia_bar_sem_decimal(fig), use_container_width=True)
             else:
                 empty_state("Sem dados R12 para consumo por site.")
     if aba_dash == "Ranking R12":
@@ -5533,13 +5551,13 @@ def energia_dashboard(db,u):
         with c5:
             if not r12_site.empty:
                 fig = px.bar(r12_site.sort_values("custo_total_brl", ascending=False), x="Site", y="custo_total_brl", text="custo_total_brl", title="Custo total R12 por site").update_layout(template="plotly_white", yaxis_title="BRL")
-                st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+                plotly_chart_safe(energia_bar_sem_decimal(fig), use_container_width=True)
             else:
                 empty_state("Sem dados R12 para custo por site.")
         with c6:
             if not r12_site.empty:
                 fig = px.bar(r12_site.sort_values("eficiencia_energetica", ascending=True), x="Site", y="eficiencia_energetica", text="eficiencia_energetica", title="Eficiência energética R12 por site — menor é melhor").update_layout(template="plotly_white", yaxis_title="kWh/Actual Hour")
-                st.plotly_chart(energia_bar_sem_decimal(fig), use_container_width=True)
+                plotly_chart_safe(energia_bar_sem_decimal(fig), use_container_width=True)
             else:
                 empty_state("Sem dados R12 para eficiência por site.")
         if not r12_site.empty:
@@ -5578,10 +5596,10 @@ def energia_dashboard(db,u):
             c7, c8 = st.columns(2)
             with c7:
                 emis_meta = metas[["Mês","Emissões R12","Meta emissões"]].melt(id_vars="Mês", var_name="Série", value_name="tCO₂e")
-                st.plotly_chart(px.line(emis_meta, x="Mês", y="tCO₂e", color="Série", markers=True, title="Emissões R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
+                plotly_chart_safe(px.line(emis_meta, x="Mês", y="tCO₂e", color="Série", markers=True, title="Emissões R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
             with c8:
                 eff_meta = metas[["Mês","Eficiência energética R12","Meta eficiência energética"]].melt(id_vars="Mês", var_name="Série", value_name="kWh/Actual Hour")
-                st.plotly_chart(px.line(eff_meta, x="Mês", y="kWh/Actual Hour", color="Série", markers=True, title="Eficiência energética R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
+                plotly_chart_safe(px.line(eff_meta, x="Mês", y="kWh/Actual Hour", color="Série", markers=True, title="Eficiência energética R12 vs meta ao longo do tempo").update_layout(template="plotly_white"), use_container_width=True)
 
     if aba_dash == "Exportação":
         section("Exportação")
@@ -6329,24 +6347,24 @@ def near_miss_dashboard(db,u):
         with c1:
             fig=near_miss_fig_taxa_fechamento_site(tdf_resumo, altura=390)
             if fig is not None:
-                st.plotly_chart(fig,use_container_width=True)
+                plotly_chart_safe(fig,use_container_width=True)
             else:
                 empty_state("Ainda não há itens fechados para calcular a taxa por site.")
         with c2:
             fig=near_miss_fig_sites_criticos(fdf, altura=390)
             if fig is not None:
-                st.plotly_chart(fig,use_container_width=True)
+                plotly_chart_safe(fig,use_container_width=True)
             else:
                 empty_state("Nenhum item crítico de prazo nos filtros aplicados.")
         tdf_divisao_resumo=near_miss_taxa_divisao_df(fdf)
         fig_div=near_miss_fig_taxa_fechamento_divisao(tdf_divisao_resumo, altura=340)
         if fig_div is not None:
-            st.plotly_chart(fig_div,use_container_width=True)
+            plotly_chart_safe(fig_div,use_container_width=True)
         else:
             empty_state("Ainda não há itens fechados para calcular a taxa consolidada por divisão.")
         fig_excesso = near_miss_fig_prazo_superior_45_site(fdf, altura=340)
         if fig_excesso is not None:
-            st.plotly_chart(fig_excesso, use_container_width=True)
+            plotly_chart_safe(fig_excesso, use_container_width=True)
         c3,c4=st.columns(2)
         with c3:
             by_site=fdf.groupby("Site",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=True)
@@ -6354,14 +6372,14 @@ def near_miss_dashboard(db,u):
                 fig=px.bar(by_site,x="Quantidade",y="Site",orientation="h",text="Quantidade",title="Quantidade de reports por site")
                 fig.update_traces(texttemplate="%{text:.0f}",textposition="outside", marker_color="#2563eb")
                 fig.update_layout(height=360,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
-                st.plotly_chart(fig,use_container_width=True)
+                plotly_chart_safe(fig,use_container_width=True)
         with c4:
             by_div=fdf.groupby("Divisão",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=True)
             if not by_div.empty:
                 fig=px.bar(by_div,x="Quantidade",y="Divisão",orientation="h",text="Quantidade",title="Quantidade de reports por divisão")
                 fig.update_traces(texttemplate="%{text:.0f}",textposition="outside", marker_color="#0f766e")
                 fig.update_layout(height=360,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
-                st.plotly_chart(fig,use_container_width=True)
+                plotly_chart_safe(fig,use_container_width=True)
 
     with tabs[1]:
         prazo=fdf.groupby(["Site","Status do prazo"],dropna=False).size().reset_index(name="Quantidade")
@@ -6369,14 +6387,14 @@ def near_miss_dashboard(db,u):
             fig=px.bar(prazo,x="Site",y="Quantidade",color="Status do prazo",text="Quantidade",title="Classificação por prazo e site", color_discrete_map=NEAR_MISS_STATUS_COLOR_MAP, category_orders={"Status do prazo": NEAR_MISS_STATUS_ORDER})
             fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
             fig.update_layout(height=430,margin=dict(l=10,r=10,t=50,b=70),xaxis_tickangle=-25)
-            st.plotly_chart(fig,use_container_width=True)
+            plotly_chart_safe(fig,use_container_width=True)
         tdf=near_miss_taxa_site_df(fdf)
         fig=near_miss_fig_taxa_fechamento_site(tdf, altura=380)
         if fig is not None:
-            st.plotly_chart(fig,use_container_width=True)
+            plotly_chart_safe(fig,use_container_width=True)
         fig_excesso=near_miss_fig_prazo_superior_45_site(fdf, altura=340)
         if fig_excesso is not None:
-            st.plotly_chart(fig_excesso,use_container_width=True)
+            plotly_chart_safe(fig_excesso,use_container_width=True)
     with tabs[2]:
         section("Insights executivos")
         criticos = near_miss_criticos_prazo_df(fdf)
@@ -6408,11 +6426,11 @@ def near_miss_dashboard(db,u):
                 fig = px.bar(pareto_status, x="Status do prazo", y="Quantidade", color="Status do prazo", text="Quantidade", title="Distribuição por status do prazo", color_discrete_map=NEAR_MISS_STATUS_COLOR_MAP, category_orders={"Status do prazo": NEAR_MISS_STATUS_ORDER})
                 fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
                 fig.update_layout(height=360, margin=dict(l=10,r=10,t=50,b=60), showlegend=False, xaxis_tickangle=-20)
-                st.plotly_chart(fig, use_container_width=True)
+                plotly_chart_safe(fig, use_container_width=True)
         with c2:
             fig=near_miss_fig_sites_criticos(fdf, altura=360)
             if fig is not None:
-                st.plotly_chart(fig, use_container_width=True)
+                plotly_chart_safe(fig, use_container_width=True)
         c3,c4 = st.columns(2)
         with c3:
             top_dept = fdf.groupby("Departamento", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
@@ -6420,25 +6438,25 @@ def near_miss_dashboard(db,u):
                 fig = px.bar(top_dept, x="Quantidade", y="Departamento", orientation="h", text="Quantidade", title="Top departamentos por volume")
                 fig.update_traces(texttemplate="%{text:.0f}", textposition="outside", marker_color="#0f766e")
                 fig.update_layout(height=380, margin=dict(l=10,r=30,t=50,b=10), showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                plotly_chart_safe(fig, use_container_width=True)
         with c4:
             top_hazard = fdf.groupby("Hazard Type", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
             if not top_hazard.empty:
                 fig = px.bar(top_hazard, x="Quantidade", y="Hazard Type", orientation="h", text="Quantidade", title="Top hazards por volume")
                 fig.update_traces(texttemplate="%{text:.0f}", textposition="outside", marker_color="#7c3aed")
                 fig.update_layout(height=380, margin=dict(l=10,r=30,t=50,b=10), showlegend=False, yaxis_title="")
-                st.plotly_chart(fig, use_container_width=True)
+                plotly_chart_safe(fig, use_container_width=True)
     with tabs[3]:
         mensal=fdf.dropna(subset=["Mês"]).groupby("Mês").size().reset_index(name="Quantidade")
         if not mensal.empty:
             fig=px.line(mensal,x="Mês",y="Quantidade",markers=True,title="Evolução mensal de Concern Reports")
             fig.update_layout(height=400,margin=dict(l=10,r=10,t=50,b=10))
-            st.plotly_chart(fig,use_container_width=True)
+            plotly_chart_safe(fig,use_container_width=True)
         mensal_status=fdf.dropna(subset=["Mês"]).groupby(["Mês","Status do prazo"]).size().reset_index(name="Quantidade")
         if not mensal_status.empty:
             fig=px.bar(mensal_status,x="Mês",y="Quantidade",color="Status do prazo",title="Evolução mensal por status do prazo", color_discrete_map=NEAR_MISS_STATUS_COLOR_MAP, category_orders={"Status do prazo": NEAR_MISS_STATUS_ORDER})
             fig.update_layout(height=420,margin=dict(l=10,r=10,t=50,b=10))
-            st.plotly_chart(fig,use_container_width=True)
+            plotly_chart_safe(fig,use_container_width=True)
     with tabs[4]:
         crit=fdf[fdf["Acompanhamento"]=="Acompanhar"].copy()
         section("Itens para acompanhamento")
@@ -6502,14 +6520,14 @@ def near_miss_central_pendencias(db,u):
         fig=px.bar(cat,x="Categoria de pendência",y="Quantidade",color="Categoria de pendência",text="Quantidade",title="Pendências por criticidade",color_discrete_map=cores)
         fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
         fig.update_layout(height=360,margin=dict(l=10,r=10,t=50,b=70),showlegend=False,xaxis_tickangle=-25)
-        st.plotly_chart(fig,use_container_width=True)
+        plotly_chart_safe(fig,use_container_width=True)
     with c2:
         site=pend[pend["Categoria de pendência"].isin(["Vencido","Próximo do vencimento","Vence este mês","Sem prazo"])].groupby("Site", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
         if not site.empty:
             fig=px.bar(site,x="Quantidade",y="Site",orientation="h",text="Quantidade",title="Sites com mais pendências")
             fig.update_traces(texttemplate="%{text:.0f}",textposition="outside",marker_color="#dc2626")
             fig.update_layout(height=360,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
-            st.plotly_chart(fig,use_container_width=True)
+            plotly_chart_safe(fig,use_container_width=True)
     tabs=st.tabs(["Vencidos", "Próximos do vencimento", "Vencem no mês", "Todos os abertos"])
     conjuntos=[
         pend[pend["Categoria de pendência"]=="Vencido"],
