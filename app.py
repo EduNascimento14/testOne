@@ -65,7 +65,7 @@ MODULO_COLOR_MAP = {
     "maquinas": {"border": "#2563eb", "bg": "#eff6ff", "icon": "⚙️"},
     "energia": {"border": "#16a34a", "bg": "#ecfdf5", "icon": "⚡"},
     "auditoria": {"border": "#7c3aed", "bg": "#f5f3ff", "icon": "🧭"},
-    "nearmiss": {"border": "#f97316", "bg": "#fff7ed", "icon": "🟠"},
+    "nearmiss": {"border": "#f97316", "bg": "#fff7ed", "icon": "⚠️"},
 }
 NR12_HOME_PAGE = "Submódulos da Sustentação"
 NR12_SUBMODULOS = {
@@ -184,6 +184,16 @@ NEARMISS_SUBMODULOS = {
         "cor": "#0f766e",
         "paginas": ["Base de Concern Reports", "Relatórios Near Miss"],
     },
+}
+
+NEAR_MISS_META_FECHAMENTO_PRAZO = 95
+NEAR_MISS_STATUS_ORDER = ["Aberto em prazo", "Aberto vencido", "Fechado fora do prazo", "Fechado no prazo", "Aberto sem prazo"]
+NEAR_MISS_STATUS_COLOR_MAP = {
+    "Aberto em prazo": "#fef3c7",
+    "Aberto vencido": "#7f1d1d",
+    "Fechado fora do prazo": "#ef4444",
+    "Fechado no prazo": "#16a34a",
+    "Aberto sem prazo": "#94a3b8",
 }
 
 RISCOS_MAQUINA = ["Apreciação de risco não realizada", "Desprezível", "Atenção", "Significativo", "Alto", "Extremo"]
@@ -1533,7 +1543,6 @@ def dashboard_integrado(db,u):
 
 def home_page(db,u):
     header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas, Controle de Energia e Emissões e Near Miss")
-    dashboard_integrado(db,u)
     section("Módulos")
     c1,c2=st.columns(2)
     with c1:
@@ -1570,6 +1579,8 @@ def home_page(db,u):
             st.session_state.nav_nearmiss=NEARMISS_HOME_PAGE
             st.session_state.submodulo_nearmiss=""
             st.rerun()
+
+    dashboard_integrado(db,u)
 
     section("Ajuda")
     c_help, c_empty = st.columns([1,3])
@@ -6119,7 +6130,7 @@ def near_miss_dashboard(db,u):
     vals=[("Total",total,"Concern Reports"),("Abertos",abertos,"Sem data de fechamento"),("Abertos vencidos",vencidos,"Prazo excedido"),("Abertos sem prazo",sem_prazo,"Sem prazo informado"),("Fechados fora",fechados_fora,"Fechamento excedeu prazo"),("Fechamento no prazo",f"{taxa}%","Entre itens fechados")]
     for c,(l,v,h) in zip(cols,vals):
         with c: kpi_card(l,v,h)
-    tabs=st.tabs(["Resumo", "Prazos", "Tendência", "Detalhamento"])
+    tabs=st.tabs(["Resumo", "Prazos", "Insights", "Tendência", "Detalhamento"])
     with tabs[0]:
         c1,c2=st.columns(2)
         with c1:
@@ -6154,7 +6165,7 @@ def near_miss_dashboard(db,u):
     with tabs[1]:
         prazo=fdf.groupby(["Site","Status do prazo"],dropna=False).size().reset_index(name="Quantidade")
         if not prazo.empty:
-            fig=px.bar(prazo,x="Site",y="Quantidade",color="Status do prazo",text="Quantidade",title="Classificação por prazo e site")
+            fig=px.bar(prazo,x="Site",y="Quantidade",color="Status do prazo",text="Quantidade",title="Classificação por prazo e site", color_discrete_map=NEAR_MISS_STATUS_COLOR_MAP, category_orders={"Status do prazo": NEAR_MISS_STATUS_ORDER})
             fig.update_traces(texttemplate="%{text:.0f}",textposition="outside")
             fig.update_layout(height=430,margin=dict(l=10,r=10,t=50,b=70),xaxis_tickangle=-25)
             st.plotly_chart(fig,use_container_width=True)
@@ -6164,11 +6175,64 @@ def near_miss_dashboard(db,u):
             taxa_site.append({"Site":site,"Taxa no prazo %":round(ok/n*100,1) if n else 0,"Fechados":n})
         tdf=pd.DataFrame(taxa_site).sort_values("Taxa no prazo %",ascending=True) if taxa_site else pd.DataFrame()
         if not tdf.empty:
-            fig=px.bar(tdf,x="Taxa no prazo %",y="Site",orientation="h",text="Taxa no prazo %",title="Taxa de fechamento no prazo por site")
-            fig.update_traces(texttemplate="%{text:.1f}%",textposition="outside")
+            fig=px.bar(tdf,x="Taxa no prazo %",y="Site",orientation="h",text="Taxa no prazo %",title="Taxa de fechamento no prazo por site — meta > 95%")
+            fig.update_traces(texttemplate="%{text:.1f}%",textposition="outside", marker_color="#2563eb")
+            fig.add_vline(x=NEAR_MISS_META_FECHAMENTO_PRAZO, line_dash="dash", line_color="#16a34a", annotation_text="Meta > 95%", annotation_position="top")
             fig.update_layout(height=380,xaxis_range=[0,105],margin=dict(l=10,r=40,t=50,b=10),showlegend=False)
             st.plotly_chart(fig,use_container_width=True)
     with tabs[2]:
+        section("Insights executivos")
+        criticos = fdf[fdf["Status do prazo"].isin(["Aberto vencido", "Fechado fora do prazo"])]
+        site_critico = criticos.groupby("Site").size().sort_values(ascending=False)
+        hazard_critico = criticos.groupby("Hazard Type").size().sort_values(ascending=False)
+        dept_critico = criticos.groupby("Departamento").size().sort_values(ascending=False)
+        abertos_base = fdf[fdf["Fechamento"].isna()].copy()
+        if not abertos_base.empty:
+            hoje_ts = pd.Timestamp(date.today())
+            abertos_base["Dias em aberto"] = (hoje_ts - abertos_base["Data"]).dt.days
+        i1,i2,i3,i4 = st.columns(4)
+        with i1:
+            kpi_card("Site com mais desvios", site_critico.index[0] if len(site_critico) else "—", f"{int(site_critico.iloc[0])} itens" if len(site_critico) else "Sem desvios críticos")
+        with i2:
+            kpi_card("Hazard mais recorrente", hazard_critico.index[0] if len(hazard_critico) else "—", f"{int(hazard_critico.iloc[0])} itens" if len(hazard_critico) else "Sem recorrência crítica")
+        with i3:
+            kpi_card("Departamento crítico", dept_critico.index[0] if len(dept_critico) else "—", f"{int(dept_critico.iloc[0])} itens" if len(dept_critico) else "Sem recorrência crítica")
+        with i4:
+            maior_aberto = int(abertos_base["Dias em aberto"].max()) if not abertos_base.empty and abertos_base["Dias em aberto"].notna().any() else 0
+            kpi_card("Maior tempo aberto", f"{maior_aberto} dias", "Entre itens sem fechamento")
+        c1,c2 = st.columns(2)
+        with c1:
+            pareto_status = fdf.groupby("Status do prazo", dropna=False).size().reset_index(name="Quantidade")
+            if not pareto_status.empty:
+                pareto_status["Status do prazo"] = pd.Categorical(pareto_status["Status do prazo"], categories=NEAR_MISS_STATUS_ORDER, ordered=True)
+                pareto_status = pareto_status.sort_values("Status do prazo")
+                fig = px.bar(pareto_status, x="Status do prazo", y="Quantidade", color="Status do prazo", text="Quantidade", title="Distribuição por status do prazo", color_discrete_map=NEAR_MISS_STATUS_COLOR_MAP, category_orders={"Status do prazo": NEAR_MISS_STATUS_ORDER})
+                fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+                fig.update_layout(height=360, margin=dict(l=10,r=10,t=50,b=60), showlegend=False, xaxis_tickangle=-20)
+                st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            top_acomp = criticos.groupby("Site", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
+            if not top_acomp.empty:
+                fig = px.bar(top_acomp, x="Quantidade", y="Site", orientation="h", text="Quantidade", title="Sites com mais itens críticos de prazo")
+                fig.update_traces(texttemplate="%{text:.0f}", textposition="outside", marker_color="#ef4444")
+                fig.update_layout(height=360, margin=dict(l=10,r=30,t=50,b=10), showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+        c3,c4 = st.columns(2)
+        with c3:
+            top_dept = fdf.groupby("Departamento", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
+            if not top_dept.empty:
+                fig = px.bar(top_dept, x="Quantidade", y="Departamento", orientation="h", text="Quantidade", title="Top departamentos por volume")
+                fig.update_traces(texttemplate="%{text:.0f}", textposition="outside", marker_color="#0f766e")
+                fig.update_layout(height=380, margin=dict(l=10,r=30,t=50,b=10), showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+        with c4:
+            top_open = abertos_base.sort_values("Dias em aberto", ascending=True).tail(10) if not abertos_base.empty and "Dias em aberto" in abertos_base else pd.DataFrame()
+            if not top_open.empty:
+                fig = px.bar(top_open, x="Dias em aberto", y="Descrição", orientation="h", color="Status do prazo", text="Dias em aberto", title="Itens abertos há mais tempo", color_discrete_map=NEAR_MISS_STATUS_COLOR_MAP, category_orders={"Status do prazo": NEAR_MISS_STATUS_ORDER})
+                fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+                fig.update_layout(height=380, margin=dict(l=10,r=30,t=50,b=10), showlegend=True, yaxis_title="")
+                st.plotly_chart(fig, use_container_width=True)
+    with tabs[3]:
         mensal=fdf.dropna(subset=["Mês"]).groupby("Mês").size().reset_index(name="Quantidade")
         if not mensal.empty:
             fig=px.line(mensal,x="Mês",y="Quantidade",markers=True,title="Evolução mensal de Concern Reports")
@@ -6176,17 +6240,18 @@ def near_miss_dashboard(db,u):
             st.plotly_chart(fig,use_container_width=True)
         mensal_status=fdf.dropna(subset=["Mês"]).groupby(["Mês","Status do prazo"]).size().reset_index(name="Quantidade")
         if not mensal_status.empty:
-            fig=px.bar(mensal_status,x="Mês",y="Quantidade",color="Status do prazo",title="Evolução mensal por status do prazo")
+            fig=px.bar(mensal_status,x="Mês",y="Quantidade",color="Status do prazo",title="Evolução mensal por status do prazo", color_discrete_map=NEAR_MISS_STATUS_COLOR_MAP, category_orders={"Status do prazo": NEAR_MISS_STATUS_ORDER})
             fig.update_layout(height=420,margin=dict(l=10,r=10,t=50,b=10))
             st.plotly_chart(fig,use_container_width=True)
-    with tabs[3]:
+    with tabs[4]:
         crit=fdf[fdf["Acompanhamento"]=="Acompanhar"].copy()
         section("Itens para acompanhamento")
         if crit.empty:
             empty_state("Nenhum item crítico de prazo nos filtros aplicados.")
         else:
-            show=crit.sort_values(["Status do prazo","Prazo"],na_position="last")[["ID","Data","Tipo","Site","Divisão","Status","Status do prazo","Prazo","Fechamento","Responsável","Hazard Type","Descrição"]].copy()
-            for c in ["Data","Prazo","Fechamento"]:
+            show=crit.sort_values(["Status do prazo","Prazo"],na_position="last")[["Descrição","Status do prazo","Prazo","Fechamento","Data","ID","Tipo","Site","Divisão","Status","Responsável","Hazard Type"]].copy()
+            show = show.rename(columns={"Data": "Data da abertura"})
+            for c in ["Prazo","Fechamento","Data da abertura"]:
                 show[c]=show[c].dt.strftime("%d/%m/%Y").fillna("—")
             st.dataframe(show, use_container_width=True, hide_index=True)
             download_excel_button("Baixar itens para acompanhamento", "near_miss_acompanhamento.xlsx", {"Acompanhamento": show})
