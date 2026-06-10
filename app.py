@@ -194,6 +194,7 @@ NEARMISS_SUBMODULOS = {
 
 NEAR_MISS_META_FECHAMENTO_PRAZO = 95
 NEAR_MISS_ALERTA_FECHAMENTO_PRAZO = 85
+NEAR_MISS_PRAZO_MAXIMO_DIAS = 45
 NEAR_MISS_STATUS_ORDER = ["Aberto no prazo", "Aberto vencido", "Fechado fora do prazo", "Fechado no prazo", "Aberto sem prazo"]
 NEAR_MISS_STATUS_COLOR_MAP = {
     "Aberto no prazo": "#fef3c7",
@@ -6045,6 +6046,9 @@ def near_miss_df(db):
     if not df.empty:
         for c in ["Data","Mês","Prazo","Fechamento"]:
             df[c] = pd.to_datetime(df[c], errors="coerce")
+        df["Prazo atribuído (dias)"] = (df["Prazo"] - df["Data"]).dt.days
+        df["Prazo superior a 45 dias"] = df["Prazo atribuído (dias)"].fillna(0).gt(NEAR_MISS_PRAZO_MAXIMO_DIAS)
+        df.loc[df["Prazo superior a 45 dias"], "Acompanhamento"] = "Acompanhar"
     return df
 
 def near_miss_filtrar_df(df, periodo=None, sites=None, divisoes=None, tipos=None, status_prazo=None, somente_nearmiss=False):
@@ -6171,6 +6175,23 @@ def near_miss_fig_sites_criticos(df, titulo="Sites com mais itens críticos de p
     fig.update_layout(height=altura,margin=dict(l=10,r=30,t=50,b=10),showlegend=False)
     return fig
 
+def near_miss_prazo_superior_45_df(df):
+    if df.empty or "Prazo superior a 45 dias" not in df:
+        return pd.DataFrame()
+    return df[df["Prazo superior a 45 dias"].fillna(False)].copy()
+
+def near_miss_fig_prazo_superior_45_site(df, titulo="Reports com prazo atribuído acima de 45 dias", altura=340):
+    excesso = near_miss_prazo_superior_45_df(df)
+    if excesso.empty:
+        return None
+    top = excesso.groupby("Site", dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=True).tail(10)
+    if top.empty:
+        return None
+    fig = px.bar(top, x="Quantidade", y="Site", orientation="h", text="Quantidade", title=titulo)
+    fig.update_traces(texttemplate="%{text:.0f}", textposition="outside", marker_color="#ea580c", hovertemplate="%{y}<br>Prazo > 45 dias: %{x}<extra></extra>")
+    fig.update_layout(height=altura, margin=dict(l=10, r=30, t=50, b=10), showlegend=False)
+    return fig
+
 def near_miss_pendencias_abertas_df(df):
     if df.empty:
         return df
@@ -6285,13 +6306,24 @@ def near_miss_dashboard(db,u):
     vencidos=int((fdf["Status do prazo"]=="Aberto vencido").sum()) if total else 0
     sem_prazo=int((fdf["Status do prazo"]=="Aberto sem prazo").sum()) if total else 0
     fechados_fora=int((fdf["Status do prazo"]=="Fechado fora do prazo").sum()) if total else 0
-    cols=st.columns(6)
-    vals=[("Total",total,"Concern Reports"),("Abertos",abertos,"Sem data de fechamento"),("Abertos vencidos",vencidos,"Prazo excedido"),("Abertos sem prazo",sem_prazo,"Sem prazo informado"),("Fechados fora",fechados_fora,"Fechamento excedeu prazo"),("Fechamento no prazo",f"{taxa}%","Entre itens fechados")]
+    prazo_excessivo=int(fdf.get("Prazo superior a 45 dias", pd.Series(dtype=bool)).fillna(False).sum()) if total else 0
+    cols=st.columns(7)
+    vals=[("Total",total,"Concern Reports"),("Abertos",abertos,"Sem data de fechamento"),("Abertos vencidos",vencidos,"Prazo excedido"),("Abertos sem prazo",sem_prazo,"Sem prazo informado"),("Fechados fora",fechados_fora,"Fechamento excedeu prazo"),("Prazo >45 dias",prazo_excessivo,"Prazo atribuído acima do limite do procedimento"),("Fechamento no prazo",f"{taxa}%","Entre itens fechados")]
     for c,(l,v,h) in zip(cols,vals):
         with c: kpi_card(l,v,h)
     tabs=st.tabs(["Resumo", "Prazos", "Insights", "Tendência", "Detalhamento"])
     with tabs[0]:
         section("Resumo executivo")
+        excesso_prazo = near_miss_prazo_superior_45_df(fdf)
+        pct_excesso = round(len(excesso_prazo) / total * 100, 1) if total else 0
+        pior_site_excesso = excesso_prazo.groupby("Site").size().sort_values(ascending=False) if not excesso_prazo.empty else pd.Series(dtype=int)
+        r1,r2,r3 = st.columns(3)
+        with r1:
+            kpi_card("Prazo acima de 45 dias", len(excesso_prazo), "Reports com prazo atribuído acima do limite máximo")
+        with r2:
+            kpi_card("Representatividade", f"{pct_excesso}%", "Percentual sobre os reports filtrados")
+        with r3:
+            kpi_card("Site com mais prazo >45d", pior_site_excesso.index[0] if len(pior_site_excesso) else "—", f"{int(pior_site_excesso.iloc[0])} itens" if len(pior_site_excesso) else "Sem ocorrência")
         tdf_resumo=near_miss_taxa_site_df(fdf, incluir_lag=True)
         c1,c2=st.columns(2)
         with c1:
@@ -6312,6 +6344,9 @@ def near_miss_dashboard(db,u):
             st.plotly_chart(fig_div,use_container_width=True)
         else:
             empty_state("Ainda não há itens fechados para calcular a taxa consolidada por divisão.")
+        fig_excesso = near_miss_fig_prazo_superior_45_site(fdf, altura=340)
+        if fig_excesso is not None:
+            st.plotly_chart(fig_excesso, use_container_width=True)
         c3,c4=st.columns(2)
         with c3:
             by_site=fdf.groupby("Site",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=True)
@@ -6339,6 +6374,9 @@ def near_miss_dashboard(db,u):
         fig=near_miss_fig_taxa_fechamento_site(tdf, altura=380)
         if fig is not None:
             st.plotly_chart(fig,use_container_width=True)
+        fig_excesso=near_miss_fig_prazo_superior_45_site(fdf, altura=340)
+        if fig_excesso is not None:
+            st.plotly_chart(fig_excesso,use_container_width=True)
     with tabs[2]:
         section("Insights executivos")
         criticos = near_miss_criticos_prazo_df(fdf)
@@ -6349,7 +6387,7 @@ def near_miss_dashboard(db,u):
         if not abertos_base.empty:
             hoje_ts = pd.Timestamp(date.today())
             abertos_base["Dias em aberto"] = (hoje_ts - abertos_base["Data"]).dt.days
-        i1,i2,i3,i4 = st.columns(4)
+        i1,i2,i3,i4,i5 = st.columns(5)
         with i1:
             kpi_card("Site com mais desvios", site_critico.index[0] if len(site_critico) else "—", f"{int(site_critico.iloc[0])} itens" if len(site_critico) else "Sem desvios críticos")
         with i2:
@@ -6359,6 +6397,8 @@ def near_miss_dashboard(db,u):
         with i4:
             maior_aberto = int(abertos_base["Dias em aberto"].max()) if not abertos_base.empty and abertos_base["Dias em aberto"].notna().any() else 0
             kpi_card("Maior tempo aberto", f"{maior_aberto} dias", "Entre itens sem fechamento")
+        with i5:
+            kpi_card("Prazo >45 dias", len(near_miss_prazo_superior_45_df(fdf)), "Limite máximo do procedimento")
         c1,c2 = st.columns(2)
         with c1:
             pareto_status = fdf.groupby("Status do prazo", dropna=False).size().reset_index(name="Quantidade")
@@ -6405,7 +6445,7 @@ def near_miss_dashboard(db,u):
         if crit.empty:
             empty_state("Nenhum item crítico de prazo nos filtros aplicados.")
         else:
-            show=crit.sort_values(["Status do prazo","Prazo"],na_position="last")[["Descrição","Status do prazo","Prazo","Fechamento","Data","ID","Tipo","Site","Divisão","Status","Responsável","Hazard Type"]].copy()
+            show=crit.sort_values(["Status do prazo","Prazo"],na_position="last")[["Descrição","Status do prazo","Prazo","Prazo atribuído (dias)","Prazo superior a 45 dias","Fechamento","Data","ID","Tipo","Site","Divisão","Status","Responsável","Hazard Type"]].copy()
             show = show.rename(columns={"Data": "Data da abertura"})
             for c in ["Prazo","Fechamento","Data da abertura"]:
                 show[c]=show[c].dt.strftime("%d/%m/%Y").fillna("—")
