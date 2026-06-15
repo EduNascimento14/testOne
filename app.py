@@ -1697,23 +1697,28 @@ def login_page(db):
     section[data-testid="stSidebar"]{display:none!important;}
     [data-testid="collapsedControl"]{display:none!important;}
     .block-container{max-width:880px!important;padding-top:4rem!important;}
-    .login-hero{background:linear-gradient(135deg,#ffffff,#fff8e3);border:1px solid #e5e7eb;border-radius:28px;padding:2rem;box-shadow:0 18px 45px rgba(15,23,42,.10);}
-    .login-title{font-size:2.1rem;font-weight:950;letter-spacing:-.04em;color:#0f172a;margin:0;}
-    .login-sub{color:#64748b;font-size:1rem;margin:.35rem 0 1.2rem;}
-    .login-badge{display:inline-block;background:#0f172a;color:#f8fafc;border-radius:999px;padding:.28rem .7rem;font-weight:850;font-size:.75rem;margin-bottom:.8rem;}
-    .login-note{background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:.85rem;color:#475569;font-size:.9rem;}
+    .login-hero{
+        background:
+          radial-gradient(circle at 20% 8%, rgba(96,165,250,.22), transparent 28%),
+          radial-gradient(circle at 92% 35%, rgba(34,197,94,.10), transparent 24%),
+          linear-gradient(160deg,#0b1220 0%,#111827 48%,#182235 100%);
+        border:1px solid rgba(255,255,255,.10);border-radius:28px;padding:2rem;box-shadow:0 18px 45px rgba(15,23,42,.18);
+    }
+    .login-title{font-size:2.2rem;font-weight:950;letter-spacing:-.04em;color:#f8fafc;margin:0;}
+    .login-sub{color:#cbd5e1;font-size:1rem;margin:.35rem 0 1.2rem;}
+    .login-badge{display:inline-block;background:linear-gradient(135deg,#f5c542,#d9a514);color:#182235;border-radius:999px;padding:.28rem .7rem;font-weight:900;font-size:.75rem;margin-bottom:.8rem;box-shadow:0 10px 24px rgba(0,0,0,.18);}
     </style>
     """, unsafe_allow_html=True)
     st.markdown("""
     <div class='login-hero'>
-      <div class='login-badge'>Plataforma Integrada EHS</div>
-      <h1 class='login-title'>Acesso seguro</h1>
-      <p class='login-sub'>Entre com seu login e senha para acessar os indicadores do seu site.</p>
+      <div class='login-badge'>Gestão integrada</div>
+      <h1 class='login-title'>Plataforma Integrada EHS</h1>
+      <p class='login-sub'>Entre com seu login e senha para acessar a plataforma.</p>
     </div>
     """, unsafe_allow_html=True)
     st.write("")
     with st.form("login_form", clear_on_submit=False):
-        login = st.text_input("Login", placeholder="Ex.: Eduardo")
+        login = st.text_input("Login")
         senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
         entrar = st.form_submit_button("Entrar", use_container_width=True, type="primary")
     if entrar:
@@ -1732,7 +1737,6 @@ def login_page(db):
             st.rerun()
         else:
             st.error("Login ou senha inválidos.")
-    st.markdown("<div class='login-note'>O acesso é segmentado por site. Perfis de site visualizam apenas as informações da própria unidade; o perfil master de Eduardo acessa a visão completa LAG.</div>", unsafe_allow_html=True)
 
 def top_user_bar(u):
     if not u:
