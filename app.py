@@ -11,7 +11,7 @@ import streamlit as st
 from sqlalchemy import create_engine, Column, Integer, String, Text, Date, DateTime, Boolean, Float, ForeignKey, UniqueConstraint, LargeBinary, inspect
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -7540,7 +7540,9 @@ def relatorios_fmt_brl(v):
 
 def relatorios_fmt_tco2(v):
     try:
-        return relatorios_fmt_num(v, 1) + " tCO₂e"
+        # ReportLab/Helvetica pode não renderizar o caractere subscrito ₂ corretamente.
+        # Usar CO2e evita quadrados pretos no PDF e mantém o significado claro.
+        return relatorios_fmt_num(v, 1) + " tCO2e"
     except Exception:
         return "—"
 
@@ -7731,13 +7733,65 @@ def relatorios_top_problemas(df, limite=12):
     out["_ordem"]=out["Prioridade"].map(ordem).fillna(9)
     return out.sort_values(["_ordem","Site","Módulo"]).drop(columns=["_ordem"]).head(limite)
 
+def relatorios_pdf_safe_text(v):
+    """Texto seguro para renderização em PDF com fontes padrão do ReportLab."""
+    if v is None:
+        return "—"
+    s = str(v)
+    repl = {
+        "CO₂": "CO2", "tCO₂e": "tCO2e", "₂": "2", "₃": "3",
+        "—": "-", "–": "-", "•": "-", "≤": "<=", "≥": ">=",
+        "“": '"', "”": '"', "‘": "'", "’": "'",
+    }
+    for a, b in repl.items():
+        s = s.replace(a, b)
+    return s
+
+
 def relatorios_pdf_style():
     styles=getSampleStyleSheet()
-    return {"title": ParagraphStyle("RelTitle", parent=styles["Title"], fontSize=18, leading=22, textColor=colors.HexColor("#0f172a"), spaceAfter=8), "sub": ParagraphStyle("RelSub", parent=styles["BodyText"], fontSize=8.5, leading=11, textColor=colors.HexColor("#475569"), spaceAfter=8), "h": ParagraphStyle("RelH", parent=styles["Heading2"], fontSize=11, leading=14, textColor=colors.HexColor("#111827"), spaceBefore=8, spaceAfter=5), "body": ParagraphStyle("RelBody", parent=styles["BodyText"], fontSize=8.2, leading=10.5, textColor=colors.HexColor("#111827")), "small": ParagraphStyle("RelSmall", parent=styles["BodyText"], fontSize=7.2, leading=9, textColor=colors.HexColor("#334155"))}
+    return {
+        "title": ParagraphStyle("RelTitle", parent=styles["Title"], fontSize=17, leading=21, textColor=colors.HexColor("#0f172a"), spaceAfter=8),
+        "sub": ParagraphStyle("RelSub", parent=styles["BodyText"], fontSize=8.2, leading=10.5, textColor=colors.HexColor("#475569"), spaceAfter=8),
+        "h": ParagraphStyle("RelH", parent=styles["Heading2"], fontSize=10.8, leading=13.2, textColor=colors.HexColor("#111827"), spaceBefore=7, spaceAfter=5),
+        "body": ParagraphStyle("RelBody", parent=styles["BodyText"], fontSize=8.1, leading=10.3, textColor=colors.HexColor("#111827")),
+        "small": ParagraphStyle("RelSmall", parent=styles["BodyText"], fontSize=7.1, leading=8.9, textColor=colors.HexColor("#334155")),
+        "table_header": ParagraphStyle("RelTableHeader", parent=styles["BodyText"], fontSize=6.7, leading=7.8, textColor=colors.white, fontName="Helvetica-Bold", wordWrap="CJK", alignment=1),
+        "table_cell": ParagraphStyle("RelTableCell", parent=styles["BodyText"], fontSize=6.6, leading=7.8, textColor=colors.HexColor("#111827"), wordWrap="CJK"),
+        "table_cell_center": ParagraphStyle("RelTableCellCenter", parent=styles["BodyText"], fontSize=6.6, leading=7.8, textColor=colors.HexColor("#111827"), wordWrap="CJK", alignment=1),
+    }
 
-def relatorios_pdf_tabela(data, col_widths=None, header_bg="#0f172a", row_status_col=None):
-    tbl=Table(data, colWidths=col_widths, repeatRows=1)
-    style=[("BACKGROUND",(0,0),(-1,0),colors.HexColor(header_bg)),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,0),7),("FONTSIZE",(0,1),(-1,-1),6.7),("TEXTCOLOR",(0,1),(-1,-1),colors.HexColor("#111827")),("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#e5e7eb")),("VALIGN",(0,0),(-1,-1),"TOP"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#f8fafc")]),("LEFTPADDING",(0,0),(-1,-1),4),("RIGHTPADDING",(0,0),(-1,-1),4)]
+
+def relatorios_pdf_tabela(data, col_widths=None, header_bg="#0f172a", row_status_col=None, align_center_cols=None):
+    """Tabela PDF com quebra de linha nos cabeçalhos/células para evitar texto cortado."""
+    if not data:
+        return Table([["Sem dados"]])
+    align_center_cols = set(align_center_cols or [])
+    stl = relatorios_pdf_style()
+    wrapped = []
+    for r_idx, row in enumerate(data):
+        out_row = []
+        for c_idx, val in enumerate(row):
+            txt = html_escape(relatorios_pdf_safe_text(val))
+            if r_idx == 0:
+                out_row.append(Paragraph(txt, stl["table_header"]))
+            else:
+                style_name = "table_cell_center" if c_idx in align_center_cols else "table_cell"
+                out_row.append(Paragraph(txt, stl[style_name]))
+        wrapped.append(out_row)
+    tbl=Table(wrapped, colWidths=col_widths, repeatRows=1, hAlign="LEFT")
+    style=[
+        ("BACKGROUND",(0,0),(-1,0),colors.HexColor(header_bg)),
+        ("TEXTCOLOR",(0,0),(-1,0),colors.white),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+        ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#e5e7eb")),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#f8fafc")]),
+        ("LEFTPADDING",(0,0),(-1,-1),3),
+        ("RIGHTPADDING",(0,0),(-1,-1),3),
+        ("TOPPADDING",(0,0),(-1,-1),4),
+        ("BOTTOMPADDING",(0,0),(-1,-1),4),
+    ]
     if row_status_col is not None:
         for i, row in enumerate(data[1:], start=1):
             status=str(row[row_status_col]) if len(row)>row_status_col else ""
@@ -7751,27 +7805,38 @@ def relatorios_pdf_tabela(data, col_widths=None, header_bg="#0f172a", row_status
     return tbl
 
 def gerar_pdf_relatorio_integrado(df, titulo="Relatório Executivo Integrado EHS", escopo="Todos os sites", usuario="—"):
-    buf=io.BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=1.15*cm,leftMargin=1.15*cm,topMargin=1.15*cm,bottomMargin=1.05*cm)
+    buf=io.BytesIO(); doc=SimpleDocTemplate(buf,pagesize=landscape(A4),rightMargin=0.85*cm,leftMargin=0.85*cm,topMargin=0.9*cm,bottomMargin=0.85*cm)
     stl=relatorios_pdf_style(); story=[]; data_ref=datetime.now().strftime("%d/%m/%Y %H:%M")
-    story.append(Paragraph(titulo, stl["title"])); story.append(Paragraph(f"Escopo: <b>{html_escape(escopo)}</b> | Emissão: {data_ref} | Usuário: {html_escape(usuario)}", stl["sub"]))
+    story.append(Paragraph(html_escape(relatorios_pdf_safe_text(titulo)), stl["title"])); story.append(Paragraph(f"Escopo: <b>{html_escape(relatorios_pdf_safe_text(escopo))}</b> | Emissão: {data_ref} | Usuário: {html_escape(relatorios_pdf_safe_text(usuario))}", stl["sub"]))
     if df is None or df.empty:
         story.append(Paragraph("Sem dados disponíveis para os filtros selecionados.", stl["body"])); doc.build(story); return buf.getvalue()
     total_sites=len(df); prioritarios=int((df["Status executivo"]=="Prioritário").sum()); atencao=int((df["Status executivo"]=="Atenção").sum()); controlados=int((df["Status executivo"]=="Controlado").sum()); pior=df.sort_values("Score de atenção", ascending=False).iloc[0]
-    story.append(Paragraph("Resumo executivo", stl["h"])); story.append(Paragraph(f"Foram avaliados <b>{total_sites}</b> site(s). O relatório identifica <b>{prioritarios}</b> site(s) prioritário(s), <b>{atencao}</b> em atenção e <b>{controlados}</b> controlado(s). O principal ponto de atenção no escopo é <b>{html_escape(str(pior.get('Site','—')))}</b>, com score de atenção {relatorios_fmt_num(pior.get('Score de atenção'),1)}.", stl["body"])); story.append(Spacer(1,0.18*cm))
+    story.append(Paragraph("Resumo executivo", stl["h"])); story.append(Paragraph(f"Foram avaliados <b>{total_sites}</b> site(s). O relatório identifica <b>{prioritarios}</b> site(s) prioritário(s), <b>{atencao}</b> em atenção e <b>{controlados}</b> controlado(s). O principal ponto de atenção no escopo é <b>{html_escape(relatorios_pdf_safe_text(pior.get('Site','—')))}</b>, com score de atenção {relatorios_fmt_num(pior.get('Score de atenção'),1)}.", stl["body"])); story.append(Spacer(1,0.18*cm))
     tabela=relatorios_tabela_executiva(df).copy(); cols_pdf=["Site","Status executivo","Score de atenção","Máquinas conformes %","Atendimento obrigações %","Near Miss fechamento no prazo %","Obrigações pendentes","Near Miss abertos vencidos","Máquinas PAC vencidos"]
     show=tabela[[c for c in cols_pdf if c in tabela.columns]].copy()
     for c in ["Máquinas conformes %","Atendimento obrigações %","Near Miss fechamento no prazo %"]:
         if c in show: show[c]=show[c].apply(relatorios_fmt_pct)
     if "Score de atenção" in show: show["Score de atenção"]=show["Score de atenção"].apply(lambda x: relatorios_fmt_num(x,1))
-    data=[list(show.columns)] + show.astype(str).values.tolist(); story.append(Paragraph("Status consolidado por site", stl["h"])); story.append(relatorios_pdf_tabela(data, col_widths=[2.2*cm,2.1*cm,1.5*cm,1.8*cm,1.9*cm,2.0*cm,1.6*cm,1.6*cm,1.6*cm][:len(show.columns)], row_status_col=list(show.columns).index("Status executivo") if "Status executivo" in show.columns else None))
+    header_map={
+        "Status executivo":"Status",
+        "Score de atenção":"Score",
+        "Máquinas conformes %":"Máq. conf.",
+        "Atendimento obrigações %":"Obrig. atend.",
+        "Near Miss fechamento no prazo %":"NM no prazo",
+        "Obrigações pendentes":"Obrig. pend.",
+        "Near Miss abertos vencidos":"NM venc.",
+        "Máquinas PAC vencidos":"PAC máq. venc.",
+    }
+    show_pdf=show.rename(columns=header_map)
+    data=[list(show_pdf.columns)] + show_pdf.astype(str).values.tolist(); story.append(Paragraph("Status consolidado por site", stl["h"])); story.append(relatorios_pdf_tabela(data, col_widths=[3.0*cm,2.25*cm,1.55*cm,2.0*cm,2.1*cm,2.0*cm,1.85*cm,1.7*cm,1.95*cm][:len(show_pdf.columns)], row_status_col=list(show_pdf.columns).index("Status") if "Status" in show_pdf.columns else None, align_center_cols=list(range(2,len(show_pdf.columns)))))
     problemas=relatorios_top_problemas(df, limite=10); story.append(Paragraph("Principais problemas e focos de trabalho", stl["h"]))
     if problemas.empty: story.append(Paragraph("Não há problemas críticos destacados para o escopo selecionado. Manter rotina de monitoramento e fechamento das ações no prazo.", stl["body"]))
     else:
-        data_prob=[list(problemas.columns)] + problemas.astype(str).values.tolist(); story.append(relatorios_pdf_tabela(data_prob, col_widths=[2.0*cm,2.6*cm,6.3*cm,2.1*cm,2.2*cm][:len(problemas.columns)], header_bg="#334155", row_status_col=list(problemas.columns).index("Prioridade") if "Prioridade" in problemas.columns else None))
+        data_prob=[list(problemas.columns)] + problemas.astype(str).values.tolist(); story.append(relatorios_pdf_tabela(data_prob, col_widths=[2.7*cm,3.1*cm,9.4*cm,2.5*cm,2.4*cm][:len(problemas.columns)], header_bg="#334155", row_status_col=list(problemas.columns).index("Prioridade") if "Prioridade" in problemas.columns else None, align_center_cols=[3,4]))
     story.append(Paragraph("Leitura por site", stl["h"]))
     for _, r in df.sort_values("Score de atenção", ascending=False).head(6).iterrows():
         cor={"Prioritário":"#7f1d1d","Atenção":"#713f12","Controlado":"#14532d"}.get(r.get("Status executivo"),"#111827")
-        story.append(Paragraph(f"<font color='{cor}'><b>{html_escape(str(r.get('Site','—')))} — {html_escape(str(r.get('Status executivo','—')))}</b></font>", stl["body"])); story.append(Paragraph("; ".join(html_escape(x) for x in relatorios_focos_linha(r, limite=4)), stl["small"])); story.append(Spacer(1,0.08*cm))
+        story.append(Paragraph(f"<font color='{cor}'><b>{html_escape(relatorios_pdf_safe_text(r.get('Site','—')))} - {html_escape(relatorios_pdf_safe_text(r.get('Status executivo','—')))}</b></font>", stl["body"])); story.append(Paragraph("; ".join(html_escape(relatorios_pdf_safe_text(x)) for x in relatorios_focos_linha(r, limite=4)), stl["small"])); story.append(Spacer(1,0.08*cm))
     story.append(Spacer(1,0.12*cm)); story.append(Paragraph("Observação: o score é uma priorização executiva composta por defasagens de atendimento legal, proteções de máquinas, auditoria EHS, Near Miss e indicadores de energia. Ele não substitui a análise técnica de cada módulo, mas direciona onde agir primeiro.", stl["small"])); doc.build(story); return buf.getvalue()
 
 def relatorios_integrados_submodulos_home(db,u):
@@ -7803,6 +7868,17 @@ def relatorio_executivo_integrado_page(db,u):
         empty_state("Selecione ao menos um site para gerar o relatório."); return
     section("Prévia executiva")
     c1,c2,c3,c4=st.columns(4); c1.metric("Sites no relatório", len(df)); c2.metric("Prioritários", int((df["Status executivo"]=="Prioritário").sum())); c3.metric("Em atenção", int((df["Status executivo"]=="Atenção").sum())); c4.metric("Controlados", int((df["Status executivo"]=="Controlado").sum()))
+    with st.expander("Como o score de atenção é calculado?", expanded=False):
+        st.markdown("""
+        O score é uma priorização executiva: quanto maior, maior a necessidade de ação. Ele soma defasagens e pendências dos módulos: Proteções de Máquinas, Auditoria EHS, Near Miss e Legislação.
+
+        - **Proteções de Máquinas:** penaliza baixa conformidade, PACs vencidos e PACs abertos.
+        - **Auditoria EHS:** penaliza conformidade abaixo de 90%, PACs vencidos e não conformidades críticas.
+        - **Near Miss:** penaliza fechamento no prazo abaixo da meta, reports vencidos, reports em acompanhamento e prazos atribuídos acima de 45 dias.
+        - **Legislação:** penaliza atendimento abaixo da meta de 99% e quantidade de legislações/obrigações pendentes.
+
+        Regra de status: **Prioritário** quando o score é ≥70 ou há grandes desvios críticos; **Atenção** quando o score é ≥30 ou algum indicador-chave está abaixo da meta; **Controlado** quando os indicadores estão em patamar satisfatório.
+        """)
     show=relatorios_tabela_executiva(df); st.dataframe(relatorios_styler_tabela(show), use_container_width=True, hide_index=True)
     download_excel_button("Baixar base do relatório em Excel", "relatorio_integrado_base.xlsx", {"Resumo_Executivo": show, "Problemas": relatorios_top_problemas(df, 100)}, key="relatorio_integrado_excel")
     escopo_nome="Todos os sites visíveis" if escopo == "Todos os sites visíveis" else ", ".join(selecionados); pdf=gerar_pdf_relatorio_integrado(df, "Relatório Executivo Integrado EHS", escopo_nome, u.nome if u else "—")
