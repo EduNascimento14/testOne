@@ -67,6 +67,7 @@ MODULO_COLOR_MAP = {
     "auditoria": {"border": "#7c3aed", "bg": "#f5f3ff", "icon": "🧭"},
     "nearmiss": {"border": "#f97316", "bg": "#fff7ed", "icon": "⚠️"},
     "legal": {"border": "#0891b2", "bg": "#ecfeff", "icon": "⚖️"},
+    "relatorios": {"border": "#0f172a", "bg": "#f8fafc", "icon": "📑"},
 }
 NR12_HOME_PAGE = "Submódulos da Sustentação"
 NR12_SUBMODULOS = {
@@ -195,6 +196,8 @@ NEARMISS_SUBMODULOS = {
 
 NOME_MODULO_LEGAL = "Legislação e Obrigações"
 LEGAL_HOME_PAGE = "Submódulos de Legislação e Obrigações"
+LEGAL_META_ATENDIMENTO = 99
+LEGAL_ALERTA_ATENDIMENTO = 85
 LEGAL_SUBMODULOS = {
     "Gestão e Performance": {
         "icone": "📊",
@@ -208,11 +211,11 @@ LEGAL_SUBMODULOS = {
         "cor": "#2563eb",
         "paginas": ["Atualizar Base Legal"],
     },
-    "Análise e Relatórios": {
+    "Análise": {
         "icone": "🔎",
-        "descricao": "Consulta da base consolidada, lacunas de atendimento e exportações.",
+        "descricao": "Consulta da base consolidada e lacunas de atendimento.",
         "cor": "#0f766e",
-        "paginas": ["Base Legal Consolidada", "Relatórios Legais"],
+        "paginas": ["Base Legal Consolidada"],
     },
 }
 LEGAL_STATUS_LEGISLACAO_ORDER = ["Atendido", "Não atendido", "Em análise", "Em Adequação", "Não verificado", "Real Sem Obrigação"]
@@ -227,6 +230,23 @@ LEGAL_STATUS_COLOR_MAP = {
     "Não verificado": "#94a3b8",
     "Não verificada": "#94a3b8",
     "Real Sem Obrigação": "#64748b",
+}
+
+NOME_MODULO_RELATORIOS = "Relatórios Integrados"
+RELATORIOS_HOME_PAGE = "Submódulos de Relatórios Integrados"
+RELATORIOS_EXECUTIVO_PAGE = "Relatório Executivo Integrado"
+RELATORIOS_SUBMODULOS = {
+    "Relatórios Executivos": {
+        "icone": "📑",
+        "descricao": "PDF executivo unificado com principais indicadores, sites prioritários e focos de trabalho.",
+        "cor": "#0f172a",
+        "paginas": [RELATORIOS_EXECUTIVO_PAGE],
+    },
+}
+RELATORIOS_STATUS_COLOR_MAP = {
+    "Controlado": "#16a34a",
+    "Atenção": "#facc15",
+    "Prioritário": "#dc2626",
 }
 
 NEAR_MISS_META_FECHAMENTO_PRAZO = 95
@@ -437,6 +457,7 @@ def hide_sidebar_on_home():
     page_energia = st.session_state.get("page_energia", ENERGIA_HOME_PAGE if "ENERGIA_HOME_PAGE" in globals() else "Submódulos de Energia e Emissões")
     page_nearmiss = st.session_state.get("page_nearmiss", NEARMISS_HOME_PAGE if "NEARMISS_HOME_PAGE" in globals() else "Submódulos de Near Miss")
     page_legal = st.session_state.get("page_legal", LEGAL_HOME_PAGE if "LEGAL_HOME_PAGE" in globals() else "Submódulos de Legislação e Obrigações")
+    page_relatorios = st.session_state.get("page_relatorios", RELATORIOS_HOME_PAGE if "RELATORIOS_HOME_PAGE" in globals() else "Submódulos de Relatórios Integrados")
     ocultar = (
         (mod == "home")
         or (mod == "nr12" and page_nr12 == (NR12_HOME_PAGE if "NR12_HOME_PAGE" in globals() else "Submódulos da Sustentação"))
@@ -444,6 +465,7 @@ def hide_sidebar_on_home():
         or (mod == "energia" and page_energia == (ENERGIA_HOME_PAGE if "ENERGIA_HOME_PAGE" in globals() else "Submódulos de Energia e Emissões"))
         or (mod == "nearmiss" and page_nearmiss == (NEARMISS_HOME_PAGE if "NEARMISS_HOME_PAGE" in globals() else "Submódulos de Near Miss"))
         or (mod == "legal" and page_legal == (LEGAL_HOME_PAGE if "LEGAL_HOME_PAGE" in globals() else "Submódulos de Legislação e Obrigações"))
+        or (mod == "relatorios" and page_relatorios == (RELATORIOS_HOME_PAGE if "RELATORIOS_HOME_PAGE" in globals() else "Submódulos de Relatórios Integrados"))
     )
     if ocultar:
         st.markdown("""
@@ -1501,6 +1523,10 @@ def descobrir_submodulo_por_pagina(modulo, pagina):
         for nome, cfg in LEGAL_SUBMODULOS.items():
             if pagina in cfg.get("paginas", []):
                 return nome
+    if modulo == "relatorios":
+        for nome, cfg in RELATORIOS_SUBMODULOS.items():
+            if pagina in cfg.get("paginas", []):
+                return nome
     return None
 
 def nome_modulo_visual(modulo):
@@ -1510,6 +1536,7 @@ def nome_modulo_visual(modulo):
         "energia": "Controle de Energia e Emissões",
         "nearmiss": NOME_MODULO_NEARMISS,
         "legal": NOME_MODULO_LEGAL,
+        "relatorios": NOME_MODULO_RELATORIOS,
         "ajuda": AJUDA_PAGE,
     }.get(modulo, "Página inicial")
 
@@ -1532,6 +1559,9 @@ def render_breadcrumb():
     elif modulo == "legal":
         pagina = st.session_state.get("page_legal", LEGAL_HOME_PAGE)
         home_mod = LEGAL_HOME_PAGE
+    elif modulo == "relatorios":
+        pagina = st.session_state.get("page_relatorios", RELATORIOS_HOME_PAGE)
+        home_mod = RELATORIOS_HOME_PAGE
     elif modulo == "ajuda":
         pagina = AJUDA_PAGE
         home_mod = AJUDA_PAGE
@@ -1680,7 +1710,7 @@ def dashboard_integrado(db,u):
         empty_state("Nenhum alerta crítico ou vencido identificado.")
 
 def home_page(db,u):
-    header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas, Controle de Energia e Emissões, Near Miss e Legislação")
+    header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas, Controle de Energia e Emissões, Near Miss, Legislação e Relatórios Integrados")
     section("Módulos")
     c1,c2=st.columns(2)
     with c1:
@@ -1699,6 +1729,14 @@ def home_page(db,u):
             st.session_state.page_energia=ENERGIA_HOME_PAGE
             st.session_state.nav_energia=ENERGIA_HOME_PAGE
             st.session_state.submodulo_energia=""
+            st.rerun()
+        rc=MODULO_COLOR_MAP["relatorios"]
+        module_card(NOME_MODULO_RELATORIOS,"PDF executivo unificado com principais indicadores, sites prioritários e foco de trabalho por unidade.",rc["icon"],rc["border"],rc["bg"])
+        if st.button("Acessar Relatórios Integrados",use_container_width=True):
+            st.session_state.modulo="relatorios"
+            st.session_state.page_relatorios=RELATORIOS_HOME_PAGE
+            st.session_state.nav_relatorios=RELATORIOS_HOME_PAGE
+            st.session_state.submodulo_relatorios=""
             st.rerun()
     with c2:
         ac=MODULO_COLOR_MAP["auditoria"]
@@ -7078,8 +7116,8 @@ def legal_fig_taxa(df_taxa, titulo, eixo="Site"):
     if df_taxa is None or df_taxa.empty:
         return None
     d = df_taxa.copy()
-    d["Cor"] = d["Taxa %"].apply(lambda x: "#16a34a" if float(x or 0) >= 95 else "#facc15" if float(x or 0) >= 85 else "#dc2626")
-    d["Meta"] = 95
+    d["Cor"] = d["Taxa %"].apply(lambda x: "#16a34a" if float(x or 0) >= LEGAL_META_ATENDIMENTO else "#facc15" if float(x or 0) >= 85 else "#dc2626")
+    d["Meta"] = LEGAL_META_ATENDIMENTO
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=d["Taxa %"],
@@ -7092,7 +7130,7 @@ def legal_fig_taxa(df_taxa, titulo, eixo="Site"):
         hovertemplate="<b>%{y}</b><br>Atendimento: %{x:.1f}%<br>Atendidas: %{customdata[0]}<br>Total: %{customdata[1]}<extra></extra>",
         name="Atendimento",
     ))
-    fig.add_vline(x=95, line_width=2, line_dash="dash", line_color="#15803d", annotation_text="Meta 95%", annotation_position="top right")
+    fig.add_vline(x=LEGAL_META_ATENDIMENTO, line_width=2, line_dash="dash", line_color="#15803d", annotation_text=f"Meta {LEGAL_META_ATENDIMENTO}%", annotation_position="top right")
     fig.update_yaxes(autorange="reversed", title=None, tickfont=dict(color="#111827"))
     fig.update_xaxes(title="Atendimento (%)", range=[0, 108], showgrid=True, gridcolor="rgba(148,163,184,0.22)", tickfont=dict(color="#111827"))
     fig.update_traces(textfont=dict(color="#111827", size=12))
@@ -7124,7 +7162,7 @@ def legal_cor_taxa(taxa):
         t = float(taxa or 0)
     except Exception:
         t = 0
-    if t >= 95:
+    if t >= LEGAL_META_ATENDIMENTO:
         return "#16a34a"
     if t >= 85:
         return "#facc15"
@@ -7136,9 +7174,9 @@ def legal_status_site(taxa_obrigacao, pendencias):
     except Exception:
         taxa = 0
     pend = int(pendencias or 0)
-    if taxa >= 95 and pend == 0:
+    if taxa >= LEGAL_META_ATENDIMENTO and pend == 0:
         return "Em conformidade"
-    if taxa >= 95:
+    if taxa >= LEGAL_META_ATENDIMENTO:
         return "Bom acompanhamento"
     if taxa >= 85:
         return "Atenção"
@@ -7192,10 +7230,10 @@ def legal_styler_resumo_sites(df):
         for col in row.index:
             if col == "Atend. legislação":
                 taxa = taxa_from_val(row.get(col))
-                styles.append(f"background-color:{'#dcfce7' if taxa >= 95 else '#fef9c3' if taxa >= 85 else '#fee2e2'};color:#111827;font-weight:800;")
+                styles.append(f"background-color:{'#dcfce7' if taxa >= LEGAL_META_ATENDIMENTO else '#fef9c3' if taxa >= 85 else '#fee2e2'};color:#111827;font-weight:800;")
             elif col == "Atend. obrigações":
                 taxa = taxa_from_val(row.get(col))
-                styles.append(f"background-color:{'#dcfce7' if taxa >= 95 else '#fef9c3' if taxa >= 85 else '#fee2e2'};color:#111827;font-weight:800;")
+                styles.append(f"background-color:{'#dcfce7' if taxa >= LEGAL_META_ATENDIMENTO else '#fef9c3' if taxa >= 85 else '#fee2e2'};color:#111827;font-weight:800;")
             elif col == "Status":
                 styles.append(cor_status)
             elif col in ["Pend. legislação", "Pend. obrigações"] and row.get(col, 0):
@@ -7204,67 +7242,6 @@ def legal_styler_resumo_sites(df):
                 styles.append("color:#111827;")
         return styles
     return df.style.apply(style_row, axis=1)
-
-def legal_png_resumo_sites(df):
-    if df is None or df.empty:
-        return b""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except Exception:
-        return b""
-    show_cols = ["Site", "Divisão", "Atend. legislação", "Pend. legislação", "Atend. obrigações", "Pend. obrigações", "Status"]
-    data = df[[c for c in show_cols if c in df.columns]].copy()
-    try:
-        font_regular = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
-        font_bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
-        font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 26)
-    except Exception:
-        font_regular = ImageFont.load_default()
-        font_bold = ImageFont.load_default()
-        font_title = ImageFont.load_default()
-    col_widths = [210, 190, 180, 170, 180, 170, 210]
-    row_h = 48
-    title_h = 76
-    pad = 22
-    width = sum(col_widths) + pad * 2
-    height = title_h + row_h * (len(data) + 1) + pad
-    img = Image.new("RGB", (width, height), "#ffffff")
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, width, title_h], fill="#0f172a")
-    draw.text((pad, 18), "Resumo Legal por Site", fill="#ffffff", font=font_title)
-    draw.text((width - 300, 26), datetime.now().strftime("%d/%m/%Y %H:%M"), fill="#cbd5e1", font=font_regular)
-    y = title_h
-    x = pad
-    headers = list(data.columns)
-    for i, h in enumerate(headers):
-        draw.rectangle([x, y, x + col_widths[i], y + row_h], fill="#e2e8f0", outline="#cbd5e1")
-        draw.text((x + 8, y + 14), str(h), fill="#111827", font=font_bold)
-        x += col_widths[i]
-    y += row_h
-    for idx, (_, row) in enumerate(data.iterrows()):
-        x = pad
-        base_fill = "#f8fafc" if idx % 2 == 0 else "#ffffff"
-        for i, col in enumerate(headers):
-            val = str(row.get(col, ""))
-            fill = base_fill
-            if col in ["Atend. legislação", "Atend. obrigações"]:
-                try:
-                    taxa = float(val.replace("%", "").replace(",", "."))
-                except Exception:
-                    taxa = 0
-                fill = "#dcfce7" if taxa >= 95 else "#fef9c3" if taxa >= 85 else "#fee2e2"
-            elif col == "Status":
-                fill = {"Em conformidade":"#dcfce7", "Bom acompanhamento":"#e0f2fe", "Atenção":"#fef9c3", "Prioritário":"#fee2e2"}.get(val, base_fill)
-            draw.rectangle([x, y, x + col_widths[i], y + row_h], fill=fill, outline="#e5e7eb")
-            max_chars = max(8, int(col_widths[i] / 9))
-            if len(val) > max_chars:
-                val = val[:max_chars-1] + "…"
-            draw.text((x + 8, y + 14), val, fill="#111827", font=font_bold if col in ["Atend. legislação", "Atend. obrigações", "Status"] else font_regular)
-            x += col_widths[i]
-        y += row_h
-    out = io.BytesIO()
-    img.save(out, format="PNG")
-    return out.getvalue()
 
 def legal_formata_tabela(df):
     if df is None or df.empty:
@@ -7392,15 +7369,7 @@ def legal_dashboard(db,u):
             show_cols = ["Site", "Divisão", "Legislações", "Atend. legislação", "Pend. legislação", "Obrigações", "Atend. obrigações", "Pend. obrigações", "Status"]
             show = resumo_sites[show_cols].copy()
             st.dataframe(legal_styler_resumo_sites(show), use_container_width=True, hide_index=True)
-            png = legal_png_resumo_sites(resumo_sites)
-            d1,d2=st.columns([1,1])
-            with d1:
-                download_excel_button("Baixar tabela em Excel", "resumo_legal_sites.xlsx", {"Resumo_sites": resumo_sites[show_cols]}, key="legal_resumo_sites_excel")
-            with d2:
-                if png:
-                    st.download_button("Baixar tabela em PNG", data=png, file_name="resumo_legal_sites.png", mime="image/png", use_container_width=True, key="legal_resumo_sites_png")
-                else:
-                    st.caption("PNG indisponível neste ambiente.")
+            download_excel_button("Baixar tabela em Excel", "resumo_legal_sites.xlsx", {"Resumo_sites": resumo_sites[show_cols]}, key="legal_resumo_sites_excel")
     with tabs[2]:
         section("Análise da legislação")
         a,b=st.columns(2)
@@ -7514,6 +7483,7 @@ def legal_atualizar_base(db,u):
                     db.add(LegalUploadHistorico(nome_arquivo=", ".join([f.name for f in files])[:260],tipo_base=tipo_hist,linhas_importadas=len(regs),usuario=u.nome if u else "—",observacoes=f"Atualização: {modo}"))
                     registrar_log(db,u,NOME_MODULO_LEGAL,"LegalRegistro",None,"sobrescrever",observacao=f"{len(regs)} registros importados | {modo}")
                     db.commit()
+                    st.cache_data.clear()
                     st.success("Base legal atualizada com sucesso.")
                     st.rerun()
                 except Exception as e:
@@ -7540,17 +7510,312 @@ def legal_base_page(db,u):
     st.dataframe(show,use_container_width=True,hide_index=True)
     download_excel_button("Exportar base legal", "base_legal_consolidada.xlsx", {"Base_Legal": show}, key="legal_base_download")
 
-def legal_relatorios_page(db,u):
-    header("Relatórios Legais", "Exportações consolidadas do módulo de legislação e obrigações")
-    df=legal_df(db)
+
+
+# =========================
+# Relatórios Integrados
+# =========================
+def relatorios_float(v, default=0.0):
+    try:
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+def relatorios_fmt_pct(v):
+    return f"{relatorios_float(v):.1f}%"
+
+def relatorios_fmt_num(v, casas=0):
+    try:
+        return f"{float(v):,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "—"
+
+def relatorios_fmt_brl(v):
+    try:
+        return "R$ " + relatorios_fmt_num(v, 0)
+    except Exception:
+        return "—"
+
+def relatorios_fmt_tco2(v):
+    try:
+        return relatorios_fmt_num(v, 1) + " tCO₂e"
+    except Exception:
+        return "—"
+
+def relatorios_site_codigos_visiveis(db, u):
+    ids = visible_site_ids(u, db)
+    sites = db.query(Site).filter(Site.id.in_(ids), Site.codigo != "Corporativo").order_by(Site.codigo).all() if ids else []
+    codigos = [s.codigo for s in sites if s.codigo in SITES_PADRAO]
+    if not codigos and can_admin(u):
+        codigos = [s for s in SITES_PADRAO]
+    return codigos
+
+def relatorios_status_por_score(score, linha):
+    taxa_legal = min(relatorios_float(linha.get("Atendimento legislação %")), relatorios_float(linha.get("Atendimento obrigações %")))
+    taxa_nm = relatorios_float(linha.get("Near Miss fechamento no prazo %"))
+    if score >= 70 or taxa_legal < 85 or relatorios_float(linha.get("Máquinas PAC vencidos")) >= 3 or relatorios_float(linha.get("Auditoria PAC vencidos")) >= 3:
+        return "Prioritário"
+    if score >= 30 or taxa_legal < LEGAL_META_ATENDIMENTO or taxa_nm < NEAR_MISS_META_FECHAMENTO_PRAZO:
+        return "Atenção"
+    return "Controlado"
+
+def relatorios_focos_linha(linha, limite=6):
+    focos = []
+    if relatorios_float(linha.get("Obrigações pendentes")) > 0 or relatorios_float(linha.get("Atendimento obrigações %")) < LEGAL_META_ATENDIMENTO:
+        focos.append(f"Legal: {relatorios_fmt_pct(linha.get('Atendimento obrigações %'))} em obrigações; {int(relatorios_float(linha.get('Obrigações pendentes')))} pendência(s)")
+    if relatorios_float(linha.get("Máquinas não conformes")) > 0 or relatorios_float(linha.get("Máquinas PAC vencidos")) > 0:
+        focos.append(f"Proteções: {int(relatorios_float(linha.get('Máquinas não conformes')))} máquina(s) não conformes; {int(relatorios_float(linha.get('Máquinas PAC vencidos')))} PAC(s) vencido(s)")
+    if relatorios_float(linha.get("Near Miss abertos vencidos")) > 0 or relatorios_float(linha.get("Near Miss prazo >45d")) > 0 or relatorios_float(linha.get("Near Miss fechamento no prazo %")) < NEAR_MISS_META_FECHAMENTO_PRAZO:
+        focos.append(f"Near Miss: {relatorios_fmt_pct(linha.get('Near Miss fechamento no prazo %'))} fechados no prazo; {int(relatorios_float(linha.get('Near Miss abertos vencidos')))} vencido(s); {int(relatorios_float(linha.get('Near Miss prazo >45d')))} prazo(s) >45d")
+    if relatorios_float(linha.get("Auditoria PAC vencidos")) > 0 or relatorios_float(linha.get("Auditoria NC críticas")) > 0 or relatorios_float(linha.get("Auditoria conformidade %")) < 90:
+        focos.append(f"Auditoria EHS: {relatorios_fmt_pct(linha.get('Auditoria conformidade %'))} conformidade; {int(relatorios_float(linha.get('Auditoria PAC vencidos')))} PAC(s) vencido(s)")
+    if linha.get("Energia eficiência R12") is not None and relatorios_float(linha.get("Energia consumo R12 kWh")) > 0:
+        focos.append(f"Energia: {relatorios_fmt_tco2(linha.get('Energia CO₂ R12 I-REC'))} no R12")
+    return focos[:limite] if focos else ["Manter rotina de monitoramento e fechamento das ações no prazo."]
+
+def relatorios_calcular_site(db, codigo, edf_cache=None, ndf_cache=None, ldf_cache=None):
+    site_obj = db.query(Site).filter_by(codigo=codigo).first()
+    site_id = site_obj.id if site_obj else None
+    maquinas = db.query(MaquinaNR12).filter(MaquinaNR12.site_id == site_id).all() if site_id else []
+    total_maq = len(maquinas)
+    maq_conformes = sum(1 for m in maquinas if calcular_status_maquina_nr12(db, m) == "Conforme")
+    maq_pct = round(maq_conformes / total_maq * 100, 1) if total_maq else 0
+    maq_nc = max(total_maq - maq_conformes, 0)
+    pac_nr12 = df_pac_nr12(db, [site_id]) if site_id else pd.DataFrame()
+    pac_nr12_venc = int((pac_nr12["Status"] == "Vencida").sum()) if not pac_nr12.empty and "Status" in pac_nr12 else 0
+    pac_nr12_abertos = int(pac_nr12["Status"].isin(["Aberta", "Em andamento", "Aguardando validação"]).sum()) if not pac_nr12.empty and "Status" in pac_nr12 else 0
+
+    auds = db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id == site_id).all() if site_id else []
+    confs = [calcular_conformidade_ehs(db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()) for a in auds]
+    aud_conf = round(sum(confs) / len(confs), 1) if confs else 0
+    pac_ehs = df_pac_ehs(db, [site_id]) if site_id else pd.DataFrame()
+    pac_ehs_venc = int((pac_ehs["Status"] == "Vencida").sum()) if not pac_ehs.empty and "Status" in pac_ehs else 0
+    nc_crit = int((pac_ehs["Tipo de achado"] == "Não conformidade crítica").sum()) if not pac_ehs.empty and "Tipo de achado" in pac_ehs else 0
+
+    energia_co2 = 0.0; energia_ef = None; energia_custo = 0.0; energia_consumo = 0.0
+    try:
+        edf = edf_cache if edf_cache is not None else energia_consolidado(db)
+        if edf is not None and not edf.empty:
+            r12_mes = energia_default_r12_mes(edf)
+            if r12_mes:
+                r12_ini = energia_r12_start(r12_mes)
+                e = edf[(edf["Site"] == codigo) & (pd.to_datetime(edf["Mês"]) >= pd.to_datetime(r12_ini)) & (pd.to_datetime(edf["Mês"]) <= pd.to_datetime(r12_mes))].copy()
+                if not e.empty:
+                    energia_co2 = float(e["emissao_total_com_irec_tco2e"].sum())
+                    energia_custo = float(e["custo_total_brl"].sum())
+                    energia_consumo = float(e["consumo_total_kwh"].sum())
+                    horas = float(e["actual_hours"].sum())
+                    energia_ef = energia_consumo / horas if horas else None
+    except Exception:
+        pass
+
+    nm_total = nm_acomp = nm_venc = nm_prazo45 = 0; nm_taxa = 0.0
+    try:
+        ndf = ndf_cache if ndf_cache is not None else near_miss_df(db)
+        if ndf is not None and not ndf.empty:
+            r12_ini, r12_fim = near_miss_r12_range(ndf["Data"].max())
+            nsite = ndf[(ndf["Site código"] == codigo) & (ndf["Data"] >= pd.to_datetime(r12_ini)) & (ndf["Data"] <= pd.to_datetime(r12_fim))].copy()
+            nm_total = int(len(nsite))
+            nm_acomp = int((nsite["Acompanhamento"] == "Acompanhar").sum()) if not nsite.empty else 0
+            nm_venc = int((nsite["Status do prazo"] == "Aberto vencido").sum()) if not nsite.empty else 0
+            nm_prazo45 = int(nsite["Prazo superior a 45 dias"].fillna(False).sum()) if not nsite.empty and "Prazo superior a 45 dias" in nsite else 0
+            fechados = nsite[nsite["Fechamento"].notna()] if not nsite.empty else pd.DataFrame()
+            nm_taxa = round((fechados["Status do prazo"].eq("Fechado no prazo").sum() / len(fechados) * 100), 1) if len(fechados) else 0
+    except Exception:
+        pass
+
+    legal_leg_total = legal_leg_at = legal_obr_total = legal_obr_at = 0; legal_leg_taxa = legal_obr_taxa = 0.0
+    try:
+        ldf = ldf_cache if ldf_cache is not None else legal_df(db)
+        if ldf is not None and not ldf.empty:
+            lsite = ldf[ldf["Site código"] == codigo].copy()
+            legal_leg_total, legal_leg_at, legal_leg_taxa = legal_indicador_atendimento(lsite, "legislacao")
+            legal_obr_total, legal_obr_at, legal_obr_taxa = legal_indicador_atendimento(lsite, "obrigacao")
+    except Exception:
+        pass
+    legal_leg_pend = max(int(legal_leg_total - legal_leg_at), 0)
+    legal_obr_pend = max(int(legal_obr_total - legal_obr_at), 0)
+
+    linha = {
+        "Código": codigo, "Site": site_nome_curto(codigo), "Divisão": site_divisao(codigo),
+        "Máquinas": total_maq, "Máquinas conformes %": maq_pct, "Máquinas não conformes": maq_nc,
+        "Máquinas PAC vencidos": pac_nr12_venc, "Máquinas PAC abertos": pac_nr12_abertos,
+        "Auditoria conformidade %": aud_conf, "Auditoria PAC vencidos": pac_ehs_venc, "Auditoria NC críticas": nc_crit,
+        "Energia CO₂ R12 I-REC": round(energia_co2, 1), "Energia eficiência R12": round(energia_ef, 4) if energia_ef is not None else None,
+        "Energia custo R12": round(energia_custo, 0), "Energia consumo R12 kWh": round(energia_consumo, 0),
+        "Near Miss R12": nm_total, "Near Miss acompanhar": nm_acomp, "Near Miss abertos vencidos": nm_venc,
+        "Near Miss prazo >45d": nm_prazo45, "Near Miss fechamento no prazo %": nm_taxa,
+        "Legislações": int(legal_leg_total), "Atendimento legislação %": legal_leg_taxa, "Legislações pendentes": legal_leg_pend,
+        "Obrigações": int(legal_obr_total), "Atendimento obrigações %": legal_obr_taxa, "Obrigações pendentes": legal_obr_pend,
+    }
+    score = 0.0
+    score += max(0, 100 - maq_pct) * 0.35 + pac_nr12_venc * 8 + pac_nr12_abertos * 1.5
+    score += max(0, 90 - aud_conf) * 0.35 + pac_ehs_venc * 8 + nc_crit * 7
+    score += max(0, NEAR_MISS_META_FECHAMENTO_PRAZO - nm_taxa) * 0.25 + nm_venc * 5 + nm_acomp * 1.5 + nm_prazo45 * 3
+    score += max(0, LEGAL_META_ATENDIMENTO - legal_leg_taxa) * 0.3 + max(0, LEGAL_META_ATENDIMENTO - legal_obr_taxa) * 0.4 + legal_leg_pend * 1.5 + legal_obr_pend * 0.6
+    linha["Score de atenção"] = round(score, 1)
+    linha["Status executivo"] = relatorios_status_por_score(score, linha)
+    linha["Prioridade"] = {"Prioritário": 1, "Atenção": 2, "Controlado": 3}.get(linha["Status executivo"], 4)
+    linha["Principais focos"] = "; ".join(relatorios_focos_linha(linha, limite=3))
+    return linha
+
+def relatorios_integrados_df(db, u):
+    try:
+        edf_cache = energia_consolidado(db)
+    except Exception:
+        edf_cache = pd.DataFrame()
+    try:
+        ndf_cache = near_miss_df(db)
+    except Exception:
+        ndf_cache = pd.DataFrame()
+    try:
+        ldf_cache = legal_df(db)
+    except Exception:
+        ldf_cache = pd.DataFrame()
+    rows = [relatorios_calcular_site(db, cod, edf_cache, ndf_cache, ldf_cache) for cod in relatorios_site_codigos_visiveis(db, u)]
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["Prioridade", "Score de atenção"], ascending=[True, False]).reset_index(drop=True)
+    return df
+
+def relatorios_tabela_executiva(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    cols = ["Site", "Divisão", "Status executivo", "Score de atenção", "Máquinas conformes %", "Máquinas não conformes", "Máquinas PAC vencidos", "Auditoria conformidade %", "Auditoria PAC vencidos", "Near Miss fechamento no prazo %", "Near Miss abertos vencidos", "Near Miss prazo >45d", "Atendimento legislação %", "Atendimento obrigações %", "Obrigações pendentes", "Energia CO₂ R12 I-REC", "Principais focos"]
+    return df[[c for c in cols if c in df.columns]].copy()
+
+def relatorios_styler_tabela(df):
+    if df is None or df.empty:
+        return df
+    def style_row(row):
+        styles=[]
+        for col in row.index:
+            if col == "Status executivo":
+                styles.append({"Controlado":"background-color:#dcfce7;color:#14532d;font-weight:900;", "Atenção":"background-color:#fef9c3;color:#713f12;font-weight:900;", "Prioritário":"background-color:#fee2e2;color:#7f1d1d;font-weight:900;"}.get(row.get(col), "color:#111827;"))
+            elif col == "Score de atenção":
+                val=relatorios_float(row.get(col)); styles.append(f"background-color:{'#fee2e2' if val >= 70 else '#fef9c3' if val >= 30 else '#dcfce7'};color:#111827;font-weight:900;")
+            elif "%" in col:
+                val=relatorios_float(row.get(col)); meta=NEAR_MISS_META_FECHAMENTO_PRAZO if "Near Miss" in col else LEGAL_META_ATENDIMENTO if "Atendimento" in col else 90
+                styles.append(f"background-color:{'#dcfce7' if val >= meta else '#fef9c3' if val >= 85 else '#fee2e2'};color:#111827;font-weight:800;")
+            elif col.endswith("vencidos") or col.endswith("pendentes") or col == "Near Miss prazo >45d":
+                styles.append("color:#991b1b;font-weight:900;" if relatorios_float(row.get(col)) > 0 else "color:#111827;")
+            else:
+                styles.append("color:#111827;")
+        return styles
+    return df.style.apply(style_row, axis=1)
+
+def relatorios_top_problemas(df, limite=12):
+    problemas=[]
+    if df is None or df.empty:
+        return pd.DataFrame()
+    for _, r in df.iterrows():
+        site=r.get("Site", "—")
+        if relatorios_float(r.get("Obrigações pendentes")) > 0:
+            problemas.append({"Site":site,"Módulo":"Legislação","Problema":f"{int(relatorios_float(r.get('Obrigações pendentes')))} obrigação(ões) pendente(s)","Indicador":relatorios_fmt_pct(r.get("Atendimento obrigações %")),"Prioridade":r.get("Status executivo")})
+        if relatorios_float(r.get("Máquinas não conformes")) > 0:
+            problemas.append({"Site":site,"Módulo":"Proteções de máquinas","Problema":f"{int(relatorios_float(r.get('Máquinas não conformes')))} máquina(s) não conforme(s)","Indicador":relatorios_fmt_pct(r.get("Máquinas conformes %")),"Prioridade":r.get("Status executivo")})
+        if relatorios_float(r.get("Máquinas PAC vencidos")) > 0:
+            problemas.append({"Site":site,"Módulo":"Proteções de máquinas","Problema":f"{int(relatorios_float(r.get('Máquinas PAC vencidos')))} PAC(s) vencido(s)","Indicador":"Prazo vencido","Prioridade":r.get("Status executivo")})
+        if relatorios_float(r.get("Near Miss abertos vencidos")) > 0:
+            problemas.append({"Site":site,"Módulo":"Near Miss","Problema":f"{int(relatorios_float(r.get('Near Miss abertos vencidos')))} report(s) aberto(s) vencido(s)","Indicador":relatorios_fmt_pct(r.get("Near Miss fechamento no prazo %")),"Prioridade":r.get("Status executivo")})
+        if relatorios_float(r.get("Near Miss prazo >45d")) > 0:
+            problemas.append({"Site":site,"Módulo":"Near Miss","Problema":f"{int(relatorios_float(r.get('Near Miss prazo >45d')))} prazo(s) atribuído(s) acima de 45 dias","Indicador":"Procedimento 45 dias","Prioridade":r.get("Status executivo")})
+        if relatorios_float(r.get("Auditoria PAC vencidos")) > 0:
+            problemas.append({"Site":site,"Módulo":"Auditoria EHS","Problema":f"{int(relatorios_float(r.get('Auditoria PAC vencidos')))} PAC(s) vencido(s)","Indicador":relatorios_fmt_pct(r.get("Auditoria conformidade %")),"Prioridade":r.get("Status executivo")})
+    out=pd.DataFrame(problemas)
+    if out.empty:
+        return out
+    ordem={"Prioritário":0,"Atenção":1,"Controlado":2}
+    out["_ordem"]=out["Prioridade"].map(ordem).fillna(9)
+    return out.sort_values(["_ordem","Site","Módulo"]).drop(columns=["_ordem"]).head(limite)
+
+def relatorios_pdf_style():
+    styles=getSampleStyleSheet()
+    return {"title": ParagraphStyle("RelTitle", parent=styles["Title"], fontSize=18, leading=22, textColor=colors.HexColor("#0f172a"), spaceAfter=8), "sub": ParagraphStyle("RelSub", parent=styles["BodyText"], fontSize=8.5, leading=11, textColor=colors.HexColor("#475569"), spaceAfter=8), "h": ParagraphStyle("RelH", parent=styles["Heading2"], fontSize=11, leading=14, textColor=colors.HexColor("#111827"), spaceBefore=8, spaceAfter=5), "body": ParagraphStyle("RelBody", parent=styles["BodyText"], fontSize=8.2, leading=10.5, textColor=colors.HexColor("#111827")), "small": ParagraphStyle("RelSmall", parent=styles["BodyText"], fontSize=7.2, leading=9, textColor=colors.HexColor("#334155"))}
+
+def relatorios_pdf_tabela(data, col_widths=None, header_bg="#0f172a", row_status_col=None):
+    tbl=Table(data, colWidths=col_widths, repeatRows=1)
+    style=[("BACKGROUND",(0,0),(-1,0),colors.HexColor(header_bg)),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,0),7),("FONTSIZE",(0,1),(-1,-1),6.7),("TEXTCOLOR",(0,1),(-1,-1),colors.HexColor("#111827")),("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#e5e7eb")),("VALIGN",(0,0),(-1,-1),"TOP"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#f8fafc")]),("LEFTPADDING",(0,0),(-1,-1),4),("RIGHTPADDING",(0,0),(-1,-1),4)]
+    if row_status_col is not None:
+        for i, row in enumerate(data[1:], start=1):
+            status=str(row[row_status_col]) if len(row)>row_status_col else ""
+            bg={"Prioritário":"#fee2e2","Atenção":"#fef9c3","Controlado":"#dcfce7"}.get(status)
+            fg={"Prioritário":"#7f1d1d","Atenção":"#713f12","Controlado":"#14532d"}.get(status)
+            if bg:
+                style.append(("BACKGROUND",(row_status_col,i),(row_status_col,i),colors.HexColor(bg)))
+                style.append(("TEXTCOLOR",(row_status_col,i),(row_status_col,i),colors.HexColor(fg)))
+                style.append(("FONTNAME",(row_status_col,i),(row_status_col,i),"Helvetica-Bold"))
+    tbl.setStyle(TableStyle(style))
+    return tbl
+
+def gerar_pdf_relatorio_integrado(df, titulo="Relatório Executivo Integrado EHS", escopo="Todos os sites", usuario="—"):
+    buf=io.BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=1.15*cm,leftMargin=1.15*cm,topMargin=1.15*cm,bottomMargin=1.05*cm)
+    stl=relatorios_pdf_style(); story=[]; data_ref=datetime.now().strftime("%d/%m/%Y %H:%M")
+    story.append(Paragraph(titulo, stl["title"])); story.append(Paragraph(f"Escopo: <b>{html_escape(escopo)}</b> | Emissão: {data_ref} | Usuário: {html_escape(usuario)}", stl["sub"]))
+    if df is None or df.empty:
+        story.append(Paragraph("Sem dados disponíveis para os filtros selecionados.", stl["body"])); doc.build(story); return buf.getvalue()
+    total_sites=len(df); prioritarios=int((df["Status executivo"]=="Prioritário").sum()); atencao=int((df["Status executivo"]=="Atenção").sum()); controlados=int((df["Status executivo"]=="Controlado").sum()); pior=df.sort_values("Score de atenção", ascending=False).iloc[0]
+    story.append(Paragraph("Resumo executivo", stl["h"])); story.append(Paragraph(f"Foram avaliados <b>{total_sites}</b> site(s). O relatório identifica <b>{prioritarios}</b> site(s) prioritário(s), <b>{atencao}</b> em atenção e <b>{controlados}</b> controlado(s). O principal ponto de atenção no escopo é <b>{html_escape(str(pior.get('Site','—')))}</b>, com score de atenção {relatorios_fmt_num(pior.get('Score de atenção'),1)}.", stl["body"])); story.append(Spacer(1,0.18*cm))
+    tabela=relatorios_tabela_executiva(df).copy(); cols_pdf=["Site","Status executivo","Score de atenção","Máquinas conformes %","Atendimento obrigações %","Near Miss fechamento no prazo %","Obrigações pendentes","Near Miss abertos vencidos","Máquinas PAC vencidos"]
+    show=tabela[[c for c in cols_pdf if c in tabela.columns]].copy()
+    for c in ["Máquinas conformes %","Atendimento obrigações %","Near Miss fechamento no prazo %"]:
+        if c in show: show[c]=show[c].apply(relatorios_fmt_pct)
+    if "Score de atenção" in show: show["Score de atenção"]=show["Score de atenção"].apply(lambda x: relatorios_fmt_num(x,1))
+    data=[list(show.columns)] + show.astype(str).values.tolist(); story.append(Paragraph("Status consolidado por site", stl["h"])); story.append(relatorios_pdf_tabela(data, col_widths=[2.2*cm,2.1*cm,1.5*cm,1.8*cm,1.9*cm,2.0*cm,1.6*cm,1.6*cm,1.6*cm][:len(show.columns)], row_status_col=list(show.columns).index("Status executivo") if "Status executivo" in show.columns else None))
+    problemas=relatorios_top_problemas(df, limite=10); story.append(Paragraph("Principais problemas e focos de trabalho", stl["h"]))
+    if problemas.empty: story.append(Paragraph("Não há problemas críticos destacados para o escopo selecionado. Manter rotina de monitoramento e fechamento das ações no prazo.", stl["body"]))
+    else:
+        data_prob=[list(problemas.columns)] + problemas.astype(str).values.tolist(); story.append(relatorios_pdf_tabela(data_prob, col_widths=[2.0*cm,2.6*cm,6.3*cm,2.1*cm,2.2*cm][:len(problemas.columns)], header_bg="#334155", row_status_col=list(problemas.columns).index("Prioridade") if "Prioridade" in problemas.columns else None))
+    story.append(Paragraph("Leitura por site", stl["h"]))
+    for _, r in df.sort_values("Score de atenção", ascending=False).head(6).iterrows():
+        cor={"Prioritário":"#7f1d1d","Atenção":"#713f12","Controlado":"#14532d"}.get(r.get("Status executivo"),"#111827")
+        story.append(Paragraph(f"<font color='{cor}'><b>{html_escape(str(r.get('Site','—')))} — {html_escape(str(r.get('Status executivo','—')))}</b></font>", stl["body"])); story.append(Paragraph("; ".join(html_escape(x) for x in relatorios_focos_linha(r, limite=4)), stl["small"])); story.append(Spacer(1,0.08*cm))
+    story.append(Spacer(1,0.12*cm)); story.append(Paragraph("Observação: o score é uma priorização executiva composta por defasagens de atendimento legal, proteções de máquinas, auditoria EHS, Near Miss e indicadores de energia. Ele não substitui a análise técnica de cada módulo, mas direciona onde agir primeiro.", stl["small"])); doc.build(story); return buf.getvalue()
+
+def relatorios_integrados_submodulos_home(db,u):
+    header(NOME_MODULO_RELATORIOS, "Escolha o relatório executivo integrado para consolidar os principais indicadores da plataforma.")
+    c_back, c_spacer = st.columns([1.1,5])
+    with c_back:
+        if st.button("⬅️ Voltar para página inicial", key="relatorios_home_voltar_inicio", use_container_width=True):
+            st.session_state.modulo="home"; st.rerun()
+    section("Submódulos")
+    for nome, cfg in RELATORIOS_SUBMODULOS.items():
+        submodule_card(nome, cfg["descricao"], cfg["icone"], cfg["cor"])
+        if st.button(f"Acessar {nome}", key=f"relatorios_sub_{nome}", use_container_width=True):
+            st.session_state.page_relatorios=cfg["paginas"][0]; st.session_state.submodulo_relatorios=nome; st.rerun()
+    section("Resumo rápido")
+    df=relatorios_integrados_df(db,u); c1,c2,c3,c4=st.columns(4)
+    c1.metric("Sites avaliáveis", len(df)); c2.metric("Prioritários", int((df["Status executivo"]=="Prioritário").sum()) if not df.empty else 0); c3.metric("Em atenção", int((df["Status executivo"]=="Atenção").sum()) if not df.empty else 0); c4.metric("Controlados", int((df["Status executivo"]=="Controlado").sum()) if not df.empty else 0)
+
+def relatorio_executivo_integrado_page(db,u):
+    header("Relatório Executivo Integrado", "PDF sucinto com indicadores críticos, principais problemas e foco de trabalho por site.")
+    update_vencidos(db); base=relatorios_integrados_df(db,u)
+    if base.empty:
+        empty_state("Não há dados suficientes para gerar o relatório integrado."); return
+    with st.expander("Configuração do relatório", expanded=True):
+        c1,c2=st.columns([1.2,2.8]); escopo=c1.radio("Escopo", ["Todos os sites visíveis", "Selecionar sites"], horizontal=False, key="relatorio_integrado_escopo"); sites_disponiveis=base["Site"].tolist()
+        selecionados=c2.multiselect("Sites", sites_disponiveis, default=sites_disponiveis[:1], key="relatorio_integrado_sites") if escopo == "Selecionar sites" else sites_disponiveis
+        incluir_individuais=st.checkbox("Mostrar botões para baixar relatórios individuais por site", value=True, key="relatorio_integrado_individuais")
+    df=base[base["Site"].isin(selecionados)].copy() if selecionados else base.iloc[0:0].copy()
     if df.empty:
-        empty_state("Base legal ainda não carregada.")
-        return
-    leg=legal_legislacoes_unicas(df)
-    resumo_site_leg=legal_taxa_por_site(df,"legislacao")
-    resumo_site_obr=legal_taxa_por_site(df,"obrigacao")
-    lacunas=legal_formata_tabela(df[~df["Status obrigação"].apply(legal_atendido_status)].copy())
-    download_excel_button("Baixar relatório legal completo", "relatorio_legal_completo.xlsx", {"Base": legal_formata_tabela(df), "Legislacoes_Unicas": leg, "Atend_Leg_Site": resumo_site_leg, "Atend_Obrig_Site": resumo_site_obr, "Lacunas": lacunas}, key="legal_relatorio_completo")
+        empty_state("Selecione ao menos um site para gerar o relatório."); return
+    section("Prévia executiva")
+    c1,c2,c3,c4=st.columns(4); c1.metric("Sites no relatório", len(df)); c2.metric("Prioritários", int((df["Status executivo"]=="Prioritário").sum())); c3.metric("Em atenção", int((df["Status executivo"]=="Atenção").sum())); c4.metric("Controlados", int((df["Status executivo"]=="Controlado").sum()))
+    show=relatorios_tabela_executiva(df); st.dataframe(relatorios_styler_tabela(show), use_container_width=True, hide_index=True)
+    download_excel_button("Baixar base do relatório em Excel", "relatorio_integrado_base.xlsx", {"Resumo_Executivo": show, "Problemas": relatorios_top_problemas(df, 100)}, key="relatorio_integrado_excel")
+    escopo_nome="Todos os sites visíveis" if escopo == "Todos os sites visíveis" else ", ".join(selecionados); pdf=gerar_pdf_relatorio_integrado(df, "Relatório Executivo Integrado EHS", escopo_nome, u.nome if u else "—")
+    download_pdf_button("Baixar relatório consolidado em PDF", "relatorio_executivo_integrado_ehs.pdf", pdf, key="relatorio_integrado_pdf_consolidado")
+    section("Principais problemas identificados"); problemas=relatorios_top_problemas(df, limite=12)
+    if problemas.empty: empty_state("Sem problemas críticos para destacar no escopo selecionado.")
+    else: st.dataframe(problemas, use_container_width=True, hide_index=True)
+    if incluir_individuais:
+        section("Relatórios individuais por site"); cols=st.columns(3)
+        for idx, site in enumerate(df["Site"].tolist()):
+            with cols[idx % 3]:
+                sdf=df[df["Site"]==site].copy(); spdf=gerar_pdf_relatorio_integrado(sdf, f"Relatório Executivo Integrado EHS — {site}", site, u.nome if u else "—")
+                download_pdf_button(f"Baixar PDF — {site}", f"relatorio_integrado_{site.replace(' ','_').lower()}.pdf", spdf, key=f"relatorio_integrado_pdf_{idx}_{site}")
 
 def render_sidebar(db,u):
     mod=st.session_state.get("modulo","home")
@@ -7561,6 +7826,7 @@ def render_sidebar(db,u):
         or (mod=="energia" and st.session_state.get("page_energia",ENERGIA_HOME_PAGE)==ENERGIA_HOME_PAGE)
         or (mod=="nearmiss" and st.session_state.get("page_nearmiss",NEARMISS_HOME_PAGE)==NEARMISS_HOME_PAGE)
         or (mod=="legal" and st.session_state.get("page_legal",LEGAL_HOME_PAGE)==LEGAL_HOME_PAGE)
+        or (mod=="relatorios" and st.session_state.get("page_relatorios",RELATORIOS_HOME_PAGE)==RELATORIOS_HOME_PAGE)
     ):
         return
     st.sidebar.markdown("### Navegação")
@@ -7740,6 +8006,40 @@ def render_sidebar(db,u):
                 st.session_state.page_legal=LEGAL_HOME_PAGE
                 st.rerun()
 
+    elif mod=="relatorios":
+        all_pages=[RELATORIOS_HOME_PAGE]
+        for nome,cfg in RELATORIOS_SUBMODULOS.items():
+            for p in cfg["paginas"]:
+                if p not in all_pages:
+                    all_pages.append(p)
+        current=st.session_state.get("page_relatorios",RELATORIOS_HOME_PAGE)
+        if current not in all_pages:
+            current=RELATORIOS_HOME_PAGE
+            st.session_state.page_relatorios=current
+        if current==RELATORIOS_HOME_PAGE:
+            st.sidebar.info("Selecione um submódulo na tela principal.")
+            selected=st.sidebar.radio(NOME_MODULO_RELATORIOS,[RELATORIOS_HOME_PAGE],key="nav_relatorios_home")
+            st.session_state.page_relatorios=selected
+        else:
+            sub_atual=None
+            for nome,cfg in RELATORIOS_SUBMODULOS.items():
+                if current in cfg["paginas"]:
+                    sub_atual=nome
+                    break
+            sub_opcoes=list(RELATORIOS_SUBMODULOS.keys())
+            idx=sub_opcoes.index(sub_atual) if sub_atual in sub_opcoes else 0
+            sub=st.sidebar.selectbox("Submódulo",sub_opcoes,index=idx,key="submodulo_relatorios")
+            pages=RELATORIOS_SUBMODULOS[sub]["paginas"]
+            if current not in pages:
+                current=pages[0] if pages else RELATORIOS_HOME_PAGE
+                st.session_state.page_relatorios=current
+            selected=st.sidebar.radio(sub,pages,key="nav_relatorios")
+            st.session_state.page_relatorios=selected
+            if st.sidebar.button("⬅️ Voltar aos submódulos",use_container_width=True,key="btn_voltar_submodulos_relatorios"):
+                st.session_state.page_relatorios=RELATORIOS_HOME_PAGE
+                st.rerun()
+
+
 def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod != "home":
@@ -7810,10 +8110,18 @@ def route(db,u):
             "Dashboard Legislação e Obrigações": legal_dashboard,
             "Atualizar Base Legal": legal_atualizar_base,
             "Base Legal Consolidada": legal_base_page,
-            "Relatórios Legais": legal_relatorios_page,
-        }
+                    }
         page=st.session_state.get("page_legal",LEGAL_HOME_PAGE)
         paginas.get(page,legal_submodulos_home)(db,u)
+
+    elif mod=="relatorios":
+        paginas={
+            RELATORIOS_HOME_PAGE: relatorios_integrados_submodulos_home,
+            RELATORIOS_EXECUTIVO_PAGE: relatorio_executivo_integrado_page,
+        }
+        page=st.session_state.get("page_relatorios",RELATORIOS_HOME_PAGE)
+        paginas.get(page,relatorios_integrados_submodulos_home)(db,u)
+
 
 def main():
     if "modulo" not in st.session_state:
@@ -7830,6 +8138,7 @@ def main():
         page_energia_atual = st.session_state.get("page_energia", ENERGIA_HOME_PAGE)
         page_nearmiss_atual = st.session_state.get("page_nearmiss", NEARMISS_HOME_PAGE)
         page_legal_atual = st.session_state.get("page_legal", LEGAL_HOME_PAGE)
+        page_relatorios_atual = st.session_state.get("page_relatorios", RELATORIOS_HOME_PAGE)
         tela_landing = (
             (mod_atual == "home")
             or (mod_atual == "nr12" and page_nr12_atual == NR12_HOME_PAGE)
@@ -7837,6 +8146,7 @@ def main():
             or (mod_atual == "energia" and page_energia_atual == ENERGIA_HOME_PAGE)
             or (mod_atual == "nearmiss" and page_nearmiss_atual == NEARMISS_HOME_PAGE)
             or (mod_atual == "legal" and page_legal_atual == LEGAL_HOME_PAGE)
+            or (mod_atual == "relatorios" and page_relatorios_atual == RELATORIOS_HOME_PAGE)
         )
         location="main" if tela_landing else "sidebar"
         u=user_selector(db,location=location)
