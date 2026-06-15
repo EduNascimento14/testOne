@@ -1704,7 +1704,7 @@ def login_page(db):
           linear-gradient(160deg,#0b1220 0%,#111827 48%,#182235 100%);
         border:1px solid rgba(255,255,255,.10);border-radius:28px;padding:2rem;box-shadow:0 18px 45px rgba(15,23,42,.18);
     }
-    .login-title{font-size:2.2rem;font-weight:950;letter-spacing:-.04em;color:#f8fafc;margin:0;}
+    .login-title{font-size:2.3rem;font-weight:950;letter-spacing:-.04em;color:#ffffff!important;margin:0;text-shadow:0 2px 12px rgba(0,0,0,.35);}
     .login-sub{color:#cbd5e1;font-size:1rem;margin:.35rem 0 1.2rem;}
     .login-badge{display:inline-block;background:linear-gradient(135deg,#f5c542,#d9a514);color:#182235;border-radius:999px;padding:.28rem .7rem;font-weight:900;font-size:.75rem;margin-bottom:.8rem;box-shadow:0 10px 24px rgba(0,0,0,.18);}
     </style>
