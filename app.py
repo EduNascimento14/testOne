@@ -1574,11 +1574,33 @@ def _auto_streamlit_key(prefix, base=""):
     base_txt = str(base or prefix).encode("utf-8", errors="ignore")
     return f"{prefix}_{zlib.crc32(base_txt)}_{st.session_state[chave_contador]}"
 
+
 def plotly_chart_safe(fig, *args, **kwargs):
+    try:
+        fig.update_layout(
+            font=dict(color="#111827"),
+            title_font=dict(color="#111827"),
+            legend=dict(font=dict(color="#111827")),
+        )
+        fig.update_xaxes(tickfont=dict(color="#111827"), title_font=dict(color="#111827"))
+        fig.update_yaxes(tickfont=dict(color="#111827"), title_font=dict(color="#111827"))
+        for tr in fig.data:
+            try:
+                if getattr(tr, "text", None) is not None:
+                    tr.update(textfont=dict(color="#111827", size=12))
+            except Exception:
+                pass
+        if getattr(fig.layout, "annotations", None):
+            for ann in fig.layout.annotations:
+                try:
+                    ann.font = dict(color="#111827")
+                except Exception:
+                    pass
+    except Exception:
+        pass
     if kwargs.get("key") is None:
         kwargs["key"] = _auto_streamlit_key("plotly_chart", getattr(fig, "layout", ""))
     return st.__getattribute__("plotly_chart")(fig, *args, **kwargs)
-
 def download_excel_button(label,file,sheets,key=None):
     if key is None:
         key = _auto_streamlit_key("download_excel", f"{label}|{file}")
@@ -6824,8 +6846,11 @@ def legal_mapping_from_row(r):
     if site not in SITES_LAG or site == "Corporativo":
         site = "JUN" if str(r.get("origem_base", "")).lower().startswith("lira") else site
     info = SITES_LAG.get(site, {})
+    origem_base_norm = legal_limpa_texto(r.get("origem_base"), 120)
+    if origem_base_norm and "lira" not in legal_ascii(origem_base_norm):
+        origem_base_norm = "LEMA"
     return {
-        "origem_base": legal_limpa_texto(r.get("origem_base"), 120),
+        "origem_base": origem_base_norm,
         "site_codigo": site,
         "site_nome": info.get("nome", legal_limpa_texto(r.get("site_nome") or r.get("unidade_original"), 160)),
         "grupo": info.get("grupo", legal_limpa_texto(r.get("grupo"), 80)),
@@ -6878,7 +6903,7 @@ def parse_legal_consolidado_5_sites(df, origem_nome):
         desc_req = legal_limpa_texto(r.get("Ementa"), 900) or legal_limpa_texto(r.get("Assunto"), 260)
         leg_key = f"{site}|{legal_limpa_texto(r.get('Documento'))}|{legal_limpa_texto(r.get('Origem'))}|{legal_limpa_texto(r.get('Numero'))}|{legal_limpa_texto(r.get('Data'))}|{legal_limpa_texto(r.get('Ementa'), 90)}"
         registros.append({
-            "origem_base": "Consolidado 5 Sites",
+            "origem_base": "LEMA",
             "site_codigo": site,
             "site_nome": info.get("nome", legal_limpa_texto(r.get("Unidade"), 160)),
             "grupo": info.get("grupo", ""),
@@ -7048,14 +7073,40 @@ def legal_taxa_por_divisao(df, tipo="legislacao"):
         rows.append({"Divisão": div, "Atendidas": atendidas, "Total": total, "Taxa %": taxa})
     return pd.DataFrame(rows).sort_values("Taxa %", ascending=True)
 
+
 def legal_fig_taxa(df_taxa, titulo, eixo="Site"):
     if df_taxa is None or df_taxa.empty:
         return None
-    fig = px.bar(df_taxa, x="Taxa %", y=eixo, orientation="h", text="Taxa %", hover_data=["Atendidas", "Total"], title=titulo)
-    fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside", marker_color="#0891b2")
-    fig.update_layout(template="plotly_white", height=max(330, 48 * len(df_taxa) + 120), xaxis_range=[0, 105], margin=dict(l=10, r=35, t=55, b=10), showlegend=False)
+    d = df_taxa.copy()
+    d["Cor"] = d["Taxa %"].apply(lambda x: "#16a34a" if float(x or 0) >= 95 else "#facc15" if float(x or 0) >= 85 else "#dc2626")
+    d["Meta"] = 95
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=d["Taxa %"],
+        y=d[eixo],
+        orientation="h",
+        text=d["Taxa %"].map(lambda x: f"{float(x or 0):.1f}%"),
+        textposition="outside",
+        marker=dict(color=d["Cor"], line=dict(color="#ffffff", width=1.2)),
+        customdata=d[["Atendidas", "Total"]].values,
+        hovertemplate="<b>%{y}</b><br>Atendimento: %{x:.1f}%<br>Atendidas: %{customdata[0]}<br>Total: %{customdata[1]}<extra></extra>",
+        name="Atendimento",
+    ))
+    fig.add_vline(x=95, line_width=2, line_dash="dash", line_color="#15803d", annotation_text="Meta 95%", annotation_position="top right")
+    fig.update_yaxes(autorange="reversed", title=None, tickfont=dict(color="#111827"))
+    fig.update_xaxes(title="Atendimento (%)", range=[0, 108], showgrid=True, gridcolor="rgba(148,163,184,0.22)", tickfont=dict(color="#111827"))
+    fig.update_traces(textfont=dict(color="#111827", size=12))
+    fig.update_layout(
+        template="plotly_white",
+        height=max(330, 48 * len(d) + 120),
+        margin=dict(l=10, r=45, t=60, b=12),
+        showlegend=False,
+        title=dict(text=titulo, font=dict(color="#111827")),
+        font=dict(color="#111827"),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+    )
     return fig
-
 def legal_top_lacunas(df, campo="Site", tipo="obrigacao", n=10):
     if df is None or df.empty:
         return pd.DataFrame()
@@ -7067,6 +7118,153 @@ def legal_top_lacunas(df, campo="Site", tipo="obrigacao", n=10):
     if f.empty or campo not in f.columns:
         return pd.DataFrame()
     return f.groupby(campo, dropna=False).size().reset_index(name="Pendências").sort_values("Pendências", ascending=False).head(n)
+
+def legal_cor_taxa(taxa):
+    try:
+        t = float(taxa or 0)
+    except Exception:
+        t = 0
+    if t >= 95:
+        return "#16a34a"
+    if t >= 85:
+        return "#facc15"
+    return "#dc2626"
+
+def legal_status_site(taxa_obrigacao, pendencias):
+    try:
+        taxa = float(taxa_obrigacao or 0)
+    except Exception:
+        taxa = 0
+    pend = int(pendencias or 0)
+    if taxa >= 95 and pend == 0:
+        return "Em conformidade"
+    if taxa >= 95:
+        return "Bom acompanhamento"
+    if taxa >= 85:
+        return "Atenção"
+    return "Prioritário"
+
+def legal_resumo_sites(df):
+    rows = []
+    sites_base = [s for s in SITES_PADRAO if s in SITES_LAG]
+    for cod in sites_base:
+        site_df = df[df["Site código"] == cod].copy() if df is not None and not df.empty else pd.DataFrame()
+        total_leg, atend_leg, taxa_leg = legal_indicador_atendimento(site_df, "legislacao")
+        total_obr, atend_obr, taxa_obr = legal_indicador_atendimento(site_df, "obrigacao")
+        pend_leg = max(total_leg - atend_leg, 0)
+        pend_obr = max(total_obr - atend_obr, 0)
+        rows.append({
+            "Site": site_nome_curto(cod),
+            "Código": cod,
+            "Divisão": site_divisao(cod),
+            "Legislações": int(total_leg),
+            "Atend. legislação": f"{taxa_leg:.1f}%",
+            "Pend. legislação": int(pend_leg),
+            "Obrigações": int(total_obr),
+            "Atend. obrigações": f"{taxa_obr:.1f}%",
+            "Pend. obrigações": int(pend_obr),
+            "Status": legal_status_site(taxa_obr, pend_obr),
+            "_taxa_leg": float(taxa_leg),
+            "_taxa_obr": float(taxa_obr),
+            "_pend_total": int(pend_leg + pend_obr),
+        })
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(["_taxa_obr", "_pend_total"], ascending=[True, False])
+    return out
+
+def legal_styler_resumo_sites(df):
+    if df is None or df.empty:
+        return df
+    def taxa_from_val(v):
+        try:
+            return float(str(v).replace("%", "").replace(",", "."))
+        except Exception:
+            return 0.0
+    def style_row(row):
+        cor_status = {
+            "Em conformidade": "background-color:#dcfce7;color:#14532d;font-weight:800;",
+            "Bom acompanhamento": "background-color:#e0f2fe;color:#075985;font-weight:800;",
+            "Atenção": "background-color:#fef9c3;color:#713f12;font-weight:800;",
+            "Prioritário": "background-color:#fee2e2;color:#7f1d1d;font-weight:800;",
+        }.get(row.get("Status"), "")
+        styles = []
+        for col in row.index:
+            if col == "Atend. legislação":
+                taxa = taxa_from_val(row.get(col))
+                styles.append(f"background-color:{'#dcfce7' if taxa >= 95 else '#fef9c3' if taxa >= 85 else '#fee2e2'};color:#111827;font-weight:800;")
+            elif col == "Atend. obrigações":
+                taxa = taxa_from_val(row.get(col))
+                styles.append(f"background-color:{'#dcfce7' if taxa >= 95 else '#fef9c3' if taxa >= 85 else '#fee2e2'};color:#111827;font-weight:800;")
+            elif col == "Status":
+                styles.append(cor_status)
+            elif col in ["Pend. legislação", "Pend. obrigações"] and row.get(col, 0):
+                styles.append("color:#991b1b;font-weight:800;")
+            else:
+                styles.append("color:#111827;")
+        return styles
+    return df.style.apply(style_row, axis=1)
+
+def legal_png_resumo_sites(df):
+    if df is None or df.empty:
+        return b""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return b""
+    show_cols = ["Site", "Divisão", "Atend. legislação", "Pend. legislação", "Atend. obrigações", "Pend. obrigações", "Status"]
+    data = df[[c for c in show_cols if c in df.columns]].copy()
+    try:
+        font_regular = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        font_bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+        font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 26)
+    except Exception:
+        font_regular = ImageFont.load_default()
+        font_bold = ImageFont.load_default()
+        font_title = ImageFont.load_default()
+    col_widths = [210, 190, 180, 170, 180, 170, 210]
+    row_h = 48
+    title_h = 76
+    pad = 22
+    width = sum(col_widths) + pad * 2
+    height = title_h + row_h * (len(data) + 1) + pad
+    img = Image.new("RGB", (width, height), "#ffffff")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, width, title_h], fill="#0f172a")
+    draw.text((pad, 18), "Resumo Legal por Site", fill="#ffffff", font=font_title)
+    draw.text((width - 300, 26), datetime.now().strftime("%d/%m/%Y %H:%M"), fill="#cbd5e1", font=font_regular)
+    y = title_h
+    x = pad
+    headers = list(data.columns)
+    for i, h in enumerate(headers):
+        draw.rectangle([x, y, x + col_widths[i], y + row_h], fill="#e2e8f0", outline="#cbd5e1")
+        draw.text((x + 8, y + 14), str(h), fill="#111827", font=font_bold)
+        x += col_widths[i]
+    y += row_h
+    for idx, (_, row) in enumerate(data.iterrows()):
+        x = pad
+        base_fill = "#f8fafc" if idx % 2 == 0 else "#ffffff"
+        for i, col in enumerate(headers):
+            val = str(row.get(col, ""))
+            fill = base_fill
+            if col in ["Atend. legislação", "Atend. obrigações"]:
+                try:
+                    taxa = float(val.replace("%", "").replace(",", "."))
+                except Exception:
+                    taxa = 0
+                fill = "#dcfce7" if taxa >= 95 else "#fef9c3" if taxa >= 85 else "#fee2e2"
+            elif col == "Status":
+                fill = {"Em conformidade":"#dcfce7", "Bom acompanhamento":"#e0f2fe", "Atenção":"#fef9c3", "Prioritário":"#fee2e2"}.get(val, base_fill)
+            draw.rectangle([x, y, x + col_widths[i], y + row_h], fill=fill, outline="#e5e7eb")
+            max_chars = max(8, int(col_widths[i] / 9))
+            if len(val) > max_chars:
+                val = val[:max_chars-1] + "…"
+            draw.text((x + 8, y + 14), val, fill="#111827", font=font_bold if col in ["Atend. legislação", "Atend. obrigações", "Status"] else font_regular)
+            x += col_widths[i]
+        y += row_h
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
 
 def legal_formata_tabela(df):
     if df is None or df.empty:
@@ -7128,8 +7326,9 @@ def legal_submodulos_home(db,u):
     c3.metric("Obrigações", total_obr)
     c4.metric("Atendimento obrigações", f"{taxa_obr}%")
 
+
 def legal_dashboard(db,u):
-    header("Dashboard Legislação e Obrigações", "Atendimento legal por legislação, obrigação, site, divisão e origem da base.")
+    header("Dashboard Legislação e Obrigações", "Atendimento legal por legislação, obrigação, site e divisão.")
     df=legal_df(db)
     if df.empty:
         empty_state("Base legal ainda não carregada.")
@@ -7158,7 +7357,8 @@ def legal_dashboard(db,u):
     c4.metric("Obrigações", total_obr)
     c5.metric("Atendimento obrigações", f"{taxa_obr}%", f"{atend_obr}/{total_obr}")
     c6.metric("Obrigações pendentes", nao_obr)
-    tabs=st.tabs(["Resumo", "Legislação", "Obrigações", "Lacunas", "Detalhamento"])
+
+    tabs=st.tabs(["Resumo", "Status dos sites", "Legislação", "Obrigações", "Lacunas", "Detalhamento"])
     with tabs[0]:
         section("Resumo executivo")
         a,b=st.columns(2)
@@ -7173,17 +7373,35 @@ def legal_dashboard(db,u):
             status=leg_unicas.groupby("Status legislação", dropna=False).size().reset_index(name="Quantidade") if not leg_unicas.empty else pd.DataFrame()
             if not status.empty:
                 fig=px.bar(status,x="Status legislação",y="Quantidade",color="Status legislação",text="Quantidade",title="Status das legislações",color_discrete_map=LEGAL_STATUS_COLOR_MAP,category_orders={"Status legislação":LEGAL_STATUS_LEGISLACAO_ORDER})
-                fig.update_traces(textposition="outside")
-                fig.update_layout(template="plotly_white",showlegend=False,height=360)
+                fig.update_traces(textposition="outside", marker_line_color="#ffffff", marker_line_width=1.1)
+                fig.update_layout(template="plotly_white",showlegend=False,height=360,font=dict(color="#111827"))
                 plotly_chart_safe(fig,use_container_width=True)
         with d:
             status=fdf.groupby("Status obrigação", dropna=False).size().reset_index(name="Quantidade") if not fdf.empty else pd.DataFrame()
             if not status.empty:
                 fig=px.bar(status,x="Status obrigação",y="Quantidade",color="Status obrigação",text="Quantidade",title="Status das obrigações",color_discrete_map=LEGAL_STATUS_COLOR_MAP,category_orders={"Status obrigação":LEGAL_STATUS_OBRIGACAO_ORDER})
-                fig.update_traces(textposition="outside")
-                fig.update_layout(template="plotly_white",showlegend=False,height=360)
+                fig.update_traces(textposition="outside", marker_line_color="#ffffff", marker_line_width=1.1)
+                fig.update_layout(template="plotly_white",showlegend=False,height=360,font=dict(color="#111827"))
                 plotly_chart_safe(fig,use_container_width=True)
     with tabs[1]:
+        section("Tabela executiva por site")
+        resumo_sites = legal_resumo_sites(fdf)
+        if resumo_sites.empty:
+            empty_state("Sem dados para montar o resumo por site.")
+        else:
+            show_cols = ["Site", "Divisão", "Legislações", "Atend. legislação", "Pend. legislação", "Obrigações", "Atend. obrigações", "Pend. obrigações", "Status"]
+            show = resumo_sites[show_cols].copy()
+            st.dataframe(legal_styler_resumo_sites(show), use_container_width=True, hide_index=True)
+            png = legal_png_resumo_sites(resumo_sites)
+            d1,d2=st.columns([1,1])
+            with d1:
+                download_excel_button("Baixar tabela em Excel", "resumo_legal_sites.xlsx", {"Resumo_sites": resumo_sites[show_cols]}, key="legal_resumo_sites_excel")
+            with d2:
+                if png:
+                    st.download_button("Baixar tabela em PNG", data=png, file_name="resumo_legal_sites.png", mime="image/png", use_container_width=True, key="legal_resumo_sites_png")
+                else:
+                    st.caption("PNG indisponível neste ambiente.")
+    with tabs[2]:
         section("Análise da legislação")
         a,b=st.columns(2)
         with a:
@@ -7193,11 +7411,12 @@ def legal_dashboard(db,u):
             origem=leg_unicas.groupby(["Origem base","Status legislação"],dropna=False).size().reset_index(name="Quantidade") if not leg_unicas.empty else pd.DataFrame()
             if not origem.empty:
                 fig=px.bar(origem,x="Origem base",y="Quantidade",color="Status legislação",text="Quantidade",barmode="group",title="Legislação por origem da base",color_discrete_map=LEGAL_STATUS_COLOR_MAP)
-                fig.update_traces(textposition="outside")
-                fig.update_layout(template="plotly_white",height=360)
+                fig.update_traces(textposition="outside", marker_line_color="#ffffff", marker_line_width=1.1)
+                fig.update_layout(template="plotly_white",height=360,font=dict(color="#111827"))
                 plotly_chart_safe(fig,use_container_width=True)
-        st.dataframe(leg_unicas[["Site","Divisão","Origem base","Legislação","Status legislação","Assunto","Âmbito/Origem"]],use_container_width=True,hide_index=True)
-    with tabs[2]:
+        cols_leg=["Site","Divisão","Legislação","Status legislação","Assunto","Âmbito/Origem"]
+        st.dataframe(leg_unicas[[c for c in cols_leg if c in leg_unicas.columns]],use_container_width=True,hide_index=True)
+    with tabs[3]:
         section("Análise das obrigações")
         a,b=st.columns(2)
         with a:
@@ -7206,40 +7425,50 @@ def legal_dashboard(db,u):
         with b:
             by_assunto=fdf.groupby("Assunto",dropna=False).size().reset_index(name="Quantidade").sort_values("Quantidade",ascending=False).head(10) if not fdf.empty else pd.DataFrame()
             if not by_assunto.empty:
+                by_assunto=by_assunto.sort_values("Quantidade",ascending=True)
+                cores=px.colors.sequential.Tealgrn[-len(by_assunto):] if len(by_assunto) <= len(px.colors.sequential.Tealgrn) else px.colors.sequential.Tealgrn
                 fig=px.bar(by_assunto,x="Quantidade",y="Assunto",orientation="h",text="Quantidade",title="Top assuntos por quantidade de obrigações")
-                fig.update_traces(textposition="outside",marker_color="#0891b2")
-                fig.update_layout(template="plotly_white",height=430,margin=dict(l=10,r=35,t=55,b=10),showlegend=False,yaxis=dict(autorange="reversed"))
+                fig.update_traces(textposition="outside",marker_color=cores,marker_line_color="#ffffff",marker_line_width=1.1)
+                fig.update_layout(template="plotly_white",height=430,margin=dict(l=10,r=45,t=55,b=10),showlegend=False,font=dict(color="#111827"))
                 plotly_chart_safe(fig,use_container_width=True)
-    with tabs[3]:
+    with tabs[4]:
         section("Lacunas e prioridades")
         a,b=st.columns(2)
         with a:
             top=legal_top_lacunas(fdf,"Site","obrigacao",10)
             if not top.empty:
+                top=top.sort_values("Pendências",ascending=True)
                 fig=px.bar(top,x="Pendências",y="Site",orientation="h",text="Pendências",title="Sites com mais obrigações pendentes")
-                fig.update_traces(textposition="outside",marker_color="#dc2626")
-                fig.update_layout(template="plotly_white",height=360,yaxis=dict(autorange="reversed"))
+                fig.update_traces(textposition="outside",marker_color="#dc2626",marker_line_color="#ffffff",marker_line_width=1.1)
+                fig.update_layout(template="plotly_white",height=360,font=dict(color="#111827"))
                 plotly_chart_safe(fig,use_container_width=True)
         with b:
             top=legal_top_lacunas(fdf,"Assunto","obrigacao",10)
             if not top.empty:
+                top=top.sort_values("Pendências",ascending=True)
                 fig=px.bar(top,x="Pendências",y="Assunto",orientation="h",text="Pendências",title="Assuntos com mais obrigações pendentes")
-                fig.update_traces(textposition="outside",marker_color="#f97316")
-                fig.update_layout(template="plotly_white",height=430,margin=dict(l=10,r=35,t=55,b=10),yaxis=dict(autorange="reversed"))
+                fig.update_traces(textposition="outside",marker_color="#f97316",marker_line_color="#ffffff",marker_line_width=1.1)
+                fig.update_layout(template="plotly_white",height=430,margin=dict(l=10,r=45,t=55,b=10),font=dict(color="#111827"))
                 plotly_chart_safe(fig,use_container_width=True)
         pend=fdf[~fdf["Status obrigação"].apply(legal_atendido_status)].copy()
         st.dataframe(legal_formata_tabela(pend),use_container_width=True,hide_index=True)
-    with tabs[4]:
+    with tabs[5]:
         show=legal_formata_tabela(fdf)
         st.dataframe(show,use_container_width=True,hide_index=True)
         download_excel_button("Baixar base filtrada", "base_legal_filtrada.xlsx", {"Base_Filtrada": show}, key="legal_dash_download_filtrada")
 
 def legal_atualizar_base(db,u):
-    header("Atualizar Base Legal", "Importe uma ou mais bases para substituir a base legal consolidada do app.")
+    header("Atualizar Base Legal", "Importe bases LIRA ou LEMA para atualizar os registros legais do app.")
     if not can_edit(u,"auditoria") and not can_admin(u):
         alert_card("Seu perfil permite consulta, mas não atualização da base legal.")
         return
-    st.info("Envie a base LIRA de Jundiaí e/ou a base consolidada dos outros sites. Ao confirmar, a base legal atual será substituída pelos arquivos importados.")
+    st.info("Escolha se deseja substituir toda a base ou atualizar somente uma das origens. A atualização parcial preserva a outra base já existente.")
+    modo = st.radio(
+        "Escopo de atualização",
+        ["Substituir base completa", "Atualizar somente LIRA — Jundiaí", "Atualizar somente LEMA — demais sites"],
+        horizontal=True,
+        key="legal_modo_atualizacao",
+    )
     files=st.file_uploader("Arquivos Excel",type=["xlsx","xls"],accept_multiple_files=True,key="legal_upload_files")
     if files:
         frames=[]; erros=[]
@@ -7256,16 +7485,34 @@ def legal_atualizar_base(db,u):
             for e in erros: st.warning(e)
         if frames:
             novo=pd.concat(frames,ignore_index=True)
+            if modo.startswith("Atualizar somente LIRA"):
+                novo = novo[novo["origem_base"].astype(str).str.lower().str.contains("lira")].copy()
+            elif modo.startswith("Atualizar somente LEMA"):
+                novo = novo[~novo["origem_base"].astype(str).str.lower().str.contains("lira")].copy()
+                if not novo.empty:
+                    novo["origem_base"] = "LEMA"
+            if novo.empty:
+                st.warning("Nenhuma linha compatível com o escopo selecionado foi encontrada nos arquivos enviados.")
+                return
             st.metric("Linhas prontas para importação", len(novo))
             st.dataframe(novo.head(50),use_container_width=True,hide_index=True)
-            if st.button("Substituir base legal atual",use_container_width=True,key="legal_confirm_import"):
+            texto_botao = "Substituir base legal atual" if modo.startswith("Substituir") else f"{modo}"
+            if st.button(texto_botao,use_container_width=True,key="legal_confirm_import"):
                 try:
-                    db.query(LegalRegistro).delete()
+                    if modo.startswith("Substituir"):
+                        db.query(LegalRegistro).delete()
+                        tipo_hist="Base completa"
+                    elif modo.startswith("Atualizar somente LIRA"):
+                        db.query(LegalRegistro).filter(LegalRegistro.origem_base.ilike("%LIRA%")).delete(synchronize_session=False)
+                        tipo_hist="LIRA"
+                    else:
+                        db.query(LegalRegistro).filter(~LegalRegistro.origem_base.ilike("%LIRA%")).delete(synchronize_session=False)
+                        tipo_hist="LEMA"
                     regs=[legal_mapping_from_row(r.to_dict()) for _,r in novo.iterrows()]
                     if regs:
                         db.bulk_insert_mappings(LegalRegistro,regs)
-                    db.add(LegalUploadHistorico(nome_arquivo=", ".join([f.name for f in files])[:260],tipo_base="Upload",linhas_importadas=len(regs),usuario=u.nome if u else "—",observacoes="Sobrescrita da base legal"))
-                    registrar_log(db,u,NOME_MODULO_LEGAL,"LegalRegistro",None,"sobrescrever",observacao=f"{len(regs)} registros importados")
+                    db.add(LegalUploadHistorico(nome_arquivo=", ".join([f.name for f in files])[:260],tipo_base=tipo_hist,linhas_importadas=len(regs),usuario=u.nome if u else "—",observacoes=f"Atualização: {modo}"))
+                    registrar_log(db,u,NOME_MODULO_LEGAL,"LegalRegistro",None,"sobrescrever",observacao=f"{len(regs)} registros importados | {modo}")
                     db.commit()
                     st.success("Base legal atualizada com sucesso.")
                     st.rerun()
@@ -7273,10 +7520,9 @@ def legal_atualizar_base(db,u):
                     db.rollback()
                     st.error(f"Erro ao atualizar a base: {e}")
     section("Histórico de uploads")
-    hist=pd.DataFrame([{"Data":h.data_upload.strftime("%d/%m/%Y %H:%M") if h.data_upload else "—","Arquivo":h.nome_arquivo,"Tipo":h.tipo_base,"Linhas":h.linhas_importadas,"Usuário":h.usuario,"Observações":h.observacoes} for h in db.query(LegalUploadHistorico).order_by(LegalUploadHistorico.data_upload.desc()).limit(30)])
-    if not hist.empty: st.dataframe(hist,use_container_width=True,hide_index=True)
-    else: empty_state("Nenhum upload registrado.")
-
+    hist=pd.DataFrame([{"Data":h.data_upload.strftime("%d/%m/%Y %H:%M") if h.data_upload else "—","Arquivo":h.nome_arquivo,"Tipo":h.tipo_base,"Linhas":h.linhas_importadas,"Usuário":h.usuario,"Observações":h.observacoes} for h in db.query(LegalUploadHistorico).order_by(LegalUploadHistorico.data_upload.desc()).limit(50)])
+    if hist.empty: empty_state("Nenhum upload registrado.")
+    else: st.dataframe(hist,use_container_width=True,hide_index=True)
 def legal_base_page(db,u):
     header("Base Legal Consolidada", "Consulta da base normalizada de legislação e obrigações")
     df=legal_df(db)
