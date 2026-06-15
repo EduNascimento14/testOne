@@ -907,10 +907,22 @@ def verify_user_password(usuario, senha):
     return h == usuario.senha_hash
 
 def is_master_user(u):
-    return bool(u and getattr(u, "is_master", False) and str(getattr(u, "nome", "")).strip().lower() == "eduardo")
+    """Perfil com visão gerencial LAG.
+
+    Qualquer usuário marcado como master ou cadastrado como Gerencial LAG
+    visualiza todos os sites e os consolidados LAG.
+    """
+    if not u or not getattr(u, "ativo", True):
+        return False
+    perfil = normalizar_perfil_acesso(getattr(u, "perfil", None))
+    return bool(getattr(u, "is_master", False) or perfil == PERFIL_MASTER)
+
+def is_super_admin_user(u):
+    """Administrador principal do sistema para governança de acessos e atualização de bases."""
+    return bool(is_master_user(u) and str(getattr(u, "nome", "")).strip().lower() == "eduardo")
 
 def can_update_bases(u):
-    return is_master_user(u)
+    return is_super_admin_user(u)
 
 def init_db():
     Base.metadata.create_all(engine); ensure_schema_updates(); db=SessionLocal()
@@ -937,11 +949,16 @@ def init_db():
             user.ativo = True
             user.is_master = bool(master)
             set_user_password(user, senha)
+        corp = db.query(Site).filter_by(codigo="Corporativo").first()
         for user in db.query(Usuario).all():
             user.perfil = normalizar_perfil_acesso(user.perfil)
             if not getattr(user, "senha_hash", None):
                 set_user_password(user, SENHA_PADRAO_NOVO_USUARIO)
-            if user.nome != "Eduardo":
+            if user.perfil == PERFIL_MASTER:
+                user.is_master = True
+                if corp:
+                    user.site_id = corp.id
+            else:
                 user.is_master = False
         sync_checklists_base(db)
         seed_regras_frequencia(db)
@@ -1759,7 +1776,7 @@ def render_user_context_sidebar(db,u):
     if st.sidebar.button("Sair", use_container_width=True, key="logout_sidebar"):
         logout_user()
         st.rerun()
-    if can_admin(u):
+    if is_super_admin_user(u):
         if st.sidebar.button("👥 Usuários e acessos", use_container_width=True, key="sidebar_usuarios_acessos"):
             st.session_state.modulo="usuarios"
             st.rerun()
@@ -1814,16 +1831,18 @@ def submodulos_visiveis(modulo, u):
 
 def usuarios_admin_page(db,u):
     header("Usuários e Acessos", "Gestão de logins, perfis e segmentação por site")
-    if not can_admin(u):
-        alert_card("Acesso restrito ao administrador master.")
+    if not is_super_admin_user(u):
+        alert_card("Acesso restrito ao administrador principal.")
         return
     sites = {s.codigo: s.id for s in db.query(Site).filter(Site.ativo==True).order_by(Site.codigo).all()}
+    site_opts_todos = list(sites.keys())
+    site_opts_locais = [k for k in sites.keys() if k != "Corporativo"]
     usuarios = db.query(Usuario).order_by(Usuario.nome).all()
     df = pd.DataFrame([{
         "ID": x.id,
         "Login/Nome": x.nome,
         "Perfil": normalizar_perfil_acesso(x.perfil),
-        "Site": x.site.codigo if x.site else "—",
+        "Escopo": "Todos os sites / LAG" if is_master_user(x) else (x.site.codigo if x.site else "—"),
         "Ativo": "Sim" if x.ativo else "Não",
         "Master": "Sim" if is_master_user(x) else "Não",
         "Atualizado em": fmt_date(getattr(x,"atualizado_em",None)),
@@ -1834,42 +1853,56 @@ def usuarios_admin_page(db,u):
     with st.form("novo_usuario_form"):
         c1,c2,c3 = st.columns(3)
         nome = c1.text_input("Login/Nome")
-        perfil = c2.selectbox("Perfil", [PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR], help="Somente Eduardo permanece como Gerencial LAG master.")
-        site = c3.selectbox("Site", [k for k in sites.keys() if k != "Corporativo"])
+        perfil = c2.selectbox("Perfil", [PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR], help="Gerencial LAG visualiza todos os sites e consolidados LAG.")
+        site = c3.selectbox("Site", site_opts_todos, index=site_opts_todos.index("Corporativo") if "Corporativo" in site_opts_todos else 0, help="Para Gerencial LAG, o escopo será todos os sites.")
         senha = st.text_input("Senha inicial", value=SENHA_PADRAO_NOVO_USUARIO, type="password")
         criar = st.form_submit_button("Criar usuário", use_container_width=True, type="primary")
     if criar:
+        perfil_norm = normalizar_perfil_acesso(perfil)
+        is_master_novo = perfil_norm == PERFIL_MASTER
+        site_final = "Corporativo" if is_master_novo else site
         if not nome.strip():
             st.error("Informe o login/nome.")
         elif db.query(Usuario).filter(Usuario.nome.ilike(nome.strip())).first():
             st.error("Já existe usuário com esse login/nome.")
+        elif not is_master_novo and site_final == "Corporativo":
+            st.error("Perfis Técnico de EHS e Visualizador devem estar vinculados a um site específico.")
         else:
-            obj = Usuario(nome=nome.strip(), perfil=perfil, site_id=sites.get(site), ativo=True, is_master=False, criado_em=datetime.utcnow(), atualizado_em=datetime.utcnow())
+            obj = Usuario(nome=nome.strip(), perfil=perfil_norm, site_id=sites.get(site_final), ativo=True, is_master=is_master_novo, criado_em=datetime.utcnow(), atualizado_em=datetime.utcnow())
             set_user_password(obj, senha or SENHA_PADRAO_NOVO_USUARIO)
             db.add(obj); db.flush()
-            registrar_log(db,u,"Usuários e Acessos","Usuario",obj.id,"criar",observacao=f"Usuário {obj.nome} criado para {site}")
+            escopo_log = "Todos os sites / LAG" if is_master_novo else site_final
+            registrar_log(db,u,"Usuários e Acessos","Usuario",obj.id,"criar",observacao=f"Usuário {obj.nome} criado para {escopo_log}")
             db.commit(); st.success("Usuário criado."); st.rerun()
     section("Editar usuário existente")
-    editaveis = [x for x in usuarios if not is_master_user(x)]
+    editaveis = [x for x in usuarios if not is_super_admin_user(x)]
     if not editaveis:
-        empty_state("Nenhum usuário editável além do master.")
+        empty_state("Nenhum usuário editável além do administrador principal.")
         return
-    labels = {x.id: f"{x.nome} — {normalizar_perfil_acesso(x.perfil)} — {x.site.codigo if x.site else '—'}" for x in editaveis}
+    labels = {x.id: f"{x.nome} — {normalizar_perfil_acesso(x.perfil)} — {'Todos os sites / LAG' if is_master_user(x) else (x.site.codigo if x.site else '—')}" for x in editaveis}
     uid = st.selectbox("Selecionar usuário", list(labels.keys()), format_func=lambda x: labels.get(x,str(x)), key="usuario_editar_select")
     obj = db.get(Usuario, int(uid))
     if obj:
+        perfil_atual = normalizar_perfil_acesso(obj.perfil)
+        site_atual = "Corporativo" if is_master_user(obj) else (obj.site.codigo if obj.site else (site_opts_locais[0] if site_opts_locais else "Corporativo"))
         with st.form("editar_usuario_form"):
             c1,c2,c3 = st.columns(3)
-            novo_perfil = c1.selectbox("Perfil", [PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR], index=[PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR].index(normalizar_perfil_acesso(obj.perfil)) if normalizar_perfil_acesso(obj.perfil) in [PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR] else 0)
-            novo_site = c2.selectbox("Site", [k for k in sites.keys() if k != "Corporativo"], index=([k for k in sites.keys() if k != "Corporativo"].index(obj.site.codigo) if obj.site and obj.site.codigo in [k for k in sites.keys() if k != "Corporativo"] else 0))
+            novo_perfil = c1.selectbox("Perfil", [PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR], index=[PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR].index(perfil_atual) if perfil_atual in [PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR] else 2)
+            novo_site = c2.selectbox("Site", site_opts_todos, index=site_opts_todos.index(site_atual) if site_atual in site_opts_todos else 0, help="Para Gerencial LAG, o escopo será todos os sites.")
             ativo = c3.checkbox("Ativo", value=bool(obj.ativo))
             nova_senha = st.text_input("Nova senha (opcional)", type="password")
             salvar = st.form_submit_button("Salvar alterações", use_container_width=True)
         if salvar:
+            novo_perfil = normalizar_perfil_acesso(novo_perfil)
+            is_master_editado = novo_perfil == PERFIL_MASTER
+            site_final = "Corporativo" if is_master_editado else novo_site
+            if not is_master_editado and site_final == "Corporativo":
+                st.error("Perfis Técnico de EHS e Visualizador devem estar vinculados a um site específico.")
+                st.stop()
             obj.perfil = novo_perfil
-            obj.site_id = sites.get(novo_site)
+            obj.site_id = sites.get(site_final)
             obj.ativo = bool(ativo)
-            obj.is_master = False
+            obj.is_master = is_master_editado
             obj.atualizado_em = datetime.utcnow()
             if nova_senha:
                 set_user_password(obj, nova_senha)
@@ -2042,7 +2075,7 @@ def home_page(db,u):
             st.session_state.submodulo_legal=""
             st.rerun()
 
-    if can_admin(u):
+    if is_super_admin_user(u):
         section("Administração")
         c_admin, c_space = st.columns([1,3])
         with c_admin:
