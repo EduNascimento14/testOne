@@ -296,7 +296,7 @@ TIPOS_MUDANCA_CRITICA = ["Alteração de software/PLC","Alteração de relé/con
 TIPOS_MUDANCA = TIPOS_MUDANCA_CRITICA + ["Ajuste operacional sem impacto em segurança","Atualização documental","Manutenção preventiva","Melhoria ergonômica sem impacto em segurança","Outro"]
 STATUS_MOC = ["Aberta","Em análise","Aprovada","Implementada","Validada","Reprovada","Cancelada"]
 STATUS_AUDITORIA = ["Planejada","Em andamento","Concluída","Cancelada"]
-STATUS_RESPOSTA_EHS = ["Conforme","Parcialmente Conforme","Não Conforme","Não Aplicável"]
+STATUS_RESPOSTA_EHS = ["Conforme","Parcialmente Conforme","Não Conforme"]
 TIPOS_ACHADO_EHS = ["Não conformidade crítica","Não conformidade maior","Não conformidade menor","Observação","Oportunidade de melhoria","Boa prática"]
 
 CHECKLIST_NR12 = {
@@ -338,119 +338,177 @@ CHECKLIST_NR12 = {
 CHECKLIST_NR12["Auditoria corporativa"] = CHECKLIST_NR12["Auditoria EHS"]
 CHECKLIST_NR12["Auditoria extraordinária após incidente/quase-acidente"] = CHECKLIST_NR12["Auditoria EHS"]
 
-CHECKLIST_EHS_DIRETRIZES_BASE = {'Diretriz EHS 4.12.01 — Requisitos e Responsabilidades de EHS': ['O Registro de Requisitos de EHS está atualizado, com '
-                                                                  'obrigações legais, corporativas e de clientes aplicáveis?',
-                                                                  'Cada obrigação de EHS tem responsável definido, autoridade '
-                                                                  'adequada e evidência de acompanhamento?'],
- 'Diretriz EHS 4.12.02 — Sistema de Gestão Ambiental': ['A unidade identifica aspectos, impactos e riscos ambientais relevantes '
-                                                        'de suas atividades?',
-                                                        'Há objetivos, metas e planos ambientais acompanhados pela liderança em '
-                                                        'frequência definida?'],
- 'Diretriz EHS 4.12.03 — Métricas de Desempenho e Revisão do Progresso': ['Os indicadores de EHS possuem responsáveis, fonte de '
-                                                                          'dados, frequência de atualização e evidência de '
-                                                                          'validação?',
-                                                                          'A liderança revisa os indicadores periodicamente e '
-                                                                          'define ações para desvios de meta ou tendência?'],
- 'Diretriz EHS 4.12.04 — Avaliação e Ação Corretiva': ['A unidade avalia periodicamente sua conformidade legal, corporativa e '
-                                                       'operacional de EHS?',
-                                                       'Não conformidades geram ações com responsável, prazo, status, evidência '
-                                                       'de conclusão e verificação de eficácia?'],
- 'Diretriz EHS 4.12.05 — Gestão de Mudanças': ['Mudanças em processos, equipamentos, instalações, químicos, tecnologia ou '
-                                               'pessoas passam por avaliação de EHS antes da liberação?',
-                                               'O MOC contempla aprovação das áreas afetadas, atualização de documentos, '
-                                               'treinamentos e controles antes da partida?'],
- 'Diretriz EHS 4.12.06 — Near Miss e Investigação de Acidentes/Incidentes': ['Existe programa ativo de near miss, com reporte '
-                                                                             'simples, tratativa e retorno ao relator ou à área?',
-                                                                             'Acidentes, incidentes e near misses de alto '
-                                                                             'potencial são investigados com causa raiz e ações '
-                                                                             'corretivas?',
-                                                                             'Os dados de incidentes e near misses são revisados '
-                                                                             'para identificar tendências, reincidências e '
-                                                                             'causas sistêmicas?'],
- 'Diretriz EHS 4.12.07 — Uso de Produtos Químicos e Gestão de Resíduos': ['Produtos químicos possuem inventário atualizado, '
-                                                                          'SDS/FISPQ disponível, rotulagem e armazenamento '
-                                                                          'compatíveis?',
-                                                                          'A entrada de novos químicos passa por avaliação '
-                                                                          'prévia de perigos, restrições, incompatibilidades, '
-                                                                          'EPI e controles ambientais?',
-                                                                          'Resíduos são classificados, segregados, armazenados, '
-                                                                          'transportados e destinados com documentação '
+CHECKLIST_EHS_REVISAO = "2026-06-PTBR-ESSENCIAL-REV2"
+CHECKLIST_EHS_DIRETRIZES_BASE = {'Diretriz EHS 4.12.01 — Requisitos e Responsabilidades de EHS': ['O Registro de Requisitos de EHS está '
+                                                                  'atualizado, acessível e contempla '
+                                                                  'requisitos legais, corporativos e de '
+                                                                  'clientes aplicáveis?',
+                                                                  'As obrigações de EHS possuem responsáveis '
+                                                                  'definidos, prazos ou rotinas de controle '
+                                                                  'e evidências de acompanhamento?'],
+ 'Diretriz EHS 4.12.02 — Sistema de Gestão Ambiental': ['A unidade identifica aspectos, impactos e riscos '
+                                                        'ambientais relevantes e mantém controles para os '
+                                                        'temas críticos?',
+                                                        'Existem objetivos e metas ambientais com plano de '
+                                                        'ação, responsável e revisão periódica pela '
+                                                        'liderança?'],
+ 'Diretriz EHS 4.12.03 — Métricas de Desempenho e Revisão do Progresso': ['Os indicadores de EHS possuem '
+                                                                          'fonte de dados, responsável, '
+                                                                          'frequência de atualização e '
+                                                                          'evidência de validação?',
+                                                                          'A liderança revisa os indicadores '
+                                                                          'no mínimo trimestralmente e '
+                                                                          'define ações para desvios de meta '
+                                                                          'ou tendência?'],
+ 'Diretriz EHS 4.12.04 — Avaliação e Ação Corretiva': ['A unidade realiza avaliações periódicas de '
+                                                       'conformidade legal, corporativa e operacional de '
+                                                       'EHS?',
+                                                       'Não conformidades são tratadas com causa raiz, ação, '
+                                                       'responsável, prazo, evidência de conclusão e '
+                                                       'verificação de eficácia?'],
+ 'Diretriz EHS 4.12.05 — Gestão de Mudanças': ['Mudanças em processos, equipamentos, instalações, produtos '
+                                               'químicos, tecnologia ou pessoas passam por avaliação de EHS '
+                                               'antes da liberação?',
+                                               'O processo de MOC garante aprovações, atualização de '
+                                               'documentos, treinamentos, PSSR quando aplicável e '
+                                               'encerramento formal?'],
+ 'Diretriz EHS 4.12.06 — Near Miss e Investigação de Acidentes/Incidentes': ['Existe programa de near miss '
+                                                                             'ou concern report com reporte '
+                                                                             'simples, avaliação, tratativa '
+                                                                             'e retorno aos envolvidos?',
+                                                                             'Acidentes, incidentes e near '
+                                                                             'misses de alto potencial são '
+                                                                             'investigados com causa raiz e '
+                                                                             'ações corretivas?',
+                                                                             'Dados de incidentes e near '
+                                                                             'misses são revisados para '
+                                                                             'identificar tendências, '
+                                                                             'reincidências e ações '
+                                                                             'sistêmicas?'],
+ 'Diretriz EHS 4.12.07 — Uso de Produtos Químicos e Gestão de Resíduos': ['O inventário de produtos químicos '
+                                                                          'está atualizado e cada produto '
+                                                                          'possui SDS/FISPQ disponível?',
+                                                                          'A entrada de novos produtos '
+                                                                          'químicos é avaliada previamente '
+                                                                          'quanto a perigos, restrições, '
+                                                                          'incompatibilidades, EPI e '
+                                                                          'controles ambientais?',
+                                                                          'Produtos químicos e resíduos são '
+                                                                          'armazenados, rotulados e '
+                                                                          'segregados conforme '
+                                                                          'compatibilidade e risco?',
+                                                                          'Resíduos são classificados, '
+                                                                          'controlados, transportados e '
+                                                                          'destinados com documentação '
                                                                           'rastreável?',
-                                                                          'Há recursos, treinamento e procedimento para resposta '
-                                                                          'a derramamentos compatíveis com os cenários do site?'],
- 'Diretriz EHS 4.12.08 — Segurança Elétrica': ['Somente pessoas qualificadas executam inspeções, testes, instalações ou '
-                                               'intervenções elétricas?',
-                                               'Trabalhos elétricos são feitos preferencialmente desenergizados, com LOTO e '
-                                               'verificação de ausência de energia?',
-                                               'Trabalho elétrico energizado exige justificativa, permissão, análise de '
-                                               'choque/arco elétrico, EPI e controles definidos?'],
- 'Diretriz EHS 4.12.09 — Preparação para Emergências': ['O plano de emergência cobre os cenários relevantes do site, com papéis, '
-                                                        'recursos, comunicações e contatos definidos?',
-                                                        'Simulados, inspeções de equipamentos de emergência e treinamentos são '
-                                                        'realizados e registrados na frequência requerida?'],
- 'Diretriz EHS 4.12.10 — Treinamento e Envolvimento dos Empregados': ['Existe matriz de treinamentos de EHS por função, risco, '
-                                                                      'requisito e frequência de reciclagem?',
-                                                                      'Treinamentos são realizados antes da exposição ao risco e '
-                                                                      'possuem registro de conteúdo, data e participantes?',
-                                                                      'Há comitê, HPT ou rotina equivalente para envolver '
-                                                                      'empregados, acompanhar ações e comunicar resultados de '
-                                                                      'EHS?'],
- 'Diretriz EHS 4.12.11 — Segurança de Equipamentos e Máquinas': ['Máquinas e equipamentos possuem avaliação de risco, proteções '
-                                                                 'adequadas e plano de adequação priorizado por risco?',
-                                                                 'Dispositivos críticos de segurança são testados, documentados '
-                                                                 'e mantidos conforme frequência definida?',
-                                                                 'Procedimentos de LOTO identificam fontes de energia, pontos de '
-                                                                 'bloqueio, verificação de energia zero e retorno seguro?',
-                                                                 'Intervenções em proteções, sensores, comandos de emergência ou '
-                                                                 'sistemas de segurança passam por MOC e validação antes da '
-                                                                 'liberação?'],
- 'Diretriz EHS 4.12.12 — Ergonomia': ['A unidade identifica e avalia tarefas com risco ergonômico por método adequado?',
-                                      'Existe plano de redução de risco ergonômico, com responsáveis, prazos, validação dos '
-                                      'controles e revisão da liderança?'],
- 'Diretriz EHS 4.12.13 — Permissões para Trabalho Perigoso': ['Trabalhos perigosos não rotineiros possuem permissão antes do '
-                                                              'início, com perigos, controles, EPI e aprovadores definidos?',
-                                                              'Permissões de trabalho cobrem, quando aplicável, altura, trabalho '
-                                                              'a quente, espaço confinado, elétrico energizado, químicos '
-                                                              'perigosos e cargas não padrão?',
-                                                              'As permissões são revisadas quando há mudança de condição, '
-                                                              'incidente, near miss ou risco não previsto durante a execução?'],
- 'Diretriz EHS 4.12.14 — JSA e Equipamento de Proteção Individual': ['Tarefas rotineiras com risco possuem JSA atualizada, '
-                                                                     'comunicada e revisada após mudanças ou incidentes?',
-                                                                     'Trabalhos não rotineiros usam avaliação dinâmica de risco '
-                                                                     'ou ferramenta equivalente antes da execução?',
-                                                                     'EPIs são definidos por avaliação de risco, fornecidos, '
-                                                                     'sinalizados quando necessário e acompanhados quanto ao uso '
-                                                                     'correto?'],
- 'Diretriz EHS 4.12.15 — Movimentação e Armazenamento de Materiais': ['Equipamentos de movimentação, docas, level pads e racks '
-                                                                      'são adequados à carga, capacidade, ambiente e frequência '
-                                                                      'de uso?',
-                                                                      'Há inspeções pré-uso e periódicas documentadas para '
-                                                                      'empilhadeiras/PIT, racks, docas e acessórios críticos?',
-                                                                      'Operadores de equipamentos de movimentação são treinados, '
-                                                                      'autorizados e reciclados conforme risco, legislação e '
-                                                                      'incidentes?',
-                                                                      'Cargas inseguras ou não padrão são avaliadas, segregadas '
-                                                                      'ou movimentadas por procedimento/permissão específica?'],
- 'Diretriz EHS 4.12.16 — Visitantes, Contratados e Empregados Temporários': ['Visitantes, contratados e temporários recebem '
-                                                                             'orientação de EHS, EPI e restrições compatíveis '
-                                                                             'com sua atividade e acesso?',
-                                                                             'Contratados e temporários têm riscos, permissões, '
-                                                                             'treinamentos, supervisão e incidentes controlados '
-                                                                             'pelo site?'],
- 'Diretriz EHS 4.12.17 — Ambiente de Trabalho': ['Rotas de fuga, saídas, sinalização, iluminação de emergência e meios de '
-                                                 'egresso são mantidos livres e funcionais?',
-                                                 'Superfícies de caminhada, escadas, plataformas, aberturas e áreas elevadas '
-                                                 'possuem proteção contra quedas e tropeços?',
-                                                 'Housekeeping, iluminação, água potável, sanitários, ruído, ventilação e '
-                                                 'temperatura são controlados conforme os riscos do site?'],
- 'Diretriz EHS 4.12.18 — Segurança em Manutenção': ['Atividades de manutenção são realizadas por pessoas qualificadas, treinadas '
-                                                    'e autorizadas?',
-                                                    'Manutenções rotineiras e corretivas possuem JSA, permissão ou avaliação '
-                                                    'dinâmica compatível com o risco?',
-                                                    'Trabalhos complexos ou de alto risco possuem planejamento, método de '
-                                                    'trabalho, recursos, controles e revisão competente?',
-                                                    'A liderança de manutenção/facilities pode parar ou adiar trabalhos sem '
-                                                    'condição segura de execução?']}
+                                                                          'O site possui recursos, '
+                                                                          'procedimento e treinamento para '
+                                                                          'resposta a derramamentos '
+                                                                          'compatíveis com seus cenários?'],
+ 'Diretriz EHS 4.12.08 — Segurança Elétrica': ['Somente pessoas qualificadas executam instalações, '
+                                               'inspeções, testes ou intervenções elétricas?',
+                                               'Trabalhos elétricos são realizados desenergizados sempre que '
+                                               'possível, com LOTO e verificação de ausência de energia?',
+                                               'Trabalho elétrico energizado possui justificativa, '
+                                               'permissão, análise de choque/arco, EPI e controles '
+                                               'definidos?'],
+ 'Diretriz EHS 4.12.09 — Preparação para Emergências': ['O plano de emergência contempla os cenários '
+                                                        'relevantes do site, papéis, comunicação, recursos e '
+                                                        'contatos críticos?',
+                                                        'Simulados, inspeções de equipamentos de emergência '
+                                                        'e treinamentos são realizados e registrados na '
+                                                        'frequência definida?'],
+ 'Diretriz EHS 4.12.10 — Treinamento e Envolvimento dos Empregados': ['Existe matriz de treinamentos de EHS '
+                                                                      'por função, risco e frequência de '
+                                                                      'reciclagem?',
+                                                                      'Treinamentos são realizados antes da '
+                                                                      'exposição ao risco e possuem registro '
+                                                                      'de conteúdo, data e participantes?',
+                                                                      'Há rotina de envolvimento dos '
+                                                                      'empregados, como comitê ou HPT, para '
+                                                                      'acompanhar ações e comunicar '
+                                                                      'resultados de EHS?'],
+ 'Diretriz EHS 4.12.11 — Segurança de Equipamentos e Máquinas': ['Máquinas e equipamentos possuem avaliação '
+                                                                 'de risco atualizada e plano de adequação '
+                                                                 'priorizado por risco?',
+                                                                 'Proteções, intertravamentos, paradas de '
+                                                                 'emergência e dispositivos críticos são '
+                                                                 'testados e registrados na frequência '
+                                                                 'definida?',
+                                                                 'Procedimentos de LOTO identificam fontes '
+                                                                 'de energia, pontos de bloqueio, energia '
+                                                                 'zero e retorno seguro?',
+                                                                 'Alterações em proteções, sensores, '
+                                                                 'comandos ou sistemas de segurança passam '
+                                                                 'por MOC e validação antes da liberação?'],
+ 'Diretriz EHS 4.12.12 — Ergonomia': ['Tarefas com risco ergonômico são identificadas e avaliadas por método '
+                                      'adequado?',
+                                      'Existe plano de redução de risco ergonômico com responsáveis, prazos, '
+                                      'validação dos controles e revisão da liderança?'],
+ 'Diretriz EHS 4.12.13 — Permissões para Trabalho Perigoso': ['Trabalhos perigosos não rotineiros possuem '
+                                                              'permissão antes do início, com perigos, '
+                                                              'controles, EPI e aprovadores definidos?',
+                                                              'Permissões aplicáveis a altura, trabalho a '
+                                                              'quente, espaço confinado, eletricidade '
+                                                              'energizada, químicos perigosos e cargas não '
+                                                              'padrão são controladas?',
+                                                              'Permissões são revisadas quando há mudança de '
+                                                              'condição, incidente, near miss ou risco não '
+                                                              'previsto?'],
+ 'Diretriz EHS 4.12.14 — JSA e Equipamento de Proteção Individual': ['Tarefas rotineiras com risco possuem '
+                                                                     'JSA atualizada e comunicada aos '
+                                                                     'envolvidos?',
+                                                                     'Trabalhos não rotineiros usam '
+                                                                     'avaliação dinâmica de risco ou '
+                                                                     'ferramenta equivalente antes da '
+                                                                     'execução?',
+                                                                     'EPIs são definidos por avaliação de '
+                                                                     'risco, fornecidos, sinalizados quando '
+                                                                     'necessário e acompanhados quanto ao '
+                                                                     'uso correto?'],
+ 'Diretriz EHS 4.12.15 — Movimentação e Armazenamento de Materiais': ['Equipamentos de movimentação, docas, '
+                                                                      'level pads e racks são adequados à '
+                                                                      'carga, capacidade, ambiente e '
+                                                                      'frequência de uso?',
+                                                                      'Empilhadeiras/PIT, racks, docas e '
+                                                                      'acessórios críticos possuem inspeções '
+                                                                      'pré-uso e periódicas documentadas?',
+                                                                      'Operadores de equipamentos de '
+                                                                      'movimentação são treinados, '
+                                                                      'autorizados e reciclados conforme '
+                                                                      'risco e requisitos aplicáveis?',
+                                                                      'Cargas inseguras ou não padrão são '
+                                                                      'avaliadas, segregadas ou movimentadas '
+                                                                      'por procedimento/permissão '
+                                                                      'específica?'],
+ 'Diretriz EHS 4.12.16 — Visitantes, Contratados e Empregados Temporários': ['Visitantes, contratados e '
+                                                                             'temporários recebem orientação '
+                                                                             'de EHS, EPI e restrições '
+                                                                             'compatíveis com sua atividade '
+                                                                             'e acesso?',
+                                                                             'Contratados e temporários têm '
+                                                                             'riscos, permissões, '
+                                                                             'treinamentos, supervisão e '
+                                                                             'incidentes controlados pelo '
+                                                                             'site?'],
+ 'Diretriz EHS 4.12.17 — Ambiente de Trabalho': ['Rotas de fuga, saídas, sinalização e iluminação de '
+                                                 'emergência são mantidas livres, visíveis e funcionais?',
+                                                 'Superfícies de caminhada, escadas, plataformas, aberturas '
+                                                 'e áreas elevadas possuem proteção adequada contra quedas e '
+                                                 'tropeços?',
+                                                 'Housekeeping, iluminação, água potável, sanitários, ruído, '
+                                                 'ventilação e temperatura são controlados conforme os '
+                                                 'riscos do site?'],
+ 'Diretriz EHS 4.12.18 — Segurança em Manutenção': ['Atividades de manutenção são realizadas por pessoas '
+                                                    'qualificadas, treinadas e autorizadas?',
+                                                    'Manutenções rotineiras e corretivas possuem JSA, '
+                                                    'permissão ou avaliação dinâmica compatível com o risco?',
+                                                    'Trabalhos complexos ou de alto risco possuem '
+                                                    'planejamento, método de trabalho, recursos, controles e '
+                                                    'revisão competente?',
+                                                    'A liderança de manutenção/facilities tem autoridade '
+                                                    'para parar ou adiar trabalhos sem condição segura de '
+                                                    'execução?']}
 
 def apply_theme():
     st.markdown("""
@@ -950,19 +1008,24 @@ def ensure_ehs_checklist_412_version(db):
     perguntas_por_cat = {}
     for p in perguntas_ativas:
         perguntas_por_cat.setdefault(p.categoria, set()).add(_ehs_norm_question(p.pergunta))
-    cobertura_ok = categorias_esperadas.issubset(cats_ativas) and len(perguntas_ativas) >= total_esperado
+    cobertura_ok = (cats_ativas == categorias_esperadas) and (len(perguntas_ativas) == total_esperado)
     perguntas_ok = True
     for cat, pergs in checklist_atual.items():
         existentes = perguntas_por_cat.get(cat, set())
+        if len(existentes) != len(pergs):
+            perguntas_ok = False
+            break
         for pergunta in pergs:
             if _ehs_norm_question(pergunta) not in existentes:
                 perguntas_ok = False
                 break
         if not perguntas_ok:
             break
-    if cobertura_ok and perguntas_ok and not any(str(c).startswith("Categoria ") for c in cats_ativas):
+    descricao_ativa = str(getattr(ativa, "descricao", "") or "")
+    versao_atual = CHECKLIST_EHS_REVISAO in descricao_ativa
+    if cobertura_ok and perguntas_ok and versao_atual and not any(str(c).startswith("Categoria ") for c in cats_ativas):
         return
-    criar_versao_checklist_ehs(db, "Sistema", "Checklist único de Diretrizes EHS 4.12 com Procedimentos de Alto Risco integrados")
+    criar_versao_checklist_ehs(db, "Sistema", f"Checklist essencial revisado em português — {CHECKLIST_EHS_REVISAO}")
 
 def seed_checklist_versions(db):
     tipos = {t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()}
@@ -1008,6 +1071,14 @@ def sync_checklists_base(db):
                 req.criticidade = req.criticidade if req.criticidade in CRITICIDADES else criticidade
                 req.evidencia_esperada = req.evidencia_esperada or "Evidência documental, registros, entrevistas e/ou verificação em campo."
                 req.ativo = True
+    db.flush()
+    # Atualiza snapshots de auditorias existentes para remover versões antigas ou traduções automáticas ruins.
+    for req in db.query(RequisitoEHS).filter(RequisitoEHS.ativo == True).all():
+        db.query(RespostaAuditoriaEHS).filter(RespostaAuditoriaEHS.requisito_id == req.id).update({
+            "pergunta_snapshot": req.pergunta,
+            "criticidade_snapshot": req.criticidade,
+            "evidencia_esperada_snapshot": req.evidencia_esperada,
+        }, synchronize_session=False)
     db.flush()
     seed_checklist_versions(db)
     ensure_ehs_checklist_412_version(db)
@@ -3533,8 +3604,8 @@ def salvar_respostas_ehs_parciais(db, auditoria, respostas_para_salvar, usuario,
         r = db.get(RespostaAuditoriaEHS, int(rid))
         if not r:
             continue
-        r.aplicavel = bool(apl) and status != "Não Aplicável"
-        r.status = "Não Aplicável" if (not r.aplicavel or status == "Não Aplicável") else status
+        r.aplicavel = bool(apl)
+        r.status = status
         r.nota_maturidade = float(maturidade)
         r.evidencia_verificada = evidencia
         r.comentario_auditor = comentario
@@ -3551,7 +3622,7 @@ def salvar_respostas_ehs_parciais(db, auditoria, respostas_para_salvar, usuario,
     db.commit()
 
 def ehs_checklist(db,u):
-    header("Checklist Diretrizes de EHS", "Checklist essencial por diretriz, com os requisitos críticos dos Procedimentos de Alto Risco incorporados")
+    header("Checklist Diretrizes de EHS", "Checklist essencial por diretriz, com perguntas revisadas em português e requisitos críticos integrados")
     msg=st.session_state.pop("ehs_checklist_saved_msg", None)
     if msg:
         st.success(msg)
@@ -3603,9 +3674,9 @@ def ehs_checklist(db,u):
         categoria_atual = None
         for r in res_etapa:
             categoria = r.requisito.diretiva.categoria
-            pergunta_txt = getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta
+            pergunta_txt = r.requisito.pergunta or getattr(r,"pergunta_snapshot",None)
             criticidade_txt = getattr(r,"criticidade_snapshot",None) or r.requisito.criticidade
-            evidencia_esperada_txt = getattr(r,"evidencia_esperada_snapshot",None) or r.requisito.evidencia_esperada
+            evidencia_esperada_txt = r.requisito.evidencia_esperada or getattr(r,"evidencia_esperada_snapshot",None)
             if categoria != categoria_atual:
                 st.markdown(f"<div class='check-category'>{categoria}</div>", unsafe_allow_html=True)
                 categoria_atual = categoria
@@ -3639,12 +3710,12 @@ def ehs_checklist(db,u):
             st.session_state["ehs_checklist_saved_msg"]="Progresso salvo e próxima diretriz carregada."
             st.rerun()
         with b3:
-            st.caption("Use salvar progresso durante a execução. Também é possível marcar item como Não Aplicável; as respostas salvas permanecem no banco e a auditoria reabre na última diretriz acessada.")
+            st.caption("Use salvar progresso durante a execução. Para itens fora do escopo, desmarque Aplicável. As respostas salvas permanecem no banco e a auditoria reabre na última diretriz acessada.")
     else:
         categoria_atual = None
         for r in res_etapa:
             categoria = r.requisito.diretiva.categoria
-            pergunta_txt = getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta
+            pergunta_txt = r.requisito.pergunta or getattr(r,"pergunta_snapshot",None)
             criticidade_txt = getattr(r,"criticidade_snapshot",None) or r.requisito.criticidade
             if categoria != categoria_atual:
                 st.markdown(f"<div class='check-category'>{categoria}</div>", unsafe_allow_html=True)
