@@ -118,12 +118,6 @@ EHS_SUBMODULOS = {
         "cor": "#2563eb",
         "paginas": ["Planejamento de Auditorias", "Calendário de Auditorias", "Checklist Diretrizes de EHS"],
     },
-    "Procedimentos de Alto Risco": {
-        "icone": "🧩",
-        "descricao": "Segmentação dos padrões/procedimentos de alto risco, com status por item, fonte normativa e lacunas de execução.",
-        "cor": "#0f766e",
-        "paginas": ["Dashboard Procedimentos de Alto Risco", "Base Procedimentos de Alto Risco", "Atualizar Procedimentos de Alto Risco"],
-    },
     "Gestão de Gaps e Planos de Ação": {
         "icone": "⚠️",
         "descricao": "Tratamento dos gaps encontrados, planos de ação, prazos, responsáveis e eficácia.",
@@ -344,7 +338,7 @@ CHECKLIST_NR12 = {
 CHECKLIST_NR12["Auditoria corporativa"] = CHECKLIST_NR12["Auditoria EHS"]
 CHECKLIST_NR12["Auditoria extraordinária após incidente/quase-acidente"] = CHECKLIST_NR12["Auditoria EHS"]
 
-CHECKLIST_EHS = {'Diretriz EHS 4.12.01 — Requisitos e Responsabilidades de EHS': ['A unidade mantém Registro de Requisitos de EHS atualizado, contemplando requisitos legais, corporativos, de '
+CHECKLIST_EHS_DIRETRIZES_BASE = {'Diretriz EHS 4.12.01 — Requisitos e Responsabilidades de EHS': ['A unidade mantém Registro de Requisitos de EHS atualizado, contemplando requisitos legais, corporativos, de '
                                                                   'clientes e partes interessadas aplicáveis?',
                                                                   'Há responsáveis designados e autorizados para cumprir ou monitorar cada obrigação de EHS identificada no '
                                                                   'registro?',
@@ -666,7 +660,7 @@ class ChecklistPerguntaVersaoEHS(Base):
     __tablename__="checklist_perguntas_versoes_ehs"
     id=Column(Integer,primary_key=True); checklist_versao_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); categoria=Column(String(180)); ordem=Column(Integer); pergunta=Column(Text); criticidade=Column(String(40)); evidencia_esperada=Column(Text); gera_pac_automatico=Column(Boolean,default=False); ativo=Column(Boolean,default=True)
 class AuditoriaCruzada(Base):
-    __tablename__="auditorias_cruzadas"; id=Column(Integer,primary_key=True); ano=Column(Integer); ciclo=Column(String(80)); site_auditado_id=Column(Integer,ForeignKey("sites.id")); site_auditor_lider_id=Column(Integer,ForeignKey("sites.id")); site_auditor_apoio_id=Column(Integer,ForeignKey("sites.id")); auditor_lider=Column(String(120)); auditor_apoio=Column(String(120)); data_planejada=Column(Date); data_inicio=Column(Date); data_fim=Column(Date); status=Column(String(60)); escopo=Column(Text); observacoes=Column(Text); conformidade_percentual=Column(Float,default=0); maturidade_media=Column(Float,default=0); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); criado_em=Column(DateTime,default=datetime.utcnow)
+    __tablename__="auditorias_cruzadas"; id=Column(Integer,primary_key=True); ano=Column(Integer); ciclo=Column(String(80)); site_auditado_id=Column(Integer,ForeignKey("sites.id")); site_auditor_lider_id=Column(Integer,ForeignKey("sites.id")); site_auditor_apoio_id=Column(Integer,ForeignKey("sites.id")); auditor_lider=Column(String(120)); auditor_apoio=Column(String(120)); data_planejada=Column(Date); data_inicio=Column(Date); data_fim=Column(Date); status=Column(String(60)); escopo=Column(Text); observacoes=Column(Text); conformidade_percentual=Column(Float,default=0); maturidade_media=Column(Float,default=0); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); checklist_etapa_atual=Column(String(260)); criado_em=Column(DateTime,default=datetime.utcnow)
 class RespostaAuditoriaEHS(Base):
     __tablename__="respostas_auditoria_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); aplicavel=Column(Boolean,default=True); status=Column(String(60)); nota_maturidade=Column(Float,default=3); evidencia_verificada=Column(Text); comentario_auditor=Column(Text); necessita_pac=Column(Boolean,default=False); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); pergunta_snapshot=Column(Text); criticidade_snapshot=Column(String(40)); evidencia_esperada_snapshot=Column(Text); gera_pac_automatico_snapshot=Column(Boolean,default=False); requisito=relationship("RequisitoEHS"); __table_args__=(UniqueConstraint("auditoria_id","requisito_id",name="uq_resp_auditoria_requisito"),)
 class PACEHS(Base):
@@ -905,6 +899,7 @@ def ensure_schema_updates():
     safe_add_column("respostas_nr12", "gera_pac_automatico_snapshot", "BOOLEAN DEFAULT 0")
     safe_add_column("requisitos_ehs", "gera_pac_automatico", "BOOLEAN DEFAULT 0")
     safe_add_column("auditorias_cruzadas", "versao_checklist_id", "INTEGER")
+    safe_add_column("auditorias_cruzadas", "checklist_etapa_atual", "VARCHAR(260)")
     safe_add_column("respostas_auditoria_ehs", "versao_checklist_id", "INTEGER")
     safe_add_column("respostas_auditoria_ehs", "pergunta_snapshot", "TEXT")
     safe_add_column("respostas_auditoria_ehs", "criticidade_snapshot", "VARCHAR(40)")
@@ -962,16 +957,33 @@ def criar_versao_checklist_ehs(db, criado_por="Sistema", descricao=None):
 
 
 def ensure_ehs_checklist_412_version(db):
-    """Garante que a versão ativa do checklist de auditoria reflita as Diretrizes EHS 4.12."""
-    categorias_esperadas = set(CHECKLIST_EHS.keys())
+    """Garante que a versão ativa do checklist de auditoria reflita as Diretrizes EHS 4.12 e os procedimentos de alto risco integrados."""
+    checklist_atual = checklist_ehs_unificado()
+    globals()["CHECKLIST_EHS"] = checklist_atual
+    categorias_esperadas = set(checklist_atual.keys())
+    total_esperado = sum(len(v) for v in checklist_atual.values())
     ativa = db.query(ChecklistVersaoEHS).filter_by(ativo=True).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).first()
     if not ativa:
-        criar_versao_checklist_ehs(db, "Sistema", "Versão ativa baseada nas Diretrizes Globais de EHS 4.12")
+        criar_versao_checklist_ehs(db, "Sistema", "Versão ativa baseada nas Diretrizes Globais de EHS 4.12 e nos Procedimentos de Alto Risco")
         return
-    cats_ativas = {p.categoria for p in db.query(ChecklistPerguntaVersaoEHS).filter_by(checklist_versao_id=ativa.id, ativo=True).all()}
-    if cats_ativas and categorias_esperadas.issubset(cats_ativas) and not any(str(c).startswith("Categoria ") for c in cats_ativas):
+    perguntas_ativas = db.query(ChecklistPerguntaVersaoEHS).filter_by(checklist_versao_id=ativa.id, ativo=True).all()
+    cats_ativas = {p.categoria for p in perguntas_ativas}
+    perguntas_por_cat = {}
+    for p in perguntas_ativas:
+        perguntas_por_cat.setdefault(p.categoria, set()).add(_ehs_norm_question(p.pergunta))
+    cobertura_ok = categorias_esperadas.issubset(cats_ativas) and len(perguntas_ativas) >= total_esperado
+    perguntas_ok = True
+    for cat, pergs in checklist_atual.items():
+        existentes = perguntas_por_cat.get(cat, set())
+        for pergunta in pergs:
+            if _ehs_norm_question(pergunta) not in existentes:
+                perguntas_ok = False
+                break
+        if not perguntas_ok:
+            break
+    if cobertura_ok and perguntas_ok and not any(str(c).startswith("Categoria ") for c in cats_ativas):
         return
-    criar_versao_checklist_ehs(db, "Sistema", "Checklist sintético baseado nas Diretrizes Globais de EHS 4.12")
+    criar_versao_checklist_ehs(db, "Sistema", "Checklist único de Diretrizes EHS 4.12 com Procedimentos de Alto Risco integrados")
 
 def seed_checklist_versions(db):
     tipos = {t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()}
@@ -987,13 +999,15 @@ def sync_checklists_base(db):
             item = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ordem=i).first()
             if not item:
                 db.add(ChecklistItemNR12(tipo_checklist=tipo, ordem=i, pergunta=pergunta, item_critico=critico, gera_pac_automatico=False, ativo=True))
-    categorias_ativas_ehs = set(CHECKLIST_EHS.keys())
+    checklist_ehs_atual = checklist_ehs_unificado()
+    globals()["CHECKLIST_EHS"] = checklist_ehs_atual
+    categorias_ativas_ehs = set(checklist_ehs_atual.keys())
     for d_old in db.query(DiretivaEHS).all():
         if d_old.categoria not in categorias_ativas_ehs:
             d_old.ativo = False
             for req_old in db.query(RequisitoEHS).filter_by(diretiva_id=d_old.id).all():
                 req_old.ativo = False
-    for cat, pergs in CHECKLIST_EHS.items():
+    for cat, pergs in checklist_ehs_atual.items():
         d = db.query(DiretivaEHS).filter_by(categoria=cat).first()
         if not d:
             d = DiretivaEHS(categoria=cat, descricao=cat, ativo=True)
@@ -1375,13 +1389,20 @@ def calcular_resultado_verificacao_nr12(resps):
     if crit or pct < 90:
         return "Não conforme",pct,crit
     return "Conforme",pct,False
+def resposta_ehs_ativa(r):
+    req = getattr(r, "requisito", None)
+    if not req:
+        return True
+    diretriz = getattr(req, "diretiva", None)
+    return bool(getattr(req, "ativo", True)) and (diretriz is None or bool(getattr(diretriz, "ativo", True)))
+
 def calcular_conformidade_ehs(resps):
-    ap=[r for r in resps if r.aplicavel and r.status!="Não Aplicável"]
+    ap=[r for r in resps if resposta_ehs_ativa(r) and r.aplicavel and r.status!="Não Aplicável"]
     if not ap: return 0
     pts=sum(1 if r.status=="Conforme" else .5 if r.status=="Parcialmente Conforme" else 0 for r in ap)
     return round(pts/len(ap)*100,1)
 def calcular_maturidade_ehs(resps):
-    ap=[r for r in resps if r.aplicavel and r.status!="Não Aplicável"]; return round(sum(float(r.nota_maturidade or 0) for r in ap)/len(ap),2) if ap else 0
+    ap=[r for r in resps if resposta_ehs_ativa(r) and r.aplicavel and r.status!="Não Aplicável"]; return round(sum(float(r.nota_maturidade or 0) for r in ap)/len(ap),2) if ap else 0
 def gerar_pac_automatico_nr12(db,ver,r,resp=""):
     pergunta = getattr(r, "pergunta_snapshot", None) or (r.item.pergunta if r.item else "Item de checklist")
     if db.query(PACNR12).filter_by(verificacao_id=ver.id,item_checklist=pergunta).first(): return
@@ -2020,7 +2041,7 @@ def submodulos_visiveis(modulo, u):
     }.get(modulo, {})
     proibidas = set()
     if not can_update_bases(u):
-        proibidas.update(["Atualizar Base", "Actual Hours", "Atualizar Base Near Miss", "Atualizar Base Legal", "Atualizar Procedimentos de Alto Risco"])
+        proibidas.update(["Atualizar Base", "Actual Hours", "Atualizar Base Near Miss", "Atualizar Base Legal"])
     out = {}
     for nome, cfg in base.items():
         paginas = [p for p in cfg.get("paginas", []) if p not in proibidas]
@@ -3528,8 +3549,30 @@ def ehs_planejamento(db,u):
                     st.success("Auditoria criada.")
                     st.rerun()
 
+def salvar_respostas_ehs_parciais(db, auditoria, respostas_para_salvar, usuario, gerar_pacs=True):
+    for rid, apl, status, maturidade, evidencia, comentario, pac in respostas_para_salvar:
+        r = db.get(RespostaAuditoriaEHS, int(rid))
+        if not r:
+            continue
+        r.aplicavel = bool(apl)
+        r.status = "Não Aplicável" if not apl else status
+        r.nota_maturidade = float(maturidade)
+        r.evidencia_verificada = evidencia
+        r.comentario_auditor = comentario
+        r.necessita_pac = bool(pac)
+    db.flush()
+    res_atual = db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=auditoria.id).all()
+    auditoria.conformidade_percentual = calcular_conformidade_ehs(res_atual)
+    auditoria.maturidade_media = calcular_maturidade_ehs(res_atual)
+    if gerar_pacs:
+        for r in res_atual:
+            if resposta_ehs_ativa(r) and (r.necessita_pac or r.status in ["Não Conforme", "Parcialmente Conforme"]):
+                gerar_pac_automatico_ehs(db, auditoria, r, auditoria.auditor_lider)
+    registrar_log(db,usuario,"Auditoria Cruzada","AuditoriaCruzada",auditoria.id,"editar",observacao="Progresso do checklist EHS salvo")
+    db.commit()
+
 def ehs_checklist(db,u):
-    header("Checklist Diretrizes de EHS", "Checklist incorporado, pontuação, maturidade e geração de PAC")
+    header("Checklist Diretrizes de EHS", "Checklist único por diretriz, incorporando os questionamentos das Diretrizes EHS 4.12 e dos Procedimentos de Alto Risco")
     msg=st.session_state.pop("ehs_checklist_saved_msg", None)
     if msg:
         st.success(msg)
@@ -3542,66 +3585,85 @@ def ehs_checklist(db,u):
     a = db.get(AuditoriaCruzada, amap[st.selectbox("Auditoria", list(amap), key="auditoria_ehs_selector")])
     gerar_checklist_automatico_ehs(db, a.id)
     res = db.query(RespostaAuditoriaEHS).join(RequisitoEHS).join(DiretivaEHS).filter(
-        RespostaAuditoriaEHS.auditoria_id == a.id
+        RespostaAuditoriaEHS.auditoria_id == a.id,
+        RequisitoEHS.ativo == True,
+        DiretivaEHS.ativo == True,
     ).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all()
-    c1, c2, c3 = st.columns(3)
+    if not res:
+        empty_state("Checklist sem perguntas ativas. Atualize a base do checklist EHS.")
+        return
+    categorias = []
+    for r in res:
+        cat = r.requisito.diretiva.categoria
+        if cat not in categorias:
+            categorias.append(cat)
+    respondidas = sum(1 for r in res if r.status not in [None, "", "Conforme"] or r.evidencia_verificada or r.comentario_auditor or r.necessita_pac)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         kpi_card("Conformidade", f"{calcular_conformidade_ehs(res)}%")
     with c2:
         kpi_card("Maturidade média", calcular_maturidade_ehs(res))
     with c3:
         kpi_card("Itens", len(res))
+    with c4:
+        kpi_card("Progresso", f"{respondidas}/{len(res)}", "Itens com evidência, comentário, PAC ou status diferente do padrão")
+    st.progress(min(1.0, respondidas / len(res)) if res else 0)
+
+    etapa_salva = getattr(a, "checklist_etapa_atual", None)
+    idx = categorias.index(etapa_salva) if etapa_salva in categorias else 0
+    etapa = st.selectbox("Diretriz / etapa do checklist", categorias, index=idx, key=f"ehs_etapa_{a.id}")
+    if etapa != etapa_salva:
+        a.checklist_etapa_atual = etapa
+        db.commit()
+    res_etapa = [r for r in res if r.requisito.diretiva.categoria == etapa]
+    st.caption(f"Etapa atual: {categorias.index(etapa)+1}/{len(categorias)} • {len(res_etapa)} pergunta(s). O app mantém a última etapa aberta para esta auditoria.")
+
     pode_editar = can_edit(u, "auditoria")
     respostas_para_salvar = []
     if pode_editar:
-        with st.form(f"form_checklist_ehs_{a.id}"):
-            categoria_atual = None
-            for r in res:
-                categoria = r.requisito.diretiva.categoria
-                pergunta_txt = getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta
-                criticidade_txt = getattr(r,"criticidade_snapshot",None) or r.requisito.criticidade
-                evidencia_esperada_txt = getattr(r,"evidencia_esperada_snapshot",None) or r.requisito.evidencia_esperada
-                if categoria != categoria_atual:
-                    st.markdown(f"<div class='check-category'>{categoria}</div>", unsafe_allow_html=True)
-                    categoria_atual = categoria
-                st.markdown(
-                    f"<div class='check-item'><div class='check-q'>{r.requisito.ordem}. {pergunta_txt}"
-                    f"<span class='check-meta'>{criticidade_txt}</span></div>"
-                    f"<div class='muted'>Evidência esperada: {evidencia_esperada_txt or 'Verificar evidência aplicável.'}</div></div>",
-                    unsafe_allow_html=True,
-                )
-                col1, col2, col3, col4, col5, col6 = st.columns([.85, 1.45, 1, 2.2, 2.2, .9])
-                apl = col1.checkbox("Aplicável", value=bool(r.aplicavel), key=f"ehs_ap_{a.id}_{r.id}")
-                status_atual = r.status if r.status in STATUS_RESPOSTA_EHS else "Conforme"
-                status = col2.selectbox("Status", STATUS_RESPOSTA_EHS, index=STATUS_RESPOSTA_EHS.index(status_atual), key=f"ehs_status_{a.id}_{r.id}")
-                maturidade = col3.number_input("Maturidade", min_value=0.0, max_value=5.0, value=float(r.nota_maturidade or 0), step=.5, key=f"ehs_mat_{a.id}_{r.id}")
-                evidencia = col4.text_input("Evidência verificada", value=r.evidencia_verificada or "", key=f"ehs_evid_{a.id}_{r.id}")
-                comentario = col5.text_input("Comentário do auditor", value=r.comentario_auditor or "", key=f"ehs_com_{a.id}_{r.id}")
-                pac = col6.checkbox("PAC", value=bool(r.necessita_pac) or bool(getattr(r,"gera_pac_automatico_snapshot",False)), key=f"ehs_pac_{a.id}_{r.id}")
-                respostas_para_salvar.append((r.id, apl, status, maturidade, evidencia, comentario, pac))
-            if st.form_submit_button("Salvar checklist e gerar PACs necessários", use_container_width=True):
-                for rid, apl, status, maturidade, evidencia, comentario, pac in respostas_para_salvar:
-                    r = db.get(RespostaAuditoriaEHS, int(rid))
-                    r.aplicavel = bool(apl)
-                    r.status = "Não Aplicável" if not apl else status
-                    r.nota_maturidade = float(maturidade)
-                    r.evidencia_verificada = evidencia
-                    r.comentario_auditor = comentario
-                    r.necessita_pac = bool(pac)
-                db.flush()
-                res_atual = db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
-                a.conformidade_percentual = calcular_conformidade_ehs(res_atual)
-                a.maturidade_media = calcular_maturidade_ehs(res_atual)
-                for r in res_atual:
-                    if r.necessita_pac or r.status in ["Não Conforme", "Parcialmente Conforme"]:
-                        gerar_pac_automatico_ehs(db, a, r, a.auditor_lider)
-                registrar_log(db,u,"Auditoria Cruzada","AuditoriaCruzada",a.id,"editar",observacao="Checklist EHS atualizado")
-                db.commit()
-                st.session_state["ehs_checklist_saved_msg"]="Checklist salvo com sucesso. Os PACs necessários foram gerados ou atualizados."
-                st.rerun()
+        categoria_atual = None
+        for r in res_etapa:
+            categoria = r.requisito.diretiva.categoria
+            pergunta_txt = getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta
+            criticidade_txt = getattr(r,"criticidade_snapshot",None) or r.requisito.criticidade
+            evidencia_esperada_txt = getattr(r,"evidencia_esperada_snapshot",None) or r.requisito.evidencia_esperada
+            if categoria != categoria_atual:
+                st.markdown(f"<div class='check-category'>{categoria}</div>", unsafe_allow_html=True)
+                categoria_atual = categoria
+            st.markdown(
+                f"<div class='check-item'><div class='check-q'>{r.requisito.ordem}. {pergunta_txt}"
+                f"<span class='check-meta'>{criticidade_txt}</span></div>"
+                f"<div class='muted'>Evidência esperada: {evidencia_esperada_txt or 'Verificar evidência aplicável.'}</div></div>",
+                unsafe_allow_html=True,
+            )
+            col1, col2, col3, col4, col5, col6 = st.columns([.85, 1.45, 1, 2.2, 2.2, .9])
+            apl = col1.checkbox("Aplicável", value=bool(r.aplicavel), key=f"ehs_ap_{a.id}_{r.id}")
+            status_atual = r.status if r.status in STATUS_RESPOSTA_EHS else "Conforme"
+            status = col2.selectbox("Status", STATUS_RESPOSTA_EHS, index=STATUS_RESPOSTA_EHS.index(status_atual), key=f"ehs_status_{a.id}_{r.id}")
+            maturidade = col3.number_input("Maturidade", min_value=0.0, max_value=5.0, value=float(r.nota_maturidade or 0), step=.5, key=f"ehs_mat_{a.id}_{r.id}")
+            evidencia = col4.text_input("Evidência verificada", value=r.evidencia_verificada or "", key=f"ehs_evid_{a.id}_{r.id}")
+            comentario = col5.text_input("Comentário do auditor", value=r.comentario_auditor or "", key=f"ehs_com_{a.id}_{r.id}")
+            pac = col6.checkbox("PAC", value=bool(r.necessita_pac) or bool(getattr(r,"gera_pac_automatico_snapshot",False)), key=f"ehs_pac_{a.id}_{r.id}")
+            respostas_para_salvar.append((r.id, apl, status, maturidade, evidencia, comentario, pac))
+        b1,b2,b3 = st.columns([1.2,1.2,2])
+        if b1.button("Salvar progresso", use_container_width=True, key=f"ehs_salvar_etapa_{a.id}"):
+            salvar_respostas_ehs_parciais(db, a, respostas_para_salvar, u)
+            st.session_state["ehs_checklist_saved_msg"]="Progresso salvo. Ao retornar, esta auditoria abrirá na mesma diretriz."
+            st.rerun()
+        if b2.button("Salvar e ir para próxima", use_container_width=True, key=f"ehs_salvar_proxima_{a.id}"):
+            salvar_respostas_ehs_parciais(db, a, respostas_para_salvar, u)
+            pos = categorias.index(etapa)
+            prox = categorias[min(pos+1, len(categorias)-1)]
+            a.checklist_etapa_atual = prox
+            db.commit()
+            st.session_state[f"ehs_etapa_{a.id}"] = prox
+            st.session_state["ehs_checklist_saved_msg"]="Progresso salvo e próxima diretriz carregada."
+            st.rerun()
+        with b3:
+            st.caption("Use salvar progresso durante a execução. As respostas salvas ficam registradas no banco e a auditoria reabre na última diretriz acessada.")
     else:
         categoria_atual = None
-        for r in res:
+        for r in res_etapa:
             categoria = r.requisito.diretiva.categoria
             pergunta_txt = getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta
             criticidade_txt = getattr(r,"criticidade_snapshot",None) or r.requisito.criticidade
@@ -3618,64 +3680,6 @@ def ehs_checklist(db,u):
                 unsafe_allow_html=True,
             )
 
-def ehs_pac(db,u):
-    header("PAC Auditoria Cruzada","Tratamento de achados e verificação de eficácia")
-    ids=visible_site_ids(u,db)
-    sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
-
-    if can_edit(u,"pac_ehs") and sites:
-        with st.expander("Cadastrar PAC EHS manual"):
-            with st.form("pace"):
-                site=st.selectbox("Site",list(sites))
-                tipo=st.selectbox("Tipo de achado",TIPOS_ACHADO_EHS)
-                pr=st.selectbox("Prioridade/criticidade",["Alta","Média","Baixa"])
-                stat=st.selectbox("Status",STATUS_PAC)
-                prazo=st.date_input("Prazo",date.today()+timedelta(days=30))
-                resp=st.text_input("Responsável")
-                area=st.text_input("Área responsável")
-                desc=st.text_area("Descrição")
-                evid=st.text_area("Evidência")
-                risco=st.text_area("Risco")
-                causa=st.text_area("Causa raiz")
-                aci=st.text_area("Ação imediata")
-                acc=st.text_area("Ação corretiva")
-                if st.form_submit_button("Salvar PAC EHS",use_container_width=True):
-                    db.add(PACEHS(site_id=sites[site],tipo_achado=tipo,prioridade_criticidade=pr,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao=desc,evidencia=evid,risco=risco,causa_raiz=causa,acao_imediata=aci,acao_corretiva=acc))
-                    db.commit()
-                    st.success("PAC salvo.")
-                    st.rerun()
-
-    df = df_pac_ehs(db, ids)
-    if not df.empty:
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        empty_state("Nenhum PAC EHS.")
-    download_excel_button("Exportar PAC EHS Excel", "pac_ehs.xlsx", {"PAC EHS": df})
-
-    if can_edit(u,"pac_ehs") and not df.empty:
-        with st.expander("Atualizar status das ações levantadas"):
-            pac_id=int(st.selectbox("Selecionar ação/PAC",df["ID"].astype(int).tolist(),key="ehs_pac_update_select"))
-            p=db.get(PACEHS,pac_id)
-            with st.form("edit_pac_ehs_status"):
-                novo_status=st.selectbox("Status",STATUS_PAC,index=STATUS_PAC.index(p.status) if p.status in STATUS_PAC else 0)
-                evidencia=st.text_area("Evidência de conclusão",p.evidencia_conclusao or "")
-                validacao=st.checkbox("Validação EHS",p.validacao_ehs)
-                eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
-                status_eficacia=st.selectbox("Status da eficácia",["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"],index=["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"].index(p.status_eficacia) if p.status_eficacia in ["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"] else 0)
-                if st.form_submit_button("Atualizar status",use_container_width=True):
-                    if novo_status=="Concluída" and not evidencia:
-                        st.error("PAC concluído exige evidência de conclusão.")
-                    else:
-                        p.status=novo_status
-                        p.evidencia_conclusao=evidencia
-                        p.validacao_ehs=validacao
-                        p.verificacao_eficacia=eficacia
-                        p.status_eficacia=status_eficacia
-                        if novo_status=="Concluída" and not p.data_conclusao:
-                            p.data_conclusao=date.today()
-                        db.commit()
-                        st.success("Status atualizado.")
-                        st.rerun()
 def ehs_base_checklist(db,u):
     header("Base do Checklist EHS","Checklist sintético baseado nas Diretrizes Globais de EHS 4.12, editável e versionado")
     if not can_edit(u,"auditoria"):
@@ -3811,6 +3815,90 @@ def procedimentos_ar_seed_df():
     except Exception:
         logging.exception("Falha ao carregar seed de procedimentos de alto risco")
         return pd.DataFrame()
+
+
+DIRETRIZ_EHS_LABELS = {
+    "4.12.01": "Diretriz EHS 4.12.01 — Requisitos e Responsabilidades de EHS",
+    "4.12.02": "Diretriz EHS 4.12.02 — Sistema de Gestão Ambiental",
+    "4.12.03": "Diretriz EHS 4.12.03 — Métricas de Desempenho e Revisão do Progresso",
+    "4.12.04": "Diretriz EHS 4.12.04 — Avaliação e Ação Corretiva",
+    "4.12.05": "Diretriz EHS 4.12.05 — Gestão de Mudanças",
+    "4.12.06": "Diretriz EHS 4.12.06 — Near Miss e Investigação de Acidentes/Incidentes",
+    "4.12.07": "Diretriz EHS 4.12.07 — Uso de Produtos Químicos e Gestão de Resíduos",
+    "4.12.08": "Diretriz EHS 4.12.08 — Segurança Elétrica",
+    "4.12.09": "Diretriz EHS 4.12.09 — Preparação para Emergências",
+    "4.12.10": "Diretriz EHS 4.12.10 — Treinamento e Envolvimento dos Empregados",
+    "4.12.11": "Diretriz EHS 4.12.11 — Segurança de Equipamentos e Máquinas",
+    "4.12.12": "Diretriz EHS 4.12.12 — Ergonomia",
+    "4.12.13": "Diretriz EHS 4.12.13 — Permissões para Trabalho Perigoso",
+    "4.12.14": "Diretriz EHS 4.12.14 — JSA e Equipamento de Proteção Individual",
+    "4.12.15": "Diretriz EHS 4.12.15 — Movimentação e Armazenamento de Materiais",
+    "4.12.16": "Diretriz EHS 4.12.16 — Visitantes, Contratados e Empregados Temporários",
+    "4.12.17": "Diretriz EHS 4.12.17 — Ambiente de Trabalho",
+    "4.12.18": "Diretriz EHS 4.12.18 — Segurança em Manutenção",
+}
+
+def _ehs_norm_question(txt):
+    txt = unicodedata.normalize("NFKD", str(txt or "")).encode("ascii", "ignore").decode("ascii").lower()
+    txt = re.sub(r"[^a-z0-9]+", " ", txt).strip()
+    return txt
+
+def ehs_diretriz_para_procedimento(row):
+    fonte = procedimentos_ar_limpa_texto(row.get("fonte", ""))
+    padrao = procedimentos_ar_ascii(row.get("padrao", ""))
+    codigos = re.findall(r"4\.12\.\d{2}", fonte)
+    if codigos:
+        for c in codigos:
+            if c in DIRETRIZ_EHS_LABELS:
+                return DIRETRIZ_EHS_LABELS[c]
+    inferencias = [
+        (("quim" in padrao or "resid" in padrao), "4.12.07"),
+        (("eletric" in padrao), "4.12.08"),
+        (("loto" in padrao or "energia" in padrao or "maquina" in padrao), "4.12.11"),
+        (("queda" in padrao or "caminhada" in padrao or "superficie" in padrao), "4.12.17"),
+        (("veicul" in padrao or "industriais" in padrao or "movimenta" in padrao), "4.12.15"),
+        (("licenc" in padrao or "ambient" in padrao), "4.12.01"),
+    ]
+    for cond, codigo in inferencias:
+        if cond:
+            return DIRETRIZ_EHS_LABELS[codigo]
+    return DIRETRIZ_EHS_LABELS["4.12.04"]
+
+def checklist_ehs_unificado():
+    """Checklist único: diretrizes EHS 4.12 + questionamentos do High Risk Framework, agrupados pela diretriz aplicável."""
+    checklist = {cat: list(pergs) for cat, pergs in CHECKLIST_EHS_DIRETRIZES_BASE.items()}
+    existentes = {cat: {_ehs_norm_question(p) for p in pergs} for cat, pergs in checklist.items()}
+    df_proc = procedimentos_ar_seed_df()
+    if not df_proc.empty:
+        df_proc = df_proc.sort_values(["padrao", "elemento"], na_position="last")
+        for _, row in df_proc.iterrows():
+            pergunta = procedimentos_ar_limpa_texto(row.get("pergunta"))
+            expectativa = procedimentos_ar_limpa_texto(row.get("expectativa"))
+            if not pergunta and expectativa:
+                pergunta = f"A expectativa '{expectativa}' está implementada e evidenciada?"
+            if not pergunta:
+                continue
+            padrao = procedimentos_ar_limpa_texto(row.get("padrao"), 120) or "Procedimento de Alto Risco"
+            elemento = procedimentos_ar_limpa_texto(row.get("elemento"), 30)
+            etapa = procedimentos_ar_limpa_texto(row.get("etapa"), 20)
+            prefixo = f"Procedimento de Alto Risco — {padrao}"
+            if elemento and elemento != "—":
+                prefixo += f" | Item {elemento}"
+            elif etapa:
+                prefixo += f" | Etapa {etapa}"
+            pergunta_final = f"{prefixo}: {pergunta}"
+            cat = ehs_diretriz_para_procedimento(row)
+            if cat not in checklist:
+                checklist[cat] = []
+                existentes[cat] = set()
+            chave = _ehs_norm_question(pergunta_final)
+            if chave in existentes[cat]:
+                continue
+            checklist[cat].append(pergunta_final)
+            existentes[cat].add(chave)
+    return checklist
+
+CHECKLIST_EHS = checklist_ehs_unificado()
 
 def procedimentos_ar_mapping_from_row(r):
     return {
@@ -6825,7 +6913,7 @@ def ajuda_rapida_page(db,u):
         - **Planejamento de Auditorias:** cadastro de ciclos, datas, auditores e escopo.
         - **Calendário de Auditorias:** visão mensal das auditorias planejadas, vencidas, em andamento e concluídas.
         - **Checklist Diretrizes de EHS:** resposta item a item por Diretriz EHS 4.12, evidências e nota de maturidade.
-        - **Procedimentos de Alto Risco:** acompanhamento do High Risk Framework por padrão, etapa, fonte normativa e lacunas de execução.
+        - **Checklist Diretrizes de EHS:** inclui também os questionamentos dos Procedimentos de Alto Risco, integrados à diretriz correspondente.
         - **PAC Auditoria Cruzada:** tratamento dos gaps, responsáveis, prazos e eficácia.
 
         **Como usar:** planeje o ciclo, preencha evidências, gere PACs para gaps e monitore vencidos pela liderança do site.
@@ -9011,9 +9099,6 @@ def route(db,u):
             "Planejamento de Auditorias": ehs_planejamento,
             "Calendário de Auditorias": ehs_calendario,
             "Checklist Diretrizes de EHS": ehs_checklist,
-            "Dashboard Procedimentos de Alto Risco": procedimentos_ar_dashboard,
-            "Base Procedimentos de Alto Risco": procedimentos_ar_base_page,
-            "Atualizar Procedimentos de Alto Risco": procedimentos_ar_atualizar_base,
             "PAC Auditoria Cruzada": ehs_pac,
             "Base do Checklist EHS": ehs_base_checklist,
             "Relatórios Auditoria Cruzada": ehs_relatorios,
