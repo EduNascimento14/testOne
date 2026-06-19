@@ -3917,19 +3917,269 @@ def ehs_base_checklist(db,u):
     st.dataframe(dfv, use_container_width=True, hide_index=True)
     download_excel_button("Exportar base do checklist EHS", "base_checklist_ehs.xlsx", {"Base_Atual": df, "Versoes": dfv})
 
+
+def ehs_codigo_diretriz(categoria):
+    """Extrai a tag curta da diretriz para uso em telas, Excel e PDF."""
+    txt = str(categoria or "Diretriz EHS")
+    m = re.search(r"4\.12\.\d{2}", txt)
+    return m.group(0) if m else "EHS"
+
+
+def ehs_assunto_diretriz(categoria):
+    txt = str(categoria or "Diretriz EHS").strip()
+    return txt.split("—", 1)[1].strip() if "—" in txt else txt
+
+
+def ehs_modalidade_verificacao(pergunta="", categoria="", evidencia=""):
+    """Classifica a forma preferencial de verificação do item.
+
+    Online: documentos, registros, indicadores, evidências sistêmicas e entrevistas remotas.
+    In loco: condição física, comportamento operacional, inspeção de área/equipamento ou validação visual.
+    """
+    txt = _ehs_norm_question(" ".join([str(pergunta or ""), str(categoria or ""), str(evidencia or "")]))
+    in_loco_kw = [
+        "in loco", "campo", "area", "posto", "layout", "rota", "saida", "egresso", "extintor", "sinalizacao",
+        "armazen", "conten", "tanque", "dreno", "ventilacao", "iluminacao", "ruido", "temperatura", "derram",
+        "maquina", "equipamento", "protec", "intertrav", "sensor", "cortina", "emergencia", "loto", "bloqueio",
+        "rack", "doca", "level pad", "empilhadeira", "paleteira", "talha", "ponte", "carga", "movimentacao",
+        "epi", "uso de epi", "operador", "contratado", "visitante", "quimico", "residuo", "fispq", "sds",
+        "trabalho em altura", "trabalho a quente", "espaco confinado", "eletricidade energizada", "manutencao"
+    ]
+    online_kw = [
+        "registro", "document", "procedimento", "politica", "matriz", "treinamento", "certificado", "licenca", "licenciamento",
+        "indicador", "metrica", "relatorio", "ata", "business review", "revisao", "plano", "pac", "acao", "causa raiz",
+        "inventario", "cadastro", "evidencia", "aprovacao", "moc", "investigacao", "tendencia", "responsavel", "prazo"
+    ]
+    if any(k in txt for k in in_loco_kw):
+        return "In loco"
+    if any(k in txt for k in online_kw):
+        return "Online"
+    return "Online"
+
+
+def ehs_checklist_base_df(db, somente_ativo=True):
+    """Retorna o checklist EHS atualmente ativo, já no formato usado por Excel e relatórios."""
+    versao = db.query(ChecklistVersaoEHS).filter_by(ativo=True).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).first()
+    rows = []
+    if versao:
+        q = db.query(ChecklistPerguntaVersaoEHS).filter_by(checklist_versao_id=versao.id)
+        if somente_ativo:
+            q = q.filter(ChecklistPerguntaVersaoEHS.ativo == True)
+        perguntas = q.order_by(ChecklistPerguntaVersaoEHS.categoria, ChecklistPerguntaVersaoEHS.ordem).all()
+        for idx, p in enumerate(perguntas, 1):
+            rows.append({
+                "Nº": idx,
+                "Versão": f"v{versao.versao}",
+                "Diretriz": p.categoria,
+                "Tag": ehs_codigo_diretriz(p.categoria),
+                "Assunto": ehs_assunto_diretriz(p.categoria),
+                "Ordem na diretriz": p.ordem,
+                "Pergunta": p.pergunta,
+                "Criticidade": p.criticidade,
+                "Modalidade sugerida": ehs_modalidade_verificacao(p.pergunta, p.categoria, p.evidencia_esperada),
+                "Evidência esperada": p.evidencia_esperada,
+                "Ativo": "Sim" if p.ativo else "Não",
+            })
+    else:
+        reqs = db.query(RequisitoEHS).join(DiretivaEHS).filter(RequisitoEHS.ativo==True, DiretivaEHS.ativo==True).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all()
+        for idx, r in enumerate(reqs, 1):
+            cat = r.diretiva.categoria if r.diretiva else "Diretriz EHS"
+            rows.append({
+                "Nº": idx,
+                "Versão": "Base ativa",
+                "Diretriz": cat,
+                "Tag": ehs_codigo_diretriz(cat),
+                "Assunto": ehs_assunto_diretriz(cat),
+                "Ordem na diretriz": r.ordem,
+                "Pergunta": r.pergunta,
+                "Criticidade": r.criticidade,
+                "Modalidade sugerida": ehs_modalidade_verificacao(r.pergunta, cat, r.evidencia_esperada),
+                "Evidência esperada": r.evidencia_esperada,
+                "Ativo": "Sim" if r.ativo else "Não",
+            })
+    return pd.DataFrame(rows)
+
+
+def ehs_respostas_auditoria_df(db, auditoria):
+    """Monta a base completa do relatório da auditoria, usando snapshots e o checklist atual."""
+    if auditoria is None:
+        return pd.DataFrame()
+    gerar_checklist_automatico_ehs(db, auditoria.id)
+    res = db.query(RespostaAuditoriaEHS).join(RequisitoEHS).join(DiretivaEHS).filter(
+        RespostaAuditoriaEHS.auditoria_id == auditoria.id,
+        RequisitoEHS.ativo == True,
+        DiretivaEHS.ativo == True,
+    ).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all()
+    rows = []
+    for idx, r in enumerate(res, 1):
+        cat = r.requisito.diretiva.categoria if r.requisito and r.requisito.diretiva else "Diretriz EHS"
+        pergunta = getattr(r, "pergunta_snapshot", None) or (r.requisito.pergunta if r.requisito else "Pergunta sem texto cadastrado")
+        evidencia_esperada = getattr(r, "evidencia_esperada_snapshot", None) or (r.requisito.evidencia_esperada if r.requisito else "")
+        status = "Não aplicável" if not r.aplicavel else (r.status or "Conforme")
+        rows.append({
+            "Nº": idx,
+            "Tag": ehs_codigo_diretriz(cat),
+            "Diretriz": cat,
+            "Assunto": ehs_assunto_diretriz(cat),
+            "Pergunta": pergunta,
+            "Criticidade": getattr(r, "criticidade_snapshot", None) or (r.requisito.criticidade if r.requisito else "Média"),
+            "Modalidade": ehs_modalidade_verificacao(pergunta, cat, evidencia_esperada),
+            "Aplicável": "Sim" if r.aplicavel else "Não",
+            "Status": status,
+            "Maturidade": float(r.nota_maturidade or 0),
+            "PAC": "Sim" if r.necessita_pac else "Não",
+            "Evidência esperada": evidencia_esperada,
+            "Evidência verificada": r.evidencia_verificada or "—",
+            "Comentário": r.comentario_auditor or "—",
+        })
+    return pd.DataFrame(rows)
+
+
+def ehs_resumo_diretriz_df(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    base = df[df["Aplicável"] == "Sim"].copy()
+    if base.empty:
+        return pd.DataFrame()
+    def _pontua(s):
+        if s == "Conforme": return 1.0
+        if s == "Parcialmente Conforme": return 0.5
+        if s == "Não Conforme": return 0.0
+        return None
+    base["Pontos"] = base["Status"].apply(_pontua)
+    resumo = base.groupby(["Tag", "Assunto"], as_index=False).agg(
+        Itens=("Nº", "count"),
+        Conformes=("Status", lambda x: int((x == "Conforme").sum())),
+        Parciais=("Status", lambda x: int((x == "Parcialmente Conforme").sum())),
+        Nao_conformes=("Status", lambda x: int((x == "Não Conforme").sum())),
+        Maturidade_media=("Maturidade", "mean"),
+        Pontos=("Pontos", "sum"),
+    )
+    resumo["Conformidade %"] = (resumo["Pontos"] / resumo["Itens"] * 100).round(1)
+    resumo = resumo.drop(columns=["Pontos"]).rename(columns={"Nao_conformes": "Não conformes", "Maturidade_media": "Maturidade média"})
+    return resumo.sort_values(["Tag"]).reset_index(drop=True)
+
+
+def gerar_pdf_auditoria_ehs(auditoria, df_itens, df_pacs, usuario="—"):
+    """PDF próprio da Auditoria Cruzada, alinhado ao checklist corrido de 80 questões."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), rightMargin=0.85*cm, leftMargin=0.85*cm, topMargin=0.85*cm, bottomMargin=0.85*cm)
+    stl = relatorios_pdf_style()
+    story = []
+    data_ref = datetime.now().strftime("%d/%m/%Y %H:%M")
+    titulo = f"Relatório de Auditoria Cruzada de Diretrizes EHS"
+    story.append(Paragraph(html_escape(relatorios_pdf_safe_text(titulo)), stl["title"]))
+    story.append(Paragraph(f"Emissão: {data_ref} | Usuário: {html_escape(relatorios_pdf_safe_text(usuario))}", stl["sub"]))
+
+    if df_itens is None or df_itens.empty:
+        story.append(Paragraph("Sem itens de checklist para a auditoria selecionada.", stl["body"]))
+        doc.build(story)
+        return buf.getvalue()
+
+    total = len(df_itens)
+    aplicaveis = int((df_itens["Aplicável"] == "Sim").sum())
+    nc = int((df_itens["Status"] == "Não Conforme").sum())
+    parciais = int((df_itens["Status"] == "Parcialmente Conforme").sum())
+    pacs = int((df_itens["PAC"] == "Sim").sum())
+    story.append(Paragraph("Resumo da auditoria", stl["h"]))
+    dados = pd.DataFrame([{
+        "Ano": auditoria.ano,
+        "Ciclo": auditoria.ciclo,
+        "Status": auditoria.status,
+        "Itens": total,
+        "Aplicáveis": aplicaveis,
+        "Parciais": parciais,
+        "Não conformes": nc,
+        "PACs": pacs,
+    }])
+    story.append(relatorios_pdf_tabela([list(dados.columns)] + dados.astype(str).values.tolist(), col_widths=[1.5*cm, 3.0*cm, 2.5*cm, 1.5*cm, 1.8*cm, 1.8*cm, 2.2*cm, 1.5*cm], align_center_cols=list(range(len(dados.columns)))))
+
+    resumo = ehs_resumo_diretriz_df(df_itens)
+    story.append(Spacer(1, 0.15*cm))
+    story.append(Paragraph("Resultado por diretriz", stl["h"]))
+    if resumo.empty:
+        story.append(Paragraph("Sem itens aplicáveis para consolidar por diretriz.", stl["body"]))
+    else:
+        resumo_pdf = resumo[["Tag", "Assunto", "Itens", "Conformidade %", "Maturidade média", "Não conformes"]].copy()
+        resumo_pdf["Conformidade %"] = resumo_pdf["Conformidade %"].apply(lambda x: relatorios_fmt_pct(x))
+        resumo_pdf["Maturidade média"] = resumo_pdf["Maturidade média"].apply(lambda x: relatorios_fmt_num(x, 2))
+        story.append(relatorios_pdf_tabela([list(resumo_pdf.columns)] + resumo_pdf.astype(str).values.tolist(), col_widths=[1.7*cm, 9.5*cm, 1.4*cm, 2.3*cm, 2.2*cm, 2.1*cm], align_center_cols=[0,2,3,4,5]))
+
+    story.append(Spacer(1, 0.15*cm))
+    story.append(Paragraph("Itens com desvio ou atenção", stl["h"]))
+    desvios = df_itens[(df_itens["Aplicável"] == "Não") | (df_itens["Status"].isin(["Parcialmente Conforme", "Não Conforme"])) | (df_itens["PAC"] == "Sim")].copy()
+    if desvios.empty:
+        story.append(Paragraph("Não foram registrados desvios, itens não aplicáveis ou PACs no checklist selecionado.", stl["body"]))
+    else:
+        desvios_pdf = desvios[["Nº", "Tag", "Pergunta", "Status", "PAC", "Comentário"]].copy().head(35)
+        story.append(relatorios_pdf_tabela([list(desvios_pdf.columns)] + desvios_pdf.astype(str).values.tolist(), col_widths=[1.0*cm, 1.5*cm, 11.5*cm, 2.5*cm, 1.1*cm, 6.0*cm], header_bg="#334155", align_center_cols=[0,1,3,4]))
+        if len(desvios) > 35:
+            story.append(Paragraph(f"Exibidos 35 de {len(desvios)} itens com desvio/atenção. A lista completa está disponível no Excel do pacote de auditoria.", stl["small"]))
+
+    story.append(Spacer(1, 0.15*cm))
+    story.append(Paragraph("Checklist completo", stl["h"]))
+    completo_pdf = df_itens[["Nº", "Tag", "Pergunta", "Modalidade", "Status", "Maturidade", "PAC"]].copy()
+    completo_pdf["Maturidade"] = completo_pdf["Maturidade"].apply(lambda x: relatorios_fmt_num(x, 1))
+    story.append(relatorios_pdf_tabela([list(completo_pdf.columns)] + completo_pdf.astype(str).values.tolist(), col_widths=[0.9*cm, 1.4*cm, 13.8*cm, 2.0*cm, 2.4*cm, 1.6*cm, 1.0*cm], header_bg="#0f172a", align_center_cols=[0,1,3,4,5,6]))
+
+    if df_pacs is not None and not df_pacs.empty:
+        story.append(Spacer(1, 0.15*cm))
+        story.append(Paragraph("PACs vinculados", stl["h"]))
+        pac_cols = [c for c in ["ID", "Site", "Tipo de achado", "Prioridade", "Status", "Prazo", "Responsável", "Descrição"] if c in df_pacs.columns]
+        pac_pdf = df_pacs[pac_cols].copy().head(20)
+        story.append(relatorios_pdf_tabela([list(pac_pdf.columns)] + pac_pdf.astype(str).values.tolist(), col_widths=[1.1*cm, 1.4*cm, 3.2*cm, 2.0*cm, 2.0*cm, 1.8*cm, 3.0*cm, 9.0*cm][:len(pac_cols)], header_bg="#334155"))
+
+    story.append(Spacer(1, 0.12*cm))
+    story.append(Paragraph("Observação: este relatório usa o checklist ativo de Auditoria Cruzada, composto por 80 perguntas corridas com tags por Diretriz EHS 4.12 e temas dos procedimentos de alto risco integrados às diretrizes correspondentes.", stl["small"]))
+    doc.build(story)
+    return buf.getvalue()
+
+
 def ehs_relatorios(db,u):
-    header("Relatórios Auditoria Cruzada","Exportações em Excel e PDF")
-    ids=visible_site_ids(u,db); da=df_aud(db,ids); dp=df_pac_ehs(db,ids)
-    base=pd.DataFrame([{"Diretriz":r.diretiva.categoria,"Ordem":r.ordem,"Requisito":r.pergunta,"Ativo":"Sim" if r.ativo else "Não","Criticidade":r.criticidade,"Evidência esperada":r.evidencia_esperada} for r in db.query(RequisitoEHS).join(DiretivaEHS).filter(RequisitoEHS.ativo==True,DiretivaEHS.ativo==True).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem)])
-    download_excel_button("Checklist Excel","checklist_ehs.xlsx",{"Checklist":base}); download_excel_button("PAC EHS Excel","pac_ehs.xlsx",{"PAC":dp}); download_excel_button("Pacote Auditoria Excel","auditoria_cruzada_ehs.xlsx",{"Auditorias":da,"Checklist":base,"PAC":dp})
-    auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.id.desc()).all()
-    if auds:
-        amap={f"{a.id} — {site_code(db,a.site_auditado_id)} — {a.ciclo}":a.id for a in auds}; a=db.get(AuditoriaCruzada,amap[st.selectbox("Relatório PDF",list(amap))]); res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
-        dfr=pd.DataFrame([{"Diretriz":r.requisito.diretiva.categoria,"Requisito":getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta,"Status":r.status,"Maturidade":r.nota_maturidade,"Evidência":r.evidencia_verificada,"Comentário":r.comentario_auditor} for r in res])
-        pdf=gerar_pdf(f"Relatório de Auditoria Cruzada de Diretrizes de EHS — {site_code(db,a.site_auditado_id)}",f"Auditoria {a.id} | {a.ciclo} | Conformidade {calcular_conformidade_ehs(res)}% | Maturidade {calcular_maturidade_ehs(res)}",[("Dados",pd.DataFrame([{"Ano":a.ano,"Ciclo":a.ciclo,"Site":site_code(db,a.site_auditado_id),"Status":a.status,"Auditor líder":a.auditor_lider}])),("Resultado por item",dfr),("PACs vinculados",dp[dp["Auditoria"]==a.id] if not dp.empty else dp)])
-        download_pdf_button("Baixar relatório de auditoria PDF",f"relatorio_auditoria_ehs_{a.id}.pdf",pdf)
+    header("Relatórios Auditoria Cruzada","Exportações em Excel e PDF alinhadas ao checklist corrido atual de Diretrizes EHS")
+    ids = visible_site_ids(u, db)
+    da = df_aud(db, ids)
+    dp = df_pac_ehs(db, ids)
+    base = ehs_checklist_base_df(db)
+    if not base.empty:
+        st.caption(f"Checklist ativo usado nos relatórios: {len(base)} perguntas corridas, com tags por diretriz e modalidade sugerida de verificação.")
+    download_excel_button("Checklist atual Excel", "checklist_ehs_atual.xlsx", {"Checklist_Atual": base})
+    download_excel_button("PAC EHS Excel", "pac_ehs.xlsx", {"PAC": dp})
+    download_excel_button("Pacote Auditoria Excel", "auditoria_cruzada_ehs.xlsx", {"Auditorias": da, "Checklist_Atual": base, "PAC": dp})
 
+    auds = db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.id.desc()).all()
+    if not auds:
+        empty_state("Nenhuma auditoria disponível para emissão de relatório.")
+        return
 
+    amap = {f"{a.id} — {site_code(db,a.site_auditado_id)} — {a.ciclo} — {a.status}": a.id for a in auds}
+    a = db.get(AuditoriaCruzada, amap[st.selectbox("Relatório PDF", list(amap))])
+    gerar_checklist_automatico_ehs(db, a.id)
+    df_itens = ehs_respostas_auditoria_df(db, a)
+    df_resumo = ehs_resumo_diretriz_df(df_itens)
+    pacs_aud = dp[dp["Auditoria"] == a.id] if not dp.empty and "Auditoria" in dp.columns else pd.DataFrame()
+
+    c1, c2, c3, c4 = st.columns(4)
+    res_obj = db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
+    c1.metric("Conformidade", f"{calcular_conformidade_ehs(res_obj)}%")
+    c2.metric("Maturidade", calcular_maturidade_ehs(res_obj))
+    c3.metric("Itens do checklist", len(df_itens))
+    c4.metric("PACs vinculados", len(pacs_aud) if pacs_aud is not None else 0)
+
+    with st.expander("Prévia do resultado por diretriz", expanded=False):
+        if df_resumo.empty:
+            empty_state("Sem resumo disponível.")
+        else:
+            st.dataframe(df_resumo, use_container_width=True, hide_index=True)
+
+    with st.expander("Prévia do checklist completo da auditoria", expanded=False):
+        if df_itens.empty:
+            empty_state("Checklist sem itens.")
+        else:
+            st.dataframe(df_itens, use_container_width=True, hide_index=True)
+
+    pdf = gerar_pdf_auditoria_ehs(a, df_itens, pacs_aud, u.nome if u else "—")
+    download_pdf_button("Baixar relatório de auditoria PDF", f"relatorio_auditoria_ehs_{a.id}.pdf", pdf, key=f"pdf_auditoria_ehs_{a.id}")
 
 def procedimentos_ar_limpa_texto(v, limite=None):
     if v is None or (isinstance(v, float) and pd.isna(v)):
