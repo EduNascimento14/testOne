@@ -3680,6 +3680,65 @@ def ehs_checklist(db,u):
                 unsafe_allow_html=True,
             )
 
+def ehs_pac(db,u):
+    header("PAC Auditoria Cruzada","Tratamento de achados e verificação de eficácia")
+    ids=visible_site_ids(u,db)
+    sites={s.codigo:s.id for s in db.query(Site).filter(Site.id.in_(ids))}
+
+    if can_edit(u,"pac_ehs") and sites:
+        with st.expander("Cadastrar PAC EHS manual"):
+            with st.form("pace"):
+                site=st.selectbox("Site",list(sites))
+                tipo=st.selectbox("Tipo de achado",TIPOS_ACHADO_EHS)
+                pr=st.selectbox("Prioridade/criticidade",["Alta","Média","Baixa"])
+                stat=st.selectbox("Status",STATUS_PAC)
+                prazo=st.date_input("Prazo",date.today()+timedelta(days=30))
+                resp=st.text_input("Responsável")
+                area=st.text_input("Área responsável")
+                desc=st.text_area("Descrição")
+                evid=st.text_area("Evidência")
+                risco=st.text_area("Risco")
+                causa=st.text_area("Causa raiz")
+                aci=st.text_area("Ação imediata")
+                acc=st.text_area("Ação corretiva")
+                if st.form_submit_button("Salvar PAC EHS",use_container_width=True):
+                    db.add(PACEHS(site_id=sites[site],tipo_achado=tipo,prioridade_criticidade=pr,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao=desc,evidencia=evid,risco=risco,causa_raiz=causa,acao_imediata=aci,acao_corretiva=acc))
+                    db.commit()
+                    st.success("PAC salvo.")
+                    st.rerun()
+
+    df = df_pac_ehs(db, ids)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        empty_state("Nenhum PAC EHS.")
+    download_excel_button("Exportar PAC EHS Excel", "pac_ehs.xlsx", {"PAC EHS": df})
+
+    if can_edit(u,"pac_ehs") and not df.empty:
+        with st.expander("Atualizar status das ações levantadas"):
+            pac_id=int(st.selectbox("Selecionar ação/PAC",df["ID"].astype(int).tolist(),key="ehs_pac_update_select"))
+            p=db.get(PACEHS,pac_id)
+            with st.form("edit_pac_ehs_status"):
+                novo_status=st.selectbox("Status",STATUS_PAC,index=STATUS_PAC.index(p.status) if p.status in STATUS_PAC else 0)
+                evidencia=st.text_area("Evidência de conclusão",p.evidencia_conclusao or "")
+                validacao=st.checkbox("Validação EHS",p.validacao_ehs)
+                eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
+                status_eficacia=st.selectbox("Status da eficácia",["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"],index=["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"].index(p.status_eficacia) if p.status_eficacia in ["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"] else 0)
+                if st.form_submit_button("Atualizar status",use_container_width=True):
+                    if novo_status=="Concluída" and not evidencia:
+                        st.error("PAC concluído exige evidência de conclusão.")
+                    else:
+                        p.status=novo_status
+                        p.evidencia_conclusao=evidencia
+                        p.validacao_ehs=validacao
+                        p.verificacao_eficacia=eficacia
+                        p.status_eficacia=status_eficacia
+                        if novo_status=="Concluída" and not p.data_conclusao:
+                            p.data_conclusao=date.today()
+                        db.commit()
+                        st.success("Status atualizado.")
+                        st.rerun()
+
 def ehs_base_checklist(db,u):
     header("Base do Checklist EHS","Checklist sintético baseado nas Diretrizes Globais de EHS 4.12, editável e versionado")
     if not can_edit(u,"auditoria"):
