@@ -3619,20 +3619,31 @@ def ehs_planejamento(db,u):
     download_excel_button("Exportar auditorias Excel", "auditorias_cruzadas.xlsx", {"Auditorias": da})
 
     if can_edit(u,"auditoria") and sv:
-        with st.expander("Cadastrar próxima auditoria"):
+        with st.expander("Cadastrar próxima auditoria", expanded=False):
+            st.caption("Cadastro rápido da próxima auditoria cruzada. Preencha os dados essenciais e o checklist será gerado automaticamente.")
             with st.form("aud"):
-                ano=st.number_input("Ano",2020,2100,date.today().year)
-                ciclo=st.text_input("Ciclo","Ciclo 1")
-                site=st.selectbox("Site auditado",list(sv))
-                lider=st.selectbox("Site auditor líder",["—"]+list(sall))
-                apoio=st.selectbox("Site auditor apoio",["—"]+list(sall))
-                aud_l=st.text_input("Auditor líder",u.nome)
-                aud_a=st.text_input("Auditor apoio")
-                data=st.date_input("Data planejada",date.today()+timedelta(days=30))
-                status=st.selectbox("Status",STATUS_AUDITORIA)
-                esc=st.text_area("Escopo")
-                obs=st.text_area("Observações")
-                if st.form_submit_button("Criar auditoria e checklist",use_container_width=True):
+                l1c1,l1c2,l1c3,l1c4=st.columns([0.8,1.3,1.7,1.2])
+                ano=l1c1.number_input("Ano",2020,2100,date.today().year,step=1,key="aud_cad_ano")
+                ciclo=l1c2.text_input("Ciclo","Ciclo 1",key="aud_cad_ciclo")
+                site=l1c3.selectbox("Site auditado",list(sv),key="aud_cad_site")
+                data=l1c4.date_input("Data planejada",date.today()+timedelta(days=30),key="aud_cad_data")
+
+                l2c1,l2c2,l2c3=st.columns([1.6,1.6,1.1])
+                lider=l2c1.selectbox("Site auditor líder",["—"]+list(sall),key="aud_cad_site_lider")
+                apoio=l2c2.selectbox("Site auditor apoio",["—"]+list(sall),key="aud_cad_site_apoio")
+                status=l2c3.selectbox("Status",STATUS_AUDITORIA,key="aud_cad_status")
+
+                l3c1,l3c2=st.columns(2)
+                aud_l=l3c1.text_input("Auditor líder",u.nome,key="aud_cad_auditor_lider")
+                aud_a=l3c2.text_input("Auditor apoio",key="aud_cad_auditor_apoio")
+
+                l4c1,l4c2=st.columns(2)
+                esc=l4c1.text_area("Escopo",height=90,key="aud_cad_escopo")
+                obs=l4c2.text_area("Observações",height=90,key="aud_cad_obs")
+
+                b1,b2,b3=st.columns([1.2,1.4,1.2])
+                criar=b2.form_submit_button("Criar auditoria e checklist",use_container_width=True)
+                if criar:
                     a=AuditoriaCruzada(ano=ano,ciclo=ciclo,site_auditado_id=sv[site],site_auditor_lider_id=None if lider=="—" else sall[lider],site_auditor_apoio_id=None if apoio=="—" else sall[apoio],auditor_lider=aud_l,auditor_apoio=aud_a,data_planejada=data,status=status,escopo=esc,observacoes=obs)
                     db.add(a)
                     db.flush()
