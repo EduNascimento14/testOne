@@ -118,6 +118,12 @@ EHS_SUBMODULOS = {
         "cor": "#2563eb",
         "paginas": ["Planejamento de Auditorias", "Calendário de Auditorias", "Checklist Diretrizes de EHS"],
     },
+    "Procedimentos de Alto Risco": {
+        "icone": "🧩",
+        "descricao": "Segmentação dos padrões/procedimentos de alto risco, com status por item, fonte normativa e lacunas de execução.",
+        "cor": "#0f766e",
+        "paginas": ["Dashboard Procedimentos de Alto Risco", "Base Procedimentos de Alto Risco", "Atualizar Procedimentos de Alto Risco"],
+    },
     "Gestão de Gaps e Planos de Ação": {
         "icone": "⚠️",
         "descricao": "Tratamento dos gaps encontrados, planos de ação, prazos, responsáveis e eficácia.",
@@ -338,15 +344,140 @@ CHECKLIST_NR12 = {
 CHECKLIST_NR12["Auditoria corporativa"] = CHECKLIST_NR12["Auditoria EHS"]
 CHECKLIST_NR12["Auditoria extraordinária após incidente/quase-acidente"] = CHECKLIST_NR12["Auditoria EHS"]
 
-CHECKLIST_EHS = {
-"Categoria 1 — Liderança e Gestão EHS":["Existe política de EHS formalizada e comunicada?","A liderança participa ativamente das ações de EHS?","Existem metas e indicadores de EHS definidos?","Os indicadores são monitorados periodicamente?","Existem reuniões periódicas de EHS?","Existe definição clara de responsabilidades EHS?","A organização promove cultura de reporte sem culpa?","Existem mecanismos formais de melhoria contínua?","Os riscos críticos são acompanhados pela liderança?","Existe integração entre EHS e operação?"],
-"Categoria 2 — Conformidade Legal":["Existe levantamento atualizado de requisitos legais?","As licenças ambientais estão válidas?","Existem controles para condicionantes legais?","Os requisitos legais possuem evidências documentadas?","Existe monitoramento periódico de atendimento legal?","Há gestão de prazos legais?","Existe plano para adequação de não conformidades legais?","Existem auditorias legais periódicas?","Há rastreabilidade documental?","Os responsáveis legais estão definidos?"],
-"Categoria 3 — Gestão de Riscos":["Existe processo formal de identificação de perigos?","Os riscos ocupacionais estão avaliados?","Existem controles implementados para riscos críticos?","Há hierarquia de controles aplicada?","Existe revisão periódica das análises de risco?","Mudanças operacionais passam por avaliação de risco?","Existe gestão de mudanças formal?","Há participação dos trabalhadores nas análises?","Os riscos ambientais estão avaliados?","Existe monitoramento de eficácia dos controles?"],
-"Categoria 4 — Investigação de Incidentes":["Existe processo formal de investigação?","Os incidentes são reportados adequadamente?","As causas sistêmicas são avaliadas?","Há definição de ações corretivas?","Existe acompanhamento das ações?","Os aprendizados são compartilhados?","Há foco em melhoria do sistema e não culpabilização?","Near misses são investigados?","Existe rastreabilidade das investigações?","Indicadores de incidentes são monitorados?"],
-"Categoria 5 — Treinamentos e Competências":["Existe matriz de treinamento atualizada?","Os treinamentos obrigatórios estão válidos?","Há avaliação de eficácia dos treinamentos?","Os terceiros recebem treinamentos adequados?","Existe controle de vencimentos?","As competências críticas estão mapeadas?","Há registros formais dos treinamentos?","Existe integração EHS para novos colaboradores?","Os líderes recebem treinamento em EHS?","Existe reciclagem periódica?"],
-"Categoria 6 — Gestão Ambiental":["Existe segregação adequada de resíduos?","Os resíduos possuem identificação?","Existe controle de MTR?","Os CDFs são controlados?","Há controle de empresas destinadoras?","Existem inspeções ambientais periódicas?","Há controle de emissões atmosféricas?","Existe controle de efluentes?","Existe plano de resposta ambiental?","Há monitoramento de indicadores ambientais?"],
-"Categoria 7 — Segurança Operacional":["Máquinas possuem proteções adequadas?","Existe atendimento à NR-12?","Há bloqueio e etiquetagem implementados?","Os EPIs estão adequados?","Existe inspeção periódica de segurança?","Há controle de permissões de trabalho?","Existe controle de trabalho em altura?","Espaços confinados possuem gestão adequada?","Existe controle de energia perigosa?","Há inspeções comportamentais estruturadas?"],
-"Categoria 8 — Preparação e Resposta a Emergências":["Existe plano de emergência atualizado?","Há brigada treinada?","Existem simulados periódicos?","Os equipamentos de emergência estão inspecionados?","Existe controle de produtos perigosos?","Há rotas de fuga sinalizadas?","Existe comunicação de emergência definida?","Os cenários críticos foram avaliados?","Existe integração com serviços externos?","Há registros dos simulados?"]}
+CHECKLIST_EHS = {'Diretriz EHS 4.12.01 — Requisitos e Responsabilidades de EHS': ['A unidade mantém Registro de Requisitos de EHS atualizado, contemplando requisitos legais, corporativos, de '
+                                                                  'clientes e partes interessadas aplicáveis?',
+                                                                  'Há responsáveis designados e autorizados para cumprir ou monitorar cada obrigação de EHS identificada no '
+                                                                  'registro?',
+                                                                  'As responsabilidades de EHS estão documentadas, comunicadas e acessíveis às pessoas designadas?',
+                                                                  'A Gestão da Divisão/unidade revisa o Registro de Requisitos de EHS no mínimo anualmente e acompanha pendências '
+                                                                  'decorrentes?'],
+ 'Diretriz EHS 4.12.02 — Sistema de Gestão Ambiental': ['A unidade possui processo estruturado para identificar aspectos e impactos ambientais relevantes das suas atividades, '
+                                                        'produtos e serviços?',
+                                                        'O registro de requisitos legais ambientais está atualizado e conectado aos controles, responsáveis e evidências '
+                                                        'necessárias?',
+                                                        'Existem objetivos, metas e planos ambientais alinhados aos riscos, requisitos regulatórios e metas corporativas?',
+                                                        'O desempenho ambiental e a aderência regulatória são revisados periodicamente, no mínimo trimestralmente, com ações '
+                                                        'registradas?'],
+ 'Diretriz EHS 4.12.03 — Métricas de Desempenho e Revisão do Progresso': ['A unidade possui indicadores de EHS definidos, com responsáveis, frequência de coleta, fonte de dados e '
+                                                                          'método de validação?',
+                                                                          'As métricas obrigatórias corporativas são reportadas de forma completa, tempestiva e rastreável?',
+                                                                          'A unidade acompanha métricas leading e lagging relevantes aos seus riscos e às metas locais?',
+                                                                          'A liderança revisa o desempenho de EHS no mínimo trimestralmente e define ações para desvios de '
+                                                                          'tendência ou metas?'],
+ 'Diretriz EHS 4.12.04 — Avaliação e Ação Corretiva': ['A unidade realiza avaliações internas de conformidade e desempenho de EHS no mínimo anualmente?',
+                                                       'Não conformidades, causas e ações corretivas são registradas em sistema ou controle rastreável?',
+                                                       'As ações corretivas possuem responsável, prazo, status, evidência de conclusão e validação de eficácia quando aplicável?',
+                                                       'Temas recorrentes ou relevantes são comunicados à liderança e compartilhados com outras unidades quando houver risco '
+                                                       'sistêmico?'],
+ 'Diretriz EHS 4.12.05 — Gestão de Mudanças': ['A unidade possui procedimento de MOC para mudanças em processos, equipamentos, instalações, tecnologia, químicos ou pessoas que '
+                                               'possam impactar EHS?',
+                                               'O processo de MOC contempla iniciação, avaliação, aprovação, implementação, verificação/partida e documentação final?',
+                                               'EHS, Operações, Manutenção, Engenharia e demais áreas afetadas participam da avaliação e aprovação conforme o tipo de mudança?',
+                                               'As mudanças aprovadas geram atualização de documentos, treinamentos, JSAs, licenças, PSSR ou controles antes da liberação '
+                                               'operacional?'],
+ 'Diretriz EHS 4.12.06 — Near Miss e Investigação de Acidentes/Incidentes': ['A unidade possui programa de near miss ativo, com meios simples de reporte e sem punição ao relator?',
+                                                                             'Acidentes/incidentes significativos e near misses de alto potencial são investigados com método '
+                                                                             'estruturado e identificação de causa raiz?',
+                                                                             'As ações corretivas de investigações e near misses são registradas, monitoradas e comunicadas às '
+                                                                             'pessoas impactadas?',
+                                                                             'Dados de near miss, acidentes e incidentes são revisados periodicamente, no mínimo anualmente, para '
+                                                                             'identificar tendências e causas sistêmicas?'],
+ 'Diretriz EHS 4.12.07 — Uso de Produtos Químicos e Gestão de Resíduos': ['A unidade mantém inventário atualizado de produtos químicos e SDS/FISPQ disponíveis para os químicos em '
+                                                                          'uso?',
+                                                                          'A introdução de novos químicos passa por aprovação prévia, avaliação de perigos, incompatibilidades, '
+                                                                          'EPI, armazenamento e restrições Parker?',
+                                                                          'Produtos químicos e resíduos são rotulados, segregados, armazenados em recipientes compatíveis e com '
+                                                                          'contenção quando aplicável?',
+                                                                          'Todos os resíduos gerados são identificados, classificados, armazenados e destinados com documentação '
+                                                                          'adequada de transportadores e destinadores?',
+                                                                          'Há plano e recursos de resposta a derramamentos compatíveis com cenários previsíveis de químicos e '
+                                                                          'resíduos?'],
+ 'Diretriz EHS 4.12.08 — Segurança Elétrica': ['A unidade possui programa de segurança elétrica cobrindo qualificação, controles, permissões, EPIs e trabalho próximo a circuitos '
+                                               'energizados?',
+                                               'Somente pessoas qualificadas, licenciadas/certificadas quando requerido, executam inspeção, teste, instalação ou modificação '
+                                               'elétrica?',
+                                               'Trabalhos elétricos são preferencialmente executados desenergizados, com LOTO e verificação de ausência de energia?',
+                                               'Quando houver trabalho energizado, há justificativa, avaliação de choque/arco elétrico, controles e EPIs compatíveis?',
+                                               'Painéis, circuitos, fiações, extensões e equipamentos elétricos são mantidos, identificados, protegidos e inspecionados conforme '
+                                               'requisitos aplicáveis?'],
+ 'Diretriz EHS 4.12.09 — Preparação para Emergências': ['A unidade possui plano escrito cobrindo cenários razoavelmente previsíveis, como incêndio, emergência médica, '
+                                                        'derramamento, desastre natural e violência/segurança?',
+                                                        'Papéis, responsabilidades, equipamentos, rotas, comunicações e notificações internas/externas estão definidos no plano?',
+                                                        'Simulados de evacuação e cenários relevantes são realizados e documentados no mínimo anualmente?',
+                                                        'A unidade possui primeiros socorros iniciais, respondentes treinados e recursos compatíveis com seus riscos e turnos?',
+                                                        'O plano de emergência é revisado anualmente ou após emergência significativa, com acionamento da hotline quando '
+                                                        'aplicável?'],
+ 'Diretriz EHS 4.12.10 — Treinamento e Envolvimento dos Empregados': ['A unidade possui matriz de treinamentos de EHS por função, risco, requisito legal/corporativo e frequência '
+                                                                      'de reciclagem?',
+                                                                      'Treinamentos são documentados, compreensíveis aos participantes e ministrados antes da exposição ou '
+                                                                      'atividade aplicável?',
+                                                                      'Temporários, contratados e visitantes recebem orientações e treinamentos de EHS proporcionais às suas '
+                                                                      'atividades e riscos?',
+                                                                      'Existe Comitê/EHS Star Point HPT ou mecanismo equivalente de envolvimento dos empregados, com reuniões e '
+                                                                      'registros periódicos?',
+                                                                      'As ações, indicadores e comunicações de EHS são divulgados à força de trabalho por meio visual, reuniões, '
+                                                                      'TIB ou equivalente?'],
+ 'Diretriz EHS 4.12.11 — Segurança de Equipamentos e Máquinas': ['A unidade possui processo para assegurar proteções adequadas em máquinas e equipamentos de produção, manutenção, '
+                                                                 'teste, laboratório e protótipo?',
+                                                                 'Avaliações de risco de máquinas consideram operação, setup, manutenção, frequência, severidade, exposição e '
+                                                                 'hierarquia de controles?',
+                                                                 'Planos de adequação de máquinas são priorizados por risco e aprovados/acompanhados pela liderança de Operações e '
+                                                                 'EHS?',
+                                                                 'Dispositivos críticos de segurança, como cortinas de luz, paradas de emergência e proteções intertravadas, são '
+                                                                 'testados e documentados conforme frequência definida?',
+                                                                 'Procedimentos de controle de energia/LOTO estão documentados por equipamento ou grupo similar e são aplicados '
+                                                                 'durante manutenção e intervenções?'],
+ 'Diretriz EHS 4.12.12 — Ergonomia': ['A unidade possui processo de melhoria ergonômica adequado aos seus riscos e histórico de MSDs?',
+                                      'Há responsável/coordenador de ergonomia e pessoas treinadas para conduzir avaliações ergonômicas?',
+                                      'Tarefas com fatores de risco ergonômico são avaliadas por método válido e convertidas em roadmap/plano de redução de risco?',
+                                      'Controles implementados são validados por reavaliação ou evidência de redução de exposição?',
+                                      'A liderança revisa periodicamente o status do programa, metas, treinamentos e pendências ergonômicas?'],
+ 'Diretriz EHS 4.12.13 — Permissões para Trabalho Perigoso': ['A unidade possui sistema de permissão para trabalhos perigosos não rotineiros, como altura, trabalho a quente, '
+                                                              'espaço confinado, elétrico energizado e químicos perigosos?',
+                                                              'As permissões identificam perigos, controles, EPI, emergências, aprovadores e condições para execução segura antes '
+                                                              'do início da atividade?',
+                                                              'Operações/manufatura e áreas afetadas participam da emissão/aprovação quando o trabalho impacta áreas operacionais?',
+                                                              'Permissões são revisadas quando ocorre incidente, near miss, mudança de condição ou perigo não reconhecido durante '
+                                                              'a execução?'],
+ 'Diretriz EHS 4.12.14 — JSA e Equipamento de Proteção Individual': ['Processos e tarefas rotineiras com risco possuem JSA documentada, comunicada e revisada periodicamente?',
+                                                                     'Trabalhos não rotineiros usam avaliação dinâmica de risco ou ferramenta equivalente antes da execução?',
+                                                                     'Os EPIs requeridos por tarefa ou área são definidos com base na avaliação de risco e comunicados por '
+                                                                     'documentos, instruções ou sinalização?',
+                                                                     'Empregados são treinados no uso, limitações, conservação, armazenamento e substituição dos EPIs aplicáveis?',
+                                                                     'JSAs, avaliações dinâmicas e requisitos de EPI são revisados após mudanças, incidentes ou identificação de '
+                                                                     'novos riscos?'],
+ 'Diretriz EHS 4.12.15 — Movimentação e Armazenamento de Materiais': ['Equipamentos de movimentação, docas, level pads e racks são selecionados considerando capacidade, tipo de '
+                                                                      'carga, ergonomia, ambiente e frequência de uso?',
+                                                                      'Há inspeções pré-uso e inspeções periódicas documentadas para equipamentos de movimentação, racks e '
+                                                                      'acessórios críticos?',
+                                                                      'Operadores de PIT/equipamentos de movimentação são treinados, autorizados e reciclados conforme legislação, '
+                                                                      'incidentes ou comportamento inseguro?',
+                                                                      'Cargas inseguras, não padrão ou fora da condição normal são avaliadas, segregadas ou movimentadas por '
+                                                                      'permissão/procedimento específico?',
+                                                                      'Controles de segurança em docas, tráfego de pedestres e armazenagem são auditados por LPA ou verificação '
+                                                                      'equivalente?'],
+ 'Diretriz EHS 4.12.16 — Visitantes, Contratados e Empregados Temporários': ['A unidade possui procedimento para controlar visitantes, incluindo identificação, orientações de '
+                                                                             'emergência, EPI e restrições de acesso?',
+                                                                             'Contratados recebem requisitos de EHS do site, comunicam riscos introduzidos e cumprem permissões, '
+                                                                             'seguros e controles aplicáveis?',
+                                                                             'Empregados temporários recebem treinamentos, EPIs e supervisão equivalentes aos empregados Parker '
+                                                                             'para as tarefas executadas?',
+                                                                             'Acidentes/incidentes envolvendo visitantes, contratados ou temporários são reportados, investigados '
+                                                                             'e tratados conforme requisitos aplicáveis?'],
+ 'Diretriz EHS 4.12.17 — Ambiente de Trabalho': ['Meios de egresso, rotas de evacuação e saídas de emergência são suficientes, sinalizados, iluminados e mantidos desobstruídos?',
+                                                 'Superfícies de caminhada, plataformas, escadas, aberturas e áreas elevadas são mantidas e protegidas contra quedas?',
+                                                 'Housekeeping, iluminação, água potável, sanitários e condições gerais do local são mantidos em padrão seguro e sanitário?',
+                                                 'Ventilação, ruído e exposições ambientais são avaliados e controlados por engenharia, administração e EPI quando necessário?',
+                                                 'Exposição a calor ou frio extremo é avaliada e tratada com controles, pausas, hidratação, roupas/EPI e treinamento quando '
+                                                 'aplicável?'],
+ 'Diretriz EHS 4.12.18 — Segurança em Manutenção': ['Empregados e contratados de manutenção são qualificados, treinados e autorizados para os trabalhos que executam?',
+                                                    'Atividades de manutenção possuem avaliação de risco adequada, como JSA, permissão de trabalho perigoso ou avaliação dinâmica '
+                                                    'antes da execução?',
+                                                    'Trabalhos complexos ou de alto risco possuem planejamento, método de trabalho, controles, recursos e revisão por pessoa '
+                                                    'competente?',
+                                                    'A liderança de manutenção/facilities possui autoridade para parar, negar ou adiar trabalhos que não possam ser executados com '
+                                                    'segurança?',
+                                                    'Programação de manutenção considera fadiga, trabalho fora de horário, recursos qualificados e coordenação com Operações/EHS?']}
 
 def apply_theme():
     st.markdown("""
@@ -540,6 +671,42 @@ class RespostaAuditoriaEHS(Base):
     __tablename__="respostas_auditoria_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); aplicavel=Column(Boolean,default=True); status=Column(String(60)); nota_maturidade=Column(Float,default=3); evidencia_verificada=Column(Text); comentario_auditor=Column(Text); necessita_pac=Column(Boolean,default=False); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); pergunta_snapshot=Column(Text); criticidade_snapshot=Column(String(40)); evidencia_esperada_snapshot=Column(Text); gera_pac_automatico_snapshot=Column(Boolean,default=False); requisito=relationship("RequisitoEHS"); __table_args__=(UniqueConstraint("auditoria_id","requisito_id",name="uq_resp_auditoria_requisito"),)
 class PACEHS(Base):
     __tablename__="pac_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); site_id=Column(Integer,ForeignKey("sites.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); tipo_achado=Column(String(80)); descricao=Column(Text); evidencia=Column(Text); risco=Column(Text); causa_raiz=Column(Text); acao_imediata=Column(Text); acao_corretiva=Column(Text); responsavel=Column(String(120)); area_responsavel=Column(String(120)); prazo=Column(Date); status=Column(String(60)); prioridade_criticidade=Column(String(40)); evidencia_conclusao=Column(Text); validacao_ehs=Column(Boolean,default=False); data_conclusao=Column(Date); verificacao_eficacia=Column(Text); status_eficacia=Column(String(80)); criado_em=Column(DateTime,default=datetime.utcnow); requisito=relationship("RequisitoEHS")
+
+class ProcedimentoAltoRiscoRegistro(Base):
+    __tablename__ = "procedimentos_alto_risco_registros"
+    id = Column(Integer, primary_key=True)
+    padrao = Column(String(240))
+    aba_origem = Column(String(120))
+    elemento = Column(String(40))
+    etapa = Column(String(40))
+    expectativa = Column(Text)
+    fonte = Column(String(260))
+    regulamentacao = Column(String(260))
+    periodicidade = Column(String(160))
+    pergunta = Column(Text)
+    resposta = Column(Text)
+    desempenho = Column(String(80))
+    origem_arquivo = Column(String(260))
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+class ProcedimentoAltoRiscoUploadHistorico(Base):
+    __tablename__ = "procedimentos_alto_risco_upload_historico"
+    id = Column(Integer, primary_key=True)
+    nome_arquivo = Column(String(260))
+    linhas_importadas = Column(Integer, default=0)
+    data_upload = Column(DateTime, default=datetime.utcnow)
+    usuario = Column(String(120))
+    observacoes = Column(Text)
+
+PROCEDIMENTOS_AR_SEED_B64 = "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"
+PROCEDIMENTOS_AR_STATUS_ORDER = ["Conforme", "Conformidade Parcial", "Não Conforme", "Não avaliado"]
+PROCEDIMENTOS_AR_STATUS_COLOR_MAP = {
+    "Conforme": "#16a34a",
+    "Conformidade Parcial": "#f59e0b",
+    "Não Conforme": "#dc2626",
+    "Não avaliado": "#94a3b8",
+}
+
 class EvidenciaEHS(Base):
     __tablename__="evidencias_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer); requisito_id=Column(Integer); pac_id=Column(Integer); descricao=Column(Text); arquivo_nome=Column(String(260)); arquivo_caminho=Column(String(500)); criado_em=Column(DateTime,default=datetime.utcnow)
 class LogAuditoriaSistema(Base):
@@ -777,7 +944,7 @@ def criar_versao_checklist_ehs(db, criado_por="Sistema", descricao=None):
         v.ativo = False
     nova = ChecklistVersaoEHS(descricao=descricao or f"Versão {nova_num} do checklist de Diretrizes EHS", versao=nova_num, ativo=True, criado_por=criado_por)
     db.add(nova); db.flush()
-    reqs = db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all()
+    reqs = db.query(RequisitoEHS).join(DiretivaEHS).filter(RequisitoEHS.ativo==True, DiretivaEHS.ativo==True).order_by(DiretivaEHS.categoria, RequisitoEHS.ordem).all()
     for r in reqs:
         db.add(ChecklistPerguntaVersaoEHS(
             checklist_versao_id=nova.id,
@@ -793,6 +960,19 @@ def criar_versao_checklist_ehs(db, criado_por="Sistema", descricao=None):
     db.flush()
     return nova
 
+
+def ensure_ehs_checklist_412_version(db):
+    """Garante que a versão ativa do checklist de auditoria reflita as Diretrizes EHS 4.12."""
+    categorias_esperadas = set(CHECKLIST_EHS.keys())
+    ativa = db.query(ChecklistVersaoEHS).filter_by(ativo=True).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).first()
+    if not ativa:
+        criar_versao_checklist_ehs(db, "Sistema", "Versão ativa baseada nas Diretrizes Globais de EHS 4.12")
+        return
+    cats_ativas = {p.categoria for p in db.query(ChecklistPerguntaVersaoEHS).filter_by(checklist_versao_id=ativa.id, ativo=True).all()}
+    if cats_ativas and categorias_esperadas.issubset(cats_ativas) and not any(str(c).startswith("Categoria ") for c in cats_ativas):
+        return
+    criar_versao_checklist_ehs(db, "Sistema", "Checklist sintético baseado nas Diretrizes Globais de EHS 4.12")
+
 def seed_checklist_versions(db):
     tipos = {t for t, in db.query(ChecklistItemNR12.tipo_checklist).distinct().all()}
     for tipo in sorted(tipos):
@@ -807,18 +987,37 @@ def sync_checklists_base(db):
             item = db.query(ChecklistItemNR12).filter_by(tipo_checklist=tipo, ordem=i).first()
             if not item:
                 db.add(ChecklistItemNR12(tipo_checklist=tipo, ordem=i, pergunta=pergunta, item_critico=critico, gera_pac_automatico=False, ativo=True))
+    categorias_ativas_ehs = set(CHECKLIST_EHS.keys())
+    for d_old in db.query(DiretivaEHS).all():
+        if d_old.categoria not in categorias_ativas_ehs:
+            d_old.ativo = False
+            for req_old in db.query(RequisitoEHS).filter_by(diretiva_id=d_old.id).all():
+                req_old.ativo = False
     for cat, pergs in CHECKLIST_EHS.items():
         d = db.query(DiretivaEHS).filter_by(categoria=cat).first()
         if not d:
             d = DiretivaEHS(categoria=cat, descricao=cat, ativo=True)
             db.add(d)
             db.flush()
+        d.ativo = True
+        d.descricao = cat
+        ordens_esperadas = set(range(1, len(pergs)+1))
+        for req_old in db.query(RequisitoEHS).filter_by(diretiva_id=d.id).all():
+            if req_old.ordem not in ordens_esperadas:
+                req_old.ativo = False
         for i, p in enumerate(pergs, 1):
             req = db.query(RequisitoEHS).filter_by(diretiva_id=d.id, ordem=i).first()
+            criticidade = "Alta" if i == 1 else "Média"
             if not req:
-                db.add(RequisitoEHS(diretiva_id=d.id, ordem=i, pergunta=p, criticidade="Alta" if i in [1,3,7] else "Média", evidencia_esperada="Evidência documental, registros, entrevistas e/ou verificação em campo.", gera_pac_automatico=False, ativo=True))
+                db.add(RequisitoEHS(diretiva_id=d.id, ordem=i, pergunta=p, criticidade=criticidade, evidencia_esperada="Evidência documental, registros, entrevistas e/ou verificação em campo.", gera_pac_automatico=False, ativo=True))
+            else:
+                req.pergunta = p
+                req.criticidade = req.criticidade if req.criticidade in CRITICIDADES else criticidade
+                req.evidencia_esperada = req.evidencia_esperada or "Evidência documental, registros, entrevistas e/ou verificação em campo."
+                req.ativo = True
     db.flush()
     seed_checklist_versions(db)
+    ensure_ehs_checklist_412_version(db)
 
 
 def seed_regras_frequencia(db):
@@ -967,6 +1166,7 @@ def init_db():
         seed_energia_registros_inicial(db)
         seed_near_miss_inicial(db)
         seed_legal_inicial(db)
+        seed_procedimentos_alto_risco_inicial(db)
         for maq in db.query(MaquinaNR12).all():
             maq.status_nr12 = normalizar_status_nr12(maq.status_nr12)
         db.commit()
@@ -1790,6 +1990,8 @@ def ultima_atualizacao_modulo(db, modulo):
             h = db.query(NearMissUploadHistorico).order_by(NearMissUploadHistorico.data_upload.desc()).first()
         elif modulo == "legal":
             h = db.query(LegalUploadHistorico).order_by(LegalUploadHistorico.data_upload.desc()).first()
+        elif modulo == "ehs":
+            h = db.query(ProcedimentoAltoRiscoUploadHistorico).order_by(ProcedimentoAltoRiscoUploadHistorico.data_upload.desc()).first()
         else:
             h = None
         if not h or not h.data_upload:
@@ -1818,7 +2020,7 @@ def submodulos_visiveis(modulo, u):
     }.get(modulo, {})
     proibidas = set()
     if not can_update_bases(u):
-        proibidas.update(["Atualizar Base", "Actual Hours", "Atualizar Base Near Miss", "Atualizar Base Legal"])
+        proibidas.update(["Atualizar Base", "Actual Hours", "Atualizar Base Near Miss", "Atualizar Base Legal", "Atualizar Procedimentos de Alto Risco"])
     out = {}
     for nome, cfg in base.items():
         paginas = [p for p in cfg.get("paginas", []) if p not in proibidas]
@@ -3475,7 +3677,7 @@ def ehs_pac(db,u):
                         st.success("Status atualizado.")
                         st.rerun()
 def ehs_base_checklist(db,u):
-    header("Base do Checklist EHS","Base inicial carregada no banco, editável pelo app e versionada para preservar histórico")
+    header("Base do Checklist EHS","Checklist sintético baseado nas Diretrizes Globais de EHS 4.12, editável e versionado")
     if not can_edit(u,"auditoria"):
         alert_card("Seu perfil permite consulta, mas não administração da base de checklists.")
     versao_ativa = db.query(ChecklistVersaoEHS).filter_by(ativo=True).order_by(ChecklistVersaoEHS.versao.desc(), ChecklistVersaoEHS.id.desc()).first()
@@ -3485,13 +3687,13 @@ def ehs_base_checklist(db,u):
     with c2:
         kpi_card("Requisitos ativos", db.query(RequisitoEHS).filter_by(ativo=True).count(), "Base editável atual")
     with c3:
-        kpi_card("Categorias", db.query(DiretivaEHS).filter_by(ativo=True).count(), "Diretrizes EHS")
+        kpi_card("Diretrizes", db.query(DiretivaEHS).filter_by(ativo=True).count(), "Categorias do checklist")
 
     section("Como funciona")
     st.caption("Os checklists padrão continuam dentro do código como carga inicial. Depois que o banco é criado, a base passa a ser editável pelo app; as alterações ficam salvas no banco e novas auditorias recebem snapshots da versão ativa.")
 
-    reqs=db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem).all()
-    df=pd.DataFrame([{"ID":r.id,"Categoria":r.diretiva.categoria,"Ordem":r.ordem,"Requisito":r.pergunta,"Ativo":r.ativo,"Criticidade":r.criticidade,"Evidência esperada":r.evidencia_esperada,"Gerar PAC automático":getattr(r,"gera_pac_automatico",False)} for r in reqs])
+    reqs=db.query(RequisitoEHS).join(DiretivaEHS).filter(RequisitoEHS.ativo==True,DiretivaEHS.ativo==True).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem).all()
+    df=pd.DataFrame([{"ID":r.id,"Diretriz":r.diretiva.categoria,"Ordem":r.ordem,"Requisito":r.pergunta,"Ativo":r.ativo,"Criticidade":r.criticidade,"Evidência esperada":r.evidencia_esperada,"Gerar PAC automático":getattr(r,"gera_pac_automatico",False)} for r in reqs])
     if can_edit(u,"auditoria"):
         section("Editar base atual")
         ed=st.data_editor(
@@ -3509,7 +3711,7 @@ def ehs_base_checklist(db,u):
                     r=db.get(RequisitoEHS,int(row["ID"]))
                     if not r:
                         continue
-                    categoria=str(row["Categoria"]).strip() or "Sem categoria"
+                    categoria=str(row["Diretriz"]).strip() or "Sem diretriz"
                     d=db.query(DiretivaEHS).filter_by(categoria=categoria).first()
                     if not d:
                         d=DiretivaEHS(categoria=categoria,descricao=categoria,ativo=True); db.add(d); db.flush()
@@ -3531,11 +3733,11 @@ def ehs_base_checklist(db,u):
         with st.expander("Criar novo requisito EHS"):
             cats = [d.categoria for d in db.query(DiretivaEHS).order_by(DiretivaEHS.categoria).all()]
             with st.form("novo_requisito_ehs"):
-                modo_cat = st.radio("Categoria", ["Usar existente", "Criar nova"], horizontal=True)
+                modo_cat = st.radio("Diretriz", ["Usar existente", "Criar nova"], horizontal=True)
                 if modo_cat == "Usar existente" and cats:
-                    categoria = st.selectbox("Categoria existente", cats)
+                    categoria = st.selectbox("Diretriz existente", cats)
                 else:
-                    categoria = st.text_input("Nova categoria")
+                    categoria = st.text_input("Nova diretriz")
                 ordem = st.number_input("Ordem", min_value=1, value=1)
                 pergunta = st.text_area("Requisito / pergunta")
                 criticidade = st.selectbox("Criticidade", CRITICIDADES)
@@ -3543,7 +3745,7 @@ def ehs_base_checklist(db,u):
                 pac_auto = st.checkbox("Gerar PAC automático quando houver não conformidade")
                 if st.form_submit_button("Adicionar requisito e criar nova versão", use_container_width=True):
                     if not pergunta.strip() or not categoria.strip():
-                        st.error("Informe categoria e requisito/pergunta.")
+                        st.error("Informe diretriz e requisito/pergunta.")
                     else:
                         d = db.query(DiretivaEHS).filter_by(categoria=categoria.strip()).first()
                         if not d:
@@ -3565,15 +3767,278 @@ def ehs_base_checklist(db,u):
 def ehs_relatorios(db,u):
     header("Relatórios Auditoria Cruzada","Exportações em Excel e PDF")
     ids=visible_site_ids(u,db); da=df_aud(db,ids); dp=df_pac_ehs(db,ids)
-    base=pd.DataFrame([{"Categoria":r.diretiva.categoria,"Ordem":r.ordem,"Requisito":r.pergunta,"Ativo":"Sim" if r.ativo else "Não","Criticidade":r.criticidade,"Evidência esperada":r.evidencia_esperada} for r in db.query(RequisitoEHS).join(DiretivaEHS).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem)])
+    base=pd.DataFrame([{"Diretriz":r.diretiva.categoria,"Ordem":r.ordem,"Requisito":r.pergunta,"Ativo":"Sim" if r.ativo else "Não","Criticidade":r.criticidade,"Evidência esperada":r.evidencia_esperada} for r in db.query(RequisitoEHS).join(DiretivaEHS).filter(RequisitoEHS.ativo==True,DiretivaEHS.ativo==True).order_by(DiretivaEHS.categoria,RequisitoEHS.ordem)])
     download_excel_button("Checklist Excel","checklist_ehs.xlsx",{"Checklist":base}); download_excel_button("PAC EHS Excel","pac_ehs.xlsx",{"PAC":dp}); download_excel_button("Pacote Auditoria Excel","auditoria_cruzada_ehs.xlsx",{"Auditorias":da,"Checklist":base,"PAC":dp})
     auds=db.query(AuditoriaCruzada).filter(AuditoriaCruzada.site_auditado_id.in_(ids)).order_by(AuditoriaCruzada.id.desc()).all()
     if auds:
         amap={f"{a.id} — {site_code(db,a.site_auditado_id)} — {a.ciclo}":a.id for a in auds}; a=db.get(AuditoriaCruzada,amap[st.selectbox("Relatório PDF",list(amap))]); res=db.query(RespostaAuditoriaEHS).filter_by(auditoria_id=a.id).all()
-        dfr=pd.DataFrame([{"Categoria":r.requisito.diretiva.categoria,"Requisito":getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta,"Status":r.status,"Maturidade":r.nota_maturidade,"Evidência":r.evidencia_verificada,"Comentário":r.comentario_auditor} for r in res])
+        dfr=pd.DataFrame([{"Diretriz":r.requisito.diretiva.categoria,"Requisito":getattr(r,"pergunta_snapshot",None) or r.requisito.pergunta,"Status":r.status,"Maturidade":r.nota_maturidade,"Evidência":r.evidencia_verificada,"Comentário":r.comentario_auditor} for r in res])
         pdf=gerar_pdf(f"Relatório de Auditoria Cruzada de Diretrizes de EHS — {site_code(db,a.site_auditado_id)}",f"Auditoria {a.id} | {a.ciclo} | Conformidade {calcular_conformidade_ehs(res)}% | Maturidade {calcular_maturidade_ehs(res)}",[("Dados",pd.DataFrame([{"Ano":a.ano,"Ciclo":a.ciclo,"Site":site_code(db,a.site_auditado_id),"Status":a.status,"Auditor líder":a.auditor_lider}])),("Resultado por item",dfr),("PACs vinculados",dp[dp["Auditoria"]==a.id] if not dp.empty else dp)])
         download_pdf_button("Baixar relatório de auditoria PDF",f"relatorio_auditoria_ehs_{a.id}.pdf",pdf)
 
+
+
+def procedimentos_ar_limpa_texto(v, limite=None):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    txt = re.sub(r"\s+", " ", str(v)).strip()
+    if limite and len(txt) > limite:
+        return txt[:limite-1].rstrip() + "…"
+    return txt
+
+def procedimentos_ar_ascii(v):
+    return unicodedata.normalize("NFKD", procedimentos_ar_limpa_texto(v)).encode("ascii", "ignore").decode("ascii").lower()
+
+def procedimentos_ar_status(v):
+    n = procedimentos_ar_ascii(v)
+    if not n:
+        return "Não avaliado"
+    if "parcial" in n:
+        return "Conformidade Parcial"
+    if "nao" in n or "não" in str(v).lower():
+        return "Não Conforme"
+    if "conforme" in n:
+        return "Conforme"
+    return procedimentos_ar_limpa_texto(v, 80) or "Não avaliado"
+
+def procedimentos_ar_atendido_status(v):
+    return procedimentos_ar_status(v) == "Conforme"
+
+def procedimentos_ar_seed_df():
+    try:
+        raw = zlib.decompress(base64.b64decode(PROCEDIMENTOS_AR_SEED_B64)).decode("utf-8")
+        return pd.read_csv(io.StringIO(raw))
+    except Exception:
+        logging.exception("Falha ao carregar seed de procedimentos de alto risco")
+        return pd.DataFrame()
+
+def procedimentos_ar_mapping_from_row(r):
+    return {
+        "padrao": procedimentos_ar_limpa_texto(r.get("padrao"), 240),
+        "aba_origem": procedimentos_ar_limpa_texto(r.get("aba_origem"), 120),
+        "elemento": procedimentos_ar_limpa_texto(r.get("elemento"), 40),
+        "etapa": procedimentos_ar_limpa_texto(r.get("etapa"), 40),
+        "expectativa": procedimentos_ar_limpa_texto(r.get("expectativa")),
+        "fonte": procedimentos_ar_limpa_texto(r.get("fonte"), 260),
+        "regulamentacao": procedimentos_ar_limpa_texto(r.get("regulamentacao"), 260),
+        "periodicidade": procedimentos_ar_limpa_texto(r.get("periodicidade"), 160),
+        "pergunta": procedimentos_ar_limpa_texto(r.get("pergunta")),
+        "resposta": procedimentos_ar_limpa_texto(r.get("resposta")),
+        "desempenho": procedimentos_ar_status(r.get("desempenho")),
+        "origem_arquivo": procedimentos_ar_limpa_texto(r.get("origem_arquivo"), 260),
+    }
+
+def seed_procedimentos_alto_risco_inicial(db):
+    try:
+        if db.query(ProcedimentoAltoRiscoRegistro).count() > 0:
+            return
+        df = procedimentos_ar_seed_df()
+        if df.empty:
+            return
+        regs = [procedimentos_ar_mapping_from_row(row.to_dict()) for _, row in df.iterrows()]
+        db.bulk_insert_mappings(ProcedimentoAltoRiscoRegistro, regs)
+        db.add(ProcedimentoAltoRiscoUploadHistorico(nome_arquivo="High_Risk_Framework_2019_PT_BR.xlsx", linhas_importadas=len(regs), usuario="Sistema", observacoes="Carga inicial embutida"))
+        db.flush()
+    except Exception:
+        logging.exception("Falha ao popular procedimentos de alto risco")
+
+def parse_procedimentos_alto_risco_excel(file_obj, origem_nome="upload.xlsx"):
+    try:
+        data = file_obj.getvalue() if hasattr(file_obj, "getvalue") else file_obj
+        xl = pd.ExcelFile(io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else data)
+    except Exception as e:
+        raise ValueError(f"Não foi possível abrir o arquivo de procedimentos: {e}")
+    rows = []
+    abas_ignoradas = {"instrucoes", "instruções", "pontuacao", "pontuação", "formulas", "fórmulas"}
+    for sh in xl.sheet_names:
+        if procedimentos_ar_ascii(sh) in abas_ignoradas:
+            continue
+        df = pd.read_excel(xl, sheet_name=sh, header=None)
+        if df.empty or df.shape[1] < 6:
+            continue
+        titulo = procedimentos_ar_limpa_texto(df.iloc[0,1] if df.shape[1] > 1 and pd.notna(df.iloc[0,1]) else sh, 240)
+        titulo = re.sub(r"^Padrão de Alto Risco:\s*", "", titulo).strip()
+        for _, row in df.iterrows():
+            elem = row.iloc[0] if df.shape[1] > 0 else None
+            exp = row.iloc[1] if df.shape[1] > 1 else None
+            if pd.isna(elem) or pd.isna(exp):
+                continue
+            elem = procedimentos_ar_limpa_texto(elem, 40)
+            if not re.match(r"^\d+(\.\d+)+$", elem):
+                continue
+            rows.append({
+                "padrao": titulo or sh,
+                "aba_origem": sh,
+                "elemento": elem,
+                "etapa": elem.split(".")[0],
+                "expectativa": procedimentos_ar_limpa_texto(exp),
+                "fonte": procedimentos_ar_limpa_texto(row.iloc[2] if df.shape[1] > 2 else "", 260),
+                "regulamentacao": procedimentos_ar_limpa_texto(row.iloc[3] if df.shape[1] > 3 else "", 260),
+                "periodicidade": procedimentos_ar_limpa_texto(row.iloc[4] if df.shape[1] > 4 else "", 160),
+                "pergunta": procedimentos_ar_limpa_texto(row.iloc[5] if df.shape[1] > 5 else ""),
+                "resposta": procedimentos_ar_limpa_texto(row.iloc[6] if df.shape[1] > 6 else ""),
+                "desempenho": procedimentos_ar_status(row.iloc[7] if df.shape[1] > 7 else ""),
+                "origem_arquivo": origem_nome,
+            })
+    return rows
+
+def procedimentos_ar_df(db):
+    rows = []
+    for r in db.query(ProcedimentoAltoRiscoRegistro).order_by(ProcedimentoAltoRiscoRegistro.padrao, ProcedimentoAltoRiscoRegistro.elemento).all():
+        rows.append({
+            "ID": r.id,
+            "Padrão / Procedimento": r.padrao or "—",
+            "Aba origem": r.aba_origem or "—",
+            "Elemento": r.elemento or "—",
+            "Etapa": r.etapa or "—",
+            "Expectativa de desempenho": r.expectativa or "—",
+            "Fonte / Diretriz": r.fonte or "—",
+            "Regulamentação": r.regulamentacao or "—",
+            "Periodicidade": r.periodicidade or "—",
+            "Pergunta de auditoria": r.pergunta or "—",
+            "Resposta / Evidência": r.resposta or "—",
+            "Desempenho": procedimentos_ar_status(r.desempenho),
+            "Origem arquivo": r.origem_arquivo or "—",
+        })
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df["Atendido"] = df["Desempenho"].apply(procedimentos_ar_atendido_status)
+    return df
+
+def procedimentos_ar_filtrar_df(df, padroes=None, etapas=None, desempenho=None, fontes=None, periodicidades=None):
+    f = df.copy()
+    if padroes: f = f[f["Padrão / Procedimento"].isin(padroes)]
+    if etapas: f = f[f["Etapa"].astype(str).isin([str(x) for x in etapas])]
+    if desempenho: f = f[f["Desempenho"].isin(desempenho)]
+    if fontes: f = f[f["Fonte / Diretriz"].isin(fontes)]
+    if periodicidades: f = f[f["Periodicidade"].isin(periodicidades)]
+    return f
+
+def procedimentos_ar_kpis(df):
+    total = len(df) if df is not None else 0
+    conf = int((df["Desempenho"] == "Conforme").sum()) if total and "Desempenho" in df.columns else 0
+    parcial = int((df["Desempenho"] == "Conformidade Parcial").sum()) if total and "Desempenho" in df.columns else 0
+    nc = int((df["Desempenho"] == "Não Conforme").sum()) if total and "Desempenho" in df.columns else 0
+    taxa = round(conf / total * 100, 1) if total else 0
+    return total, conf, parcial, nc, taxa
+
+def procedimentos_ar_submodulo_home_card(db):
+    df = procedimentos_ar_df(db)
+    total, conf, parcial, nc, taxa = procedimentos_ar_kpis(df)
+    return [
+        ("Procedimentos • Itens", total, "Padrões de alto risco"),
+        ("Procedimentos • Conformidade", f"{taxa}%", "Itens conformes / total"),
+        ("Procedimentos • Parciais", parcial, "Itens em conformidade parcial"),
+        ("Procedimentos • Não conformes", nc, "Itens com lacuna"),
+    ]
+
+def procedimentos_ar_dashboard(db,u):
+    header("Dashboard Procedimentos de Alto Risco", "Visão dos padrões/procedimentos do High Risk Framework, segmentados por padrão, etapa, fonte e desempenho")
+    df = procedimentos_ar_df(db)
+    if df.empty:
+        empty_state("Nenhum procedimento de alto risco carregado.")
+        return
+    mostrar_ultima_atualizacao_modulo(db, "ehs", u)
+    with st.expander("Filtros", expanded=True):
+        c1,c2,c3,c4 = st.columns(4)
+        padroes = c1.multiselect("Padrão / Procedimento", sorted(df["Padrão / Procedimento"].dropna().unique()))
+        etapas = c2.multiselect("Etapa", sorted(df["Etapa"].dropna().astype(str).unique()))
+        desempenho = c3.multiselect("Desempenho", [s for s in PROCEDIMENTOS_AR_STATUS_ORDER if s in set(df["Desempenho"])])
+        fontes_opts = sorted([x for x in df["Fonte / Diretriz"].dropna().unique() if x and x != "—"])
+        fontes = c4.multiselect("Fonte / Diretriz", fontes_opts[:80])
+        periodicidades = st.multiselect("Periodicidade", sorted([x for x in df["Periodicidade"].dropna().unique() if x and x != "—"]))
+    f = procedimentos_ar_filtrar_df(df, padroes, etapas, desempenho, fontes, periodicidades)
+    total, conf, parcial, nc, taxa = procedimentos_ar_kpis(f)
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Itens avaliados", total)
+    c2.metric("Conformidade", f"{taxa}%")
+    c3.metric("Parciais", parcial)
+    c4.metric("Não conformes", nc)
+    tabs = st.tabs(["Resumo", "Padrões", "Lacunas", "Base"])
+    with tabs[0]:
+        a1,a2 = st.columns(2)
+        with a1:
+            status_df = f.groupby("Desempenho", as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
+            if not status_df.empty:
+                fig = px.bar(status_df, x="Desempenho", y="Quantidade", color="Desempenho", text="Quantidade", title="Distribuição por desempenho", category_orders={"Desempenho": PROCEDIMENTOS_AR_STATUS_ORDER}, color_discrete_map=PROCEDIMENTOS_AR_STATUS_COLOR_MAP)
+                fig.update_layout(template="plotly_white", showlegend=False)
+                fig.update_traces(textposition="outside", textfont_color="#111827")
+                plotly_chart_safe(fig, use_container_width=True)
+            else:
+                empty_state("Sem dados para os filtros.")
+        with a2:
+            pad_df = f.groupby("Padrão / Procedimento", as_index=False).agg(Total=("ID","count"), Conformes=("Atendido","sum")) if not f.empty else pd.DataFrame()
+            if not pad_df.empty:
+                pad_df["Conformidade %"] = (pad_df["Conformes"] / pad_df["Total"] * 100).round(1)
+                fig = px.bar(pad_df.sort_values("Conformidade %"), x="Conformidade %", y="Padrão / Procedimento", orientation="h", text="Conformidade %", color="Conformidade %", title="Conformidade por padrão/procedimento", color_continuous_scale=["#dc2626", "#f59e0b", "#16a34a"])
+                fig.update_layout(template="plotly_white", coloraxis_showscale=False, xaxis_range=[0,100])
+                fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside", textfont_color="#111827")
+                plotly_chart_safe(fig, use_container_width=True)
+            else:
+                empty_state("Sem dados por procedimento.")
+    with tabs[1]:
+        pad_status = f.groupby(["Padrão / Procedimento","Desempenho"], as_index=False).size().rename(columns={"size":"Quantidade"}) if not f.empty else pd.DataFrame()
+        if not pad_status.empty:
+            fig = px.bar(pad_status, x="Padrão / Procedimento", y="Quantidade", color="Desempenho", barmode="stack", text="Quantidade", title="Itens por padrão e desempenho", category_orders={"Desempenho": PROCEDIMENTOS_AR_STATUS_ORDER}, color_discrete_map=PROCEDIMENTOS_AR_STATUS_COLOR_MAP)
+            fig.update_layout(template="plotly_white", xaxis_tickangle=-25)
+            fig.update_traces(textfont_color="#111827")
+            plotly_chart_safe(fig, use_container_width=True)
+        st.dataframe(pad_status, use_container_width=True, hide_index=True)
+    with tabs[2]:
+        lac = f[f["Desempenho"].isin(["Não Conforme", "Conformidade Parcial", "Não avaliado"])].copy()
+        if lac.empty:
+            st.success("Nenhuma lacuna encontrada nos filtros selecionados.")
+        else:
+            top = lac.groupby("Padrão / Procedimento", as_index=False).size().rename(columns={"size":"Lacunas"}).sort_values("Lacunas", ascending=False)
+            fig = px.bar(top, x="Lacunas", y="Padrão / Procedimento", orientation="h", text="Lacunas", color="Lacunas", title="Padrões com mais lacunas", color_continuous_scale=["#fef3c7", "#f59e0b", "#dc2626"])
+            fig.update_layout(template="plotly_white", coloraxis_showscale=False)
+            fig.update_traces(textposition="outside", textfont_color="#111827")
+            plotly_chart_safe(fig, use_container_width=True)
+            cols = ["Padrão / Procedimento","Elemento","Etapa","Desempenho","Pergunta de auditoria","Resposta / Evidência","Fonte / Diretriz","Periodicidade"]
+            st.dataframe(lac[cols], use_container_width=True, hide_index=True)
+    with tabs[3]:
+        cols = ["Padrão / Procedimento","Elemento","Etapa","Desempenho","Expectativa de desempenho","Pergunta de auditoria","Resposta / Evidência","Fonte / Diretriz","Periodicidade"]
+        st.dataframe(f[cols], use_container_width=True, hide_index=True)
+        download_excel_button("Exportar procedimentos filtrados", "procedimentos_alto_risco.xlsx", {"Procedimentos": f[cols]}, key="download_proc_ar_dashboard")
+
+def procedimentos_ar_base_page(db,u):
+    header("Base Procedimentos de Alto Risco", "Consulta consolidada do High Risk Framework")
+    df = procedimentos_ar_df(db)
+    if df.empty:
+        empty_state("Nenhuma base carregada.")
+        return
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Itens", len(df))
+    c2.metric("Padrões", df["Padrão / Procedimento"].nunique())
+    c3.metric("Última atualização", ultima_atualizacao_modulo(db, "ehs"))
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    download_excel_button("Exportar base de procedimentos", "base_procedimentos_alto_risco.xlsx", {"Base": df}, key="download_base_proc_ar")
+
+def procedimentos_ar_atualizar_base(db,u):
+    header("Atualizar Procedimentos de Alto Risco", "Importe a planilha High Risk Framework para substituir a base de procedimentos")
+    if not can_update_bases(u):
+        alert_card("Atualização restrita ao administrador principal.")
+        return
+    st.caption(f"Última atualização registrada: {ultima_atualizacao_modulo(db, 'ehs')}")
+    up = st.file_uploader("Selecionar planilha High Risk Framework", type=["xlsx", "xls"], key="upload_proc_alto_risco")
+    if up:
+        try:
+            regs = parse_procedimentos_alto_risco_excel(up, up.name)
+            st.success(f"Arquivo lido com {len(regs)} itens de procedimento.")
+            amostra = pd.DataFrame(regs).head(30)
+            st.dataframe(amostra, use_container_width=True, hide_index=True)
+            if st.button("Substituir base de procedimentos", use_container_width=True, type="primary", key="btn_substituir_proc_ar"):
+                db.query(ProcedimentoAltoRiscoRegistro).delete()
+                db.flush()
+                if regs:
+                    db.bulk_insert_mappings(ProcedimentoAltoRiscoRegistro, regs)
+                db.add(ProcedimentoAltoRiscoUploadHistorico(nome_arquivo=up.name, linhas_importadas=len(regs), usuario=u.nome if u else "—", observacoes="Substituição manual da base de procedimentos"))
+                db.commit()
+                st.cache_data.clear()
+                st.success("Base de procedimentos atualizada.")
+                st.rerun()
+        except Exception as e:
+            st.error(f"Falha ao processar arquivo: {e}")
 
 
 ENERGIA_SITE_INFO = {
@@ -6359,7 +6824,8 @@ def ajuda_rapida_page(db,u):
         - **Dashboard Auditoria Cruzada:** conformidade média, maturidade, PACs, NC críticas e principais gaps.
         - **Planejamento de Auditorias:** cadastro de ciclos, datas, auditores e escopo.
         - **Calendário de Auditorias:** visão mensal das auditorias planejadas, vencidas, em andamento e concluídas.
-        - **Checklist Diretrizes de EHS:** resposta item a item, evidências e nota de maturidade.
+        - **Checklist Diretrizes de EHS:** resposta item a item por Diretriz EHS 4.12, evidências e nota de maturidade.
+        - **Procedimentos de Alto Risco:** acompanhamento do High Risk Framework por padrão, etapa, fonte normativa e lacunas de execução.
         - **PAC Auditoria Cruzada:** tratamento dos gaps, responsáveis, prazos e eficácia.
 
         **Como usar:** planeje o ciclo, preencha evidências, gere PACs para gaps e monitore vencidos pela liderança do site.
@@ -6434,7 +6900,11 @@ def ajuda_rapida_page(db,u):
     - Mantenha bases oficiais atualizadas e registre evidências sempre que uma pendência for concluída.
     """)
 
+NEAR_MISS_SEED_B64 = globals().get("NEAR_MISS_SEED_B64", "")
+
 def near_miss_seed_records():
+    if not NEAR_MISS_SEED_B64:
+        return []
     try:
         raw = zlib.decompress(base64.b64decode(NEAR_MISS_SEED_B64.encode("ascii")))
         return json.loads(raw.decode("utf-8"))
@@ -8303,7 +8773,7 @@ def render_sidebar(db,u):
         st.session_state.modulo="ajuda"
         st.rerun()
     st.sidebar.divider()
-    if mod in ["energia", "nearmiss", "legal"]:
+    if mod in ["energia", "nearmiss", "legal", "ehs"]:
         mostrar_ultima_atualizacao_modulo(db, mod, u, local="sidebar")
     if mod=="ajuda":
         return
@@ -8366,7 +8836,7 @@ def render_sidebar(db,u):
             sub_opcoes=list(submodulos_visiveis("ehs",u).keys())
             idx=sub_opcoes.index(sub_atual) if sub_atual in sub_opcoes else 0
             sub=st.sidebar.selectbox("Submódulo",sub_opcoes,index=idx,key="submodulo_ehs")
-            pages=[p for p in EHS_SUBMODULOS[sub]["paginas"] if p!="Logs do Sistema" or can_admin(u)]
+            pages=[p for p in submodulos_visiveis("ehs",u)[sub]["paginas"] if p!="Logs do Sistema" or can_admin(u)]
             if current not in pages:
                 current=pages[0] if pages else EHS_HOME_PAGE
                 st.session_state.page_ehs=current
@@ -8541,6 +9011,9 @@ def route(db,u):
             "Planejamento de Auditorias": ehs_planejamento,
             "Calendário de Auditorias": ehs_calendario,
             "Checklist Diretrizes de EHS": ehs_checklist,
+            "Dashboard Procedimentos de Alto Risco": procedimentos_ar_dashboard,
+            "Base Procedimentos de Alto Risco": procedimentos_ar_base_page,
+            "Atualizar Procedimentos de Alto Risco": procedimentos_ar_atualizar_base,
             "PAC Auditoria Cruzada": ehs_pac,
             "Base do Checklist EHS": ehs_base_checklist,
             "Relatórios Auditoria Cruzada": ehs_relatorios,
