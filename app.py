@@ -70,6 +70,7 @@ MODULO_COLOR_MAP = {
     "nearmiss": {"border": "#f97316", "bg": "#fff7ed", "icon": "⚠️"},
     "legal": {"border": "#0891b2", "bg": "#ecfeff", "icon": "⚖️"},
     "relatorios": {"border": "#0f172a", "bg": "#f8fafc", "icon": "📑"},
+    "bases": {"border": "#0f172a", "bg": "#f8fafc", "icon": "📥"},
 }
 NR12_HOME_PAGE = "Submódulos da Sustentação"
 NR12_SUBMODULOS = {
@@ -237,6 +238,8 @@ LEGAL_STATUS_COLOR_MAP = {
 NOME_MODULO_RELATORIOS = "Relatórios Integrados"
 RELATORIOS_HOME_PAGE = "Submódulos de Relatórios Integrados"
 RELATORIOS_EXECUTIVO_PAGE = "Relatório Executivo Integrado"
+NOME_MODULO_BASES = "Atualização de Bases"
+BASES_PAGE = "Central de Atualização de Bases"
 RELATORIOS_SUBMODULOS = {
     "Relatórios Executivos": {
         "icone": "📑",
@@ -1956,6 +1959,7 @@ def nome_modulo_visual(modulo):
         "nearmiss": NOME_MODULO_NEARMISS,
         "legal": NOME_MODULO_LEGAL,
         "relatorios": NOME_MODULO_RELATORIOS,
+        "bases": NOME_MODULO_BASES,
         "usuarios": "Usuários e Acessos",
         "ajuda": AJUDA_PAGE,
     }.get(modulo, "Página inicial")
@@ -1985,6 +1989,9 @@ def render_breadcrumb():
     elif modulo == "usuarios":
         pagina = "Usuários e Acessos"
         home_mod = "Usuários e Acessos"
+    elif modulo == "bases":
+        pagina = BASES_PAGE
+        home_mod = BASES_PAGE
     elif modulo == "ajuda":
         pagina = AJUDA_PAGE
         home_mod = AJUDA_PAGE
@@ -2094,6 +2101,9 @@ def render_user_context_sidebar(db,u):
         if st.sidebar.button("👥 Usuários e acessos", use_container_width=True, key="sidebar_usuarios_acessos"):
             st.session_state.modulo="usuarios"
             st.rerun()
+        if st.sidebar.button("📥 Atualização de bases", use_container_width=True, key="sidebar_atualizacao_bases"):
+            st.session_state.modulo="bases"
+            st.rerun()
     st.sidebar.divider()
 
 def ultima_atualizacao_modulo(db, modulo):
@@ -2132,9 +2142,15 @@ def submodulos_visiveis(modulo, u):
         "legal": LEGAL_SUBMODULOS,
         "relatorios": RELATORIOS_SUBMODULOS,
     }.get(modulo, {})
-    proibidas = set()
-    if not can_update_bases(u):
-        proibidas.update(["Atualizar Base", "Actual Hours", "Atualizar Base Near Miss", "Atualizar Base Legal"])
+    # As rotinas de atualização/importação de bases ficam centralizadas
+    # no módulo administrativo "Atualização de Bases".
+    proibidas = {
+        "Atualizar Base",
+        "Actual Hours",
+        "Atualizar Base Near Miss",
+        "Atualizar Base Legal",
+        "Atualizar Procedimentos de Alto Risco",
+    }
     out = {}
     for nome, cfg in base.items():
         paginas = [p for p in cfg.get("paginas", []) if p not in proibidas]
@@ -2144,6 +2160,65 @@ def submodulos_visiveis(modulo, u):
         novo["paginas"] = paginas
         out[nome] = novo
     return out
+
+def bases_status_df(db):
+    """Resumo simples das últimas cargas registradas por base oficial."""
+    linhas = []
+    def add(modulo, base, tabela_cls=None, hist_cls=None, extra_filter=None):
+        ultima = ultima_atualizacao_modulo(db, modulo)
+        total = None
+        try:
+            if tabela_cls is not None:
+                q = db.query(tabela_cls)
+                if extra_filter is not None:
+                    q = extra_filter(q)
+                total = q.count()
+        except Exception:
+            total = None
+        linhas.append({
+            "Módulo": modulo,
+            "Base": base,
+            "Registros atuais": "—" if total is None else int(total),
+            "Última atualização": ultima,
+        })
+    add("energia", "Energia, gás e emissões", EnergiaRegistro)
+    add("energia", "Actual Hours", EnergiaActualHours)
+    add("nearmiss", "Concern Reports / Near Miss", NearMissRegistro)
+    add("legal", "Legislação e Obrigações", LegalRegistro)
+    add("ehs", "Procedimentos de Alto Risco", ProcedimentoAltoRiscoRegistro)
+    return pd.DataFrame(linhas)
+
+def bases_atualizacoes_page(db,u):
+    header(NOME_MODULO_BASES, "Central única para importação e manutenção das bases oficiais da plataforma")
+    if not is_super_admin_user(u):
+        alert_card("Acesso restrito ao administrador principal.")
+        return
+    c_back, c_spacer = st.columns([1.1,5])
+    with c_back:
+        if st.button("⬅️ Voltar para página inicial", key="bases_voltar_inicio", use_container_width=True):
+            st.session_state.modulo="home"
+            st.rerun()
+    section("Resumo das bases")
+    resumo = bases_status_df(db)
+    st.dataframe(resumo, use_container_width=True, hide_index=True)
+    st.caption("As telas de atualização foram removidas dos módulos operacionais e concentradas nesta central administrativa.")
+    tabs = st.tabs([
+        "Energia e Emissões",
+        "Actual Hours",
+        "Near Miss",
+        "Legislação",
+        "Procedimentos de Alto Risco",
+    ])
+    with tabs[0]:
+        energia_atualizar_base(db,u)
+    with tabs[1]:
+        energia_actual_hours_page(db,u)
+    with tabs[2]:
+        near_miss_atualizar_base(db,u)
+    with tabs[3]:
+        legal_atualizar_base(db,u)
+    with tabs[4]:
+        procedimentos_ar_atualizar_base(db,u)
 
 def usuarios_admin_page(db,u):
     header("Usuários e Acessos", "Gestão de logins, perfis e segmentação por site")
@@ -2393,11 +2468,16 @@ def home_page(db,u):
 
     if is_super_admin_user(u):
         section("Administração")
-        c_admin, c_space = st.columns([1,3])
-        with c_admin:
+        c_admin1, c_admin2, c_space = st.columns([1,1,2])
+        with c_admin1:
             module_card("Usuários e Acessos", "Criação de logins, perfis e segmentação por site.", "👥", "#0f172a", "#f8fafc")
             if st.button("Acessar Usuários e Acessos", use_container_width=True, key="home_usuarios_acessos"):
                 st.session_state.modulo="usuarios"
+                st.rerun()
+        with c_admin2:
+            module_card(NOME_MODULO_BASES, "Importação e manutenção centralizada das bases oficiais da plataforma.", "📥", "#0f172a", "#f8fafc")
+            if st.button("Acessar Atualização de Bases", use_container_width=True, key="home_atualizacao_bases"):
+                st.session_state.modulo="bases"
                 st.rerun()
 
     dashboard_integrado(db,u)
@@ -6240,7 +6320,7 @@ def seed_energia_registros_inicial(db):
     """Carrega a base inicial de energia/gás/emissões enviada pelo usuário.
 
     A carga ocorre somente quando EnergiaRegistro ainda está vazio, para não
-    sobrescrever atualizações futuras feitas pela tela Atualizar Base.
+    sobrescrever atualizações futuras feitas pela central Atualização de Bases.
     """
     if db.query(EnergiaRegistro).count() > 0:
         return
@@ -6865,7 +6945,7 @@ def energia_dashboard(db,u):
     df = energia_consolidado(db)
     df = filtrar_df_por_site_codigo(df, u, db, "Site")
     if df.empty:
-        empty_state("Nenhuma base de energia carregada. Acesse 'Atualizar Base' para importar os arquivos GAS_ENERGIA_CONTROLE_MENSAL e EMISSOES.")
+        empty_state("Nenhuma base de energia carregada. Acesse a central 'Atualização de Bases' para importar os arquivos GAS_ENERGIA_CONTROLE_MENSAL e EMISSOES.")
         return
     f, r12_mes, usar_irec = energia_dash_filters(df, "energia_dash")
     if f.empty:
@@ -7316,7 +7396,7 @@ def ajuda_rapida_page(db,u):
         - **Base Consolidada:** consulta mensal detalhada dos registros tratados.
         - **Parâmetros:** metas, FY atual, conversões e premissas.
 
-        **Atualização de base:** disponível apenas para Eduardo. Demais perfis visualizam a data da última atualização.
+        **Atualização de base:** centralizada no módulo administrativo Atualização de Bases e disponível apenas para Eduardo. Demais perfis visualizam a data da última atualização.
         """)
     with tabs[3]:
         st.markdown("""
@@ -7364,7 +7444,7 @@ def ajuda_rapida_page(db,u):
         - Cada usuário deve ser atribuído a um site específico.
         - Técnicos de EHS podem editar dados do próprio site.
         - Visualizadores apenas consultam dados do próprio site.
-        - Atualização de bases fica bloqueada e oculta para todos, exceto Eduardo.
+        - Atualização de bases fica centralizada e oculta para todos, exceto Eduardo.
         """)
 
     section("Boas práticas de uso")
@@ -9463,6 +9543,8 @@ def route(db,u):
         ajuda_rapida_page(db,u)
     elif mod=="usuarios":
         usuarios_admin_page(db,u)
+    elif mod=="bases":
+        bases_atualizacoes_page(db,u)
     elif mod=="nr12":
         paginas={
             NR12_HOME_PAGE:nr12_submodulos_home,
