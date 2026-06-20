@@ -247,6 +247,12 @@ RELATORIOS_SUBMODULOS = {
         "cor": "#0f172a",
         "paginas": [RELATORIOS_EXECUTIVO_PAGE],
     },
+    "Exportação Gensuite ATS": {
+        "icone": "📤",
+        "descricao": "Exportação única de todas as ações corretivas no layout do template ATS/Gensuite.",
+        "cor": "#2563eb",
+        "paginas": ["Exportação Gensuite ATS"],
+    },
 }
 RELATORIOS_STATUS_COLOR_MAP = {
     "Controlado": "#16a34a",
@@ -301,6 +307,78 @@ STATUS_MOC = ["Aberta","Em análise","Aprovada","Implementada","Validada","Repro
 STATUS_AUDITORIA = ["Planejada","Em andamento","Concluída","Cancelada"]
 STATUS_RESPOSTA_EHS = ["Conforme","Parcialmente Conforme","Não Conforme"]
 TIPOS_ACHADO_EHS = ["Não conformidade crítica","Não conformidade maior","Não conformidade menor","Observação","Oportunidade de melhoria","Boa prática"]
+
+
+# Campos padronizados para integração com o template Gensuite ATS
+ATS_TEMPLATE_HEADERS = [
+    "Group", "Business Unit", "Action Title (Name / Number)", "Action Date", "Audit/Action Type",
+    "Action Type", "Action Category", "Finding Element", "Finding Citation(s)", "Number of Items in Action",
+    "Repeat Action?", "Risk Category", "Closure Category", "Dept", "Sub-Dept", "Building", "Workstation",
+    "Responsible Person", "Action Description", "Action Corrective Action", "Auditor/Contact", "Phone",
+    "Closure Due Date", "Closure Due Date", "Status", "Close Date", "Close Comment", "Closure Person",
+    "Finding Reference Type", "Reference ID", "Multiple Email CC", "Closure Verification Person",
+    "Closure Verification Due Date", "Reminder Email Days Prior", "CAPA Required", "Investigation Details",
+    "Root Cause", "Basic Root Cause", "Near Root Cause"
+]
+ATS_FIELD_TO_HEADER = {
+    "ats_group": "Group",
+    "ats_business_unit": "Business Unit",
+    "ats_action_title": "Action Title (Name / Number)",
+    "ats_action_date": "Action Date",
+    "ats_audit_action_type": "Audit/Action Type",
+    "ats_action_type": "Action Type",
+    "ats_action_category": "Action Category",
+    "ats_finding_element": "Finding Element",
+    "ats_finding_citations": "Finding Citation(s)",
+    "ats_number_items": "Number of Items in Action",
+    "ats_repeat_action": "Repeat Action?",
+    "ats_risk_category": "Risk Category",
+    "ats_closure_category": "Closure Category",
+    "ats_department": "Dept",
+    "ats_subdepartment": "Sub-Dept",
+    "ats_building": "Building",
+    "ats_workstation": "Workstation",
+    "ats_responsible_person": "Responsible Person",
+    "ats_action_description": "Action Description",
+    "ats_corrective_action": "Action Corrective Action",
+    "ats_auditor_contact": "Auditor/Contact",
+    "ats_phone": "Phone",
+    "ats_closure_due_date": "Closure Due Date",
+    "ats_closure_due_date_gt90": "Closure Due Date",
+    "ats_status": "Status",
+    "ats_close_date": "Close Date",
+    "ats_close_comment": "Close Comment",
+    "ats_closure_person": "Closure Person",
+    "ats_finding_reference_type": "Finding Reference Type",
+    "ats_reference_id": "Reference ID",
+    "ats_multiple_email_cc": "Multiple Email CC",
+    "ats_closure_verification_person": "Closure Verification Person",
+    "ats_closure_verification_due_date": "Closure Verification Due Date",
+    "ats_reminder_email_days_prior": "Reminder Email Days Prior",
+    "ats_capa_required": "CAPA Required",
+    "ats_investigation_details": "Investigation Details",
+    "ats_root_cause": "Root Cause",
+    "ats_basic_root_cause": "Basic Root Cause",
+    "ats_near_root_cause": "Near Root Cause",
+}
+ATS_DB_FIELDS = list(ATS_FIELD_TO_HEADER.keys())
+ATS_GROUP_OPTIONS = ["Aerospace", "Demonstration", "Engineered Materials", "Filtration", "Fluid Connectors", "JV", "Motion Systems", "Sales and Service"]
+ATS_BRAZIL_SITE_OPTIONS = ["Cachoeirinha", "Jacarei", "Jundiai", "Sao Jose dos Campos", "Diadema FCG", "Sao Paulo"]
+ATS_AUDIT_TYPE_OPTIONS = ["4. Safety", "Boiler / Machinery", "Business Audit", "Integration Audit", "Third Party Audit", "Standards / Directives", "5S", "Behavior Based Safety", "Clinic Audit", "Environmental Inspection", "HPT", "Incident Investigation", "Layered Audit", "Management of Change (MOC)", "Other Audit", "Safety Inspection", "Safety Team", "Self-Assessment Audit"]
+ATS_ACTION_TYPE_OPTIONS = ["Compliance", "Risk Management", "Policy and Systems", "Process Improvement"]
+ATS_CATEGORY_OPTIONS = ["Noise, Odors, Other", "Egress/Fire Protection", "Emergency Planning & Response", "Medical", "Air", "Chemical Management", "Dangerous Goods Transport", "Other Regulatory and Risk", "Tanks & Containments", "Waste", "Waste Minimization", "Waste Vendor Management", "Water", "Asbestos and Materials Management & Exposure", "Biologicals Management & Exposure", "Chemical Management & Exposure", "Ergonomics", "Food & Drink Management", "Hazard Communication", "Hearing Conservation/Noise Exposure", "Medical Surveillance", "Personal Protective Equipment", "Radiation - Ionizing & Non-Ionizing", "Ventilation", "Business Continuity/Incident Mgmt", "Drivers Safety/Pedestrian Safety", "EHS Management", "EHS Policy", "Permits", "Product Environmental Compliance", "Training", "Facility", "Property Risk", "Confined Space", "Contractor Safety", "Electrical Safety", "Equipment Safety", "Field Service Personnel", "Hazardous Materials Receiving, Storage & Use", "High Risk Operations", "Housekeeping, 5S", "Incident & Injury Recordkeeping", "LOTO/ Control of Hazardous Energy", "Machine Guarding", "Other Regulatory & Risk", "Process Safety", "Safety Signs & Warnings", "Walking & Working Surfaces"]
+ATS_CLOSURE_CATEGORY_OPTIONS = ["1 day", "3 day", "5 day", "7 day", "15 day", "30 day", "60 day", "90 day", ">90 day"]
+ATS_RISK_CATEGORY_OPTIONS = ["High", "Medium", "Low", "Evaluation", "Recommended Practice"]
+ATS_YES_NO_OPTIONS = ["Yes", "No"]
+ATS_STATUS_OPTIONS = ["Open", "Closed"]
+ATS_DEPT_OPTIONS = ["EHS", "Maintenance", "Engineering", "Production", "Operations", "Facilities", "Warehouse", "Quality", "Logistics", "Shipping", "Receiving", "Office Areas", "Entire Facility"]
+ATS_BUILDING_OPTIONS = ["Main Building", "Plant Wide", "Site Externals", "Warehouse", "Office Areas", "Grounds", "Cachoeirinha", "Jacarei", "Jundiai", "Sao Jose dos Campos", "Diadema FCG", "Sao Paulo"]
+ATS_SITE_TO_GROUP = {"CAC": "Motion Systems", "JAC": "Motion Systems", "JUN": "Engineered Materials", "PER": "Engineered Materials", "SJC": "Filtration", "DIA": "Fluid Connectors"}
+ATS_SITE_TO_BUSINESS_UNIT = {"CAC": "Cachoeirinha", "JAC": "Jacarei", "JUN": "Jundiai", "PER": "Sao Paulo", "SJC": "Sao Jose dos Campos", "DIA": "Diadema FCG"}
+ATS_STATUS_FROM_PAC = {"Aberta": "Open", "Em andamento": "Open", "Aguardando validação": "Open", "Vencida": "Open", "Concluída": "Closed", "Cancelada": "Closed"}
+ATS_RISCO_FROM_CLASSIFICACAO = {"Crítico": "High", "Maior": "Medium", "Menor": "Low", "Alta": "High", "Média": "Medium", "Baixa": "Low"}
+ATS_CATEGORIA_NR12_DEFAULT = "Machine Guarding"
+ATS_CATEGORIA_EHS_DEFAULT = "EHS Management"
 
 CHECKLIST_NR12 = {
 "Checklist operacional":[
@@ -725,7 +803,10 @@ class ChecklistPerguntaVersaoMaquinas(Base):
 class RespostaNR12(Base):
     __tablename__="respostas_nr12"; id=Column(Integer,primary_key=True); verificacao_id=Column(Integer,ForeignKey("verificacoes_nr12.id")); item_id=Column(Integer,ForeignKey("checklist_itens_nr12.id")); aplicavel=Column(Boolean,default=True); resultado=Column(String(60)); comentario_evidencia=Column(Text); gerar_pac=Column(Boolean,default=False); ordem_snapshot=Column(Integer); pergunta_snapshot=Column(Text); item_critico_snapshot=Column(Boolean,default=False); gera_pac_automatico_snapshot=Column(Boolean,default=False); item=relationship("ChecklistItemNR12")
 class PACNR12(Base):
-    __tablename__="pac_nr12"; id=Column(Integer,primary_key=True); origem=Column(String(120)); site_id=Column(Integer,ForeignKey("sites.id")); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); verificacao_id=Column(Integer,ForeignKey("verificacoes_nr12.id")); item_checklist=Column(Text); descricao_desvio=Column(Text); classificacao=Column(String(40)); responsavel=Column(String(120)); area_responsavel=Column(String(120)); prazo=Column(Date); status=Column(String(60)); evidencia_conclusao=Column(Text); validacao_ehs=Column(Boolean,default=False); data_conclusao=Column(Date); comentarios=Column(Text); verificacao_eficacia=Column(Text); criado_em=Column(DateTime,default=datetime.utcnow); maquina=relationship("MaquinaNR12")
+    __tablename__="pac_nr12"
+    id=Column(Integer,primary_key=True); origem=Column(String(120)); site_id=Column(Integer,ForeignKey("sites.id")); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); verificacao_id=Column(Integer,ForeignKey("verificacoes_nr12.id")); item_checklist=Column(Text); descricao_desvio=Column(Text); classificacao=Column(String(40)); responsavel=Column(String(120)); area_responsavel=Column(String(120)); prazo=Column(Date); status=Column(String(60)); evidencia_conclusao=Column(Text); validacao_ehs=Column(Boolean,default=False); data_conclusao=Column(Date); comentarios=Column(Text); verificacao_eficacia=Column(Text); criado_em=Column(DateTime,default=datetime.utcnow)
+    ats_group=Column(String(180)); ats_business_unit=Column(String(180)); ats_action_title=Column(String(180)); ats_action_date=Column(Date); ats_audit_action_type=Column(String(180)); ats_action_type=Column(String(180)); ats_action_category=Column(String(180)); ats_finding_element=Column(String(180)); ats_finding_citations=Column(String(180)); ats_number_items=Column(Integer); ats_repeat_action=Column(String(180)); ats_risk_category=Column(String(180)); ats_closure_category=Column(String(180)); ats_department=Column(String(180)); ats_subdepartment=Column(String(180)); ats_building=Column(String(180)); ats_workstation=Column(String(180)); ats_responsible_person=Column(String(180)); ats_action_description=Column(Text); ats_corrective_action=Column(Text); ats_auditor_contact=Column(String(180)); ats_phone=Column(String(180)); ats_closure_due_date=Column(Date); ats_closure_due_date_gt90=Column(Date); ats_status=Column(String(180)); ats_close_date=Column(Date); ats_close_comment=Column(Text); ats_closure_person=Column(String(180)); ats_finding_reference_type=Column(String(180)); ats_reference_id=Column(String(180)); ats_multiple_email_cc=Column(String(180)); ats_closure_verification_person=Column(String(180)); ats_closure_verification_due_date=Column(Date); ats_reminder_email_days_prior=Column(String(180)); ats_capa_required=Column(String(180)); ats_investigation_details=Column(Text); ats_root_cause=Column(String(180)); ats_basic_root_cause=Column(String(180)); ats_near_root_cause=Column(String(180))
+    maquina=relationship("MaquinaNR12")
 class MOCNR12(Base):
     __tablename__="moc_nr12"; id=Column(Integer,primary_key=True); maquina_id=Column(Integer,ForeignKey("maquinas_nr12.id")); site_id=Column(Integer,ForeignKey("sites.id")); tipo_mudanca=Column(String(180)); descricao=Column(Text); solicitante=Column(String(120)); area_solicitante=Column(String(120)); data=Column(Date); impacta_seguranca=Column(Boolean,default=False); exige_moc=Column(Boolean,default=False); status=Column(String(60)); aprovacao_ehs=Column(Boolean,default=False); aprovacao_manutencao=Column(Boolean,default=False); aprovacao_engenharia=Column(Boolean,default=False); aprovacao_producao=Column(Boolean,default=False); necessita_auditoria_pos_mudanca=Column(Boolean,default=False); necessita_treinamento=Column(Boolean,default=False); anexos=Column(Text); observacoes=Column(Text); validacao_final=Column(Boolean,default=False); criado_em=Column(DateTime,default=datetime.utcnow); maquina=relationship("MaquinaNR12")
 class TermoGarantiaNR12(Base):
@@ -747,7 +828,10 @@ class AuditoriaCruzada(Base):
 class RespostaAuditoriaEHS(Base):
     __tablename__="respostas_auditoria_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); aplicavel=Column(Boolean,default=True); status=Column(String(60)); nota_maturidade=Column(Float,default=3); evidencia_verificada=Column(Text); comentario_auditor=Column(Text); necessita_pac=Column(Boolean,default=False); versao_checklist_id=Column(Integer,ForeignKey("checklist_versoes_ehs.id")); pergunta_snapshot=Column(Text); criticidade_snapshot=Column(String(40)); evidencia_esperada_snapshot=Column(Text); gera_pac_automatico_snapshot=Column(Boolean,default=False); requisito=relationship("RequisitoEHS"); __table_args__=(UniqueConstraint("auditoria_id","requisito_id",name="uq_resp_auditoria_requisito"),)
 class PACEHS(Base):
-    __tablename__="pac_ehs"; id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); site_id=Column(Integer,ForeignKey("sites.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); tipo_achado=Column(String(80)); descricao=Column(Text); evidencia=Column(Text); risco=Column(Text); causa_raiz=Column(Text); acao_imediata=Column(Text); acao_corretiva=Column(Text); responsavel=Column(String(120)); area_responsavel=Column(String(120)); prazo=Column(Date); status=Column(String(60)); prioridade_criticidade=Column(String(40)); evidencia_conclusao=Column(Text); validacao_ehs=Column(Boolean,default=False); data_conclusao=Column(Date); verificacao_eficacia=Column(Text); status_eficacia=Column(String(80)); criado_em=Column(DateTime,default=datetime.utcnow); requisito=relationship("RequisitoEHS")
+    __tablename__="pac_ehs"
+    id=Column(Integer,primary_key=True); auditoria_id=Column(Integer,ForeignKey("auditorias_cruzadas.id")); site_id=Column(Integer,ForeignKey("sites.id")); requisito_id=Column(Integer,ForeignKey("requisitos_ehs.id")); tipo_achado=Column(String(80)); descricao=Column(Text); evidencia=Column(Text); risco=Column(Text); causa_raiz=Column(Text); acao_imediata=Column(Text); acao_corretiva=Column(Text); responsavel=Column(String(120)); area_responsavel=Column(String(120)); prazo=Column(Date); status=Column(String(60)); prioridade_criticidade=Column(String(40)); evidencia_conclusao=Column(Text); validacao_ehs=Column(Boolean,default=False); data_conclusao=Column(Date); verificacao_eficacia=Column(Text); status_eficacia=Column(String(80)); criado_em=Column(DateTime,default=datetime.utcnow)
+    ats_group=Column(String(180)); ats_business_unit=Column(String(180)); ats_action_title=Column(String(180)); ats_action_date=Column(Date); ats_audit_action_type=Column(String(180)); ats_action_type=Column(String(180)); ats_action_category=Column(String(180)); ats_finding_element=Column(String(180)); ats_finding_citations=Column(String(180)); ats_number_items=Column(Integer); ats_repeat_action=Column(String(180)); ats_risk_category=Column(String(180)); ats_closure_category=Column(String(180)); ats_department=Column(String(180)); ats_subdepartment=Column(String(180)); ats_building=Column(String(180)); ats_workstation=Column(String(180)); ats_responsible_person=Column(String(180)); ats_action_description=Column(Text); ats_corrective_action=Column(Text); ats_auditor_contact=Column(String(180)); ats_phone=Column(String(180)); ats_closure_due_date=Column(Date); ats_closure_due_date_gt90=Column(Date); ats_status=Column(String(180)); ats_close_date=Column(Date); ats_close_comment=Column(Text); ats_closure_person=Column(String(180)); ats_finding_reference_type=Column(String(180)); ats_reference_id=Column(String(180)); ats_multiple_email_cc=Column(String(180)); ats_closure_verification_person=Column(String(180)); ats_closure_verification_due_date=Column(Date); ats_reminder_email_days_prior=Column(String(180)); ats_capa_required=Column(String(180)); ats_investigation_details=Column(Text); ats_root_cause=Column(String(180)); ats_basic_root_cause=Column(String(180)); ats_near_root_cause=Column(String(180))
+    requisito=relationship("RequisitoEHS")
 
 class ProcedimentoAltoRiscoRegistro(Base):
     __tablename__ = "procedimentos_alto_risco_registros"
@@ -988,6 +1072,84 @@ def ensure_schema_updates():
     safe_add_column("respostas_auditoria_ehs", "criticidade_snapshot", "VARCHAR(40)")
     safe_add_column("respostas_auditoria_ehs", "evidencia_esperada_snapshot", "TEXT")
     safe_add_column("respostas_auditoria_ehs", "gera_pac_automatico_snapshot", "BOOLEAN DEFAULT 0")
+    safe_add_column("pac_nr12", "ats_group", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_group", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_business_unit", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_business_unit", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_action_title", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_action_title", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_action_date", "DATE")
+    safe_add_column("pac_ehs", "ats_action_date", "DATE")
+    safe_add_column("pac_nr12", "ats_audit_action_type", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_audit_action_type", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_action_type", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_action_type", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_action_category", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_action_category", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_finding_element", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_finding_element", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_finding_citations", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_finding_citations", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_number_items", "INTEGER")
+    safe_add_column("pac_ehs", "ats_number_items", "INTEGER")
+    safe_add_column("pac_nr12", "ats_repeat_action", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_repeat_action", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_risk_category", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_risk_category", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_closure_category", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_closure_category", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_department", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_department", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_subdepartment", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_subdepartment", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_building", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_building", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_workstation", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_workstation", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_responsible_person", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_responsible_person", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_action_description", "TEXT")
+    safe_add_column("pac_ehs", "ats_action_description", "TEXT")
+    safe_add_column("pac_nr12", "ats_corrective_action", "TEXT")
+    safe_add_column("pac_ehs", "ats_corrective_action", "TEXT")
+    safe_add_column("pac_nr12", "ats_auditor_contact", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_auditor_contact", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_phone", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_phone", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_closure_due_date", "DATE")
+    safe_add_column("pac_ehs", "ats_closure_due_date", "DATE")
+    safe_add_column("pac_nr12", "ats_closure_due_date_gt90", "DATE")
+    safe_add_column("pac_ehs", "ats_closure_due_date_gt90", "DATE")
+    safe_add_column("pac_nr12", "ats_status", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_status", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_close_date", "DATE")
+    safe_add_column("pac_ehs", "ats_close_date", "DATE")
+    safe_add_column("pac_nr12", "ats_close_comment", "TEXT")
+    safe_add_column("pac_ehs", "ats_close_comment", "TEXT")
+    safe_add_column("pac_nr12", "ats_closure_person", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_closure_person", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_finding_reference_type", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_finding_reference_type", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_reference_id", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_reference_id", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_multiple_email_cc", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_multiple_email_cc", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_closure_verification_person", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_closure_verification_person", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_closure_verification_due_date", "DATE")
+    safe_add_column("pac_ehs", "ats_closure_verification_due_date", "DATE")
+    safe_add_column("pac_nr12", "ats_reminder_email_days_prior", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_reminder_email_days_prior", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_capa_required", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_capa_required", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_investigation_details", "TEXT")
+    safe_add_column("pac_ehs", "ats_investigation_details", "TEXT")
+    safe_add_column("pac_nr12", "ats_root_cause", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_root_cause", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_basic_root_cause", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_basic_root_cause", "VARCHAR(180)")
+    safe_add_column("pac_nr12", "ats_near_root_cause", "VARCHAR(180)")
+    safe_add_column("pac_ehs", "ats_near_root_cause", "VARCHAR(180)")
 
 def get_versao_ativa_maquinas(db, tipo_checklist):
     return db.query(ChecklistVersaoMaquinas).filter_by(tipo_checklist=tipo_checklist, ativo=True).order_by(ChecklistVersaoMaquinas.versao.desc(), ChecklistVersaoMaquinas.id.desc()).first()
@@ -1405,6 +1567,228 @@ def site_code(db,id):
     return site_label(s.codigo) if s else "—"
 def machine_options(db,ids): return {f"{m.codigo} — {m.nome}":m.id for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).order_by(MaquinaNR12.codigo)}
 def identificar_pac_vencido(prazo,status): return bool(as_date(prazo) and as_date(prazo)<date.today() and status not in ["Concluída","Cancelada"])
+
+
+def ats_headers_unicos(headers=None):
+    vistos = {}
+    saida = []
+    for h in headers or ATS_TEMPLATE_HEADERS:
+        vistos[h] = vistos.get(h, 0) + 1
+        saida.append(h if vistos[h] == 1 else f"{h} ({vistos[h]})")
+    return saida
+
+def ats_add_current_value(options, value):
+    opts = [str(x) for x in (options or []) if str(x or "").strip()]
+    val = "" if value is None else str(value).strip()
+    if val and val not in opts:
+        opts = [val] + opts
+    return opts or [""]
+
+def ats_selectbox(label, options, value=None, key=None):
+    opts = ats_add_current_value(options, value)
+    idx = opts.index(str(value).strip()) if value is not None and str(value).strip() in opts else 0
+    return st.selectbox(label, opts, index=idx, key=key)
+
+def ats_status_from_pac(status):
+    return ATS_STATUS_FROM_PAC.get(str(status or "").strip(), "Open")
+
+def ats_risk_from_priority(valor):
+    return ATS_RISCO_FROM_CLASSIFICACAO.get(str(valor or "").strip(), "Medium")
+
+def ats_closure_category_from_dates(data_base=None, prazo=None):
+    base = as_date(data_base) or date.today()
+    due = as_date(prazo)
+    if not due:
+        return "30 day"
+    dias = max(0, (due - base).days)
+    if dias <= 1: return "1 day"
+    if dias <= 3: return "3 day"
+    if dias <= 5: return "5 day"
+    if dias <= 7: return "7 day"
+    if dias <= 15: return "15 day"
+    if dias <= 30: return "30 day"
+    if dias <= 60: return "60 day"
+    if dias <= 90: return "90 day"
+    return ">90 day"
+
+def ats_group_default(site_codigo):
+    return ATS_SITE_TO_GROUP.get(normalize_site_code(site_codigo), ATS_GROUP_OPTIONS[0])
+
+def ats_business_unit_default(site_codigo):
+    return ATS_SITE_TO_BUSINESS_UNIT.get(normalize_site_code(site_codigo), str(site_codigo or ""))
+
+def ats_defaults_genericos(db, site_id=None, titulo="", descricao="", acao="", responsavel="", area="", prazo=None, status="Aberta", categoria=None, prioridade=None, origem=None):
+    site = db.get(Site, site_id) if site_id else None
+    site_codigo = site.codigo if site else None
+    data_base = date.today()
+    return {
+        "ats_group": ats_group_default(site_codigo),
+        "ats_business_unit": ats_business_unit_default(site_codigo),
+        "ats_action_title": titulo or "Ação corretiva EHS",
+        "ats_action_date": data_base,
+        "ats_audit_action_type": origem or "Standards / Directives",
+        "ats_action_type": "Risk Management",
+        "ats_action_category": categoria or ATS_CATEGORIA_EHS_DEFAULT,
+        "ats_finding_element": "",
+        "ats_finding_citations": "",
+        "ats_number_items": 1,
+        "ats_repeat_action": "No",
+        "ats_risk_category": ats_risk_from_priority(prioridade),
+        "ats_closure_category": ats_closure_category_from_dates(data_base, prazo),
+        "ats_department": area or "EHS",
+        "ats_subdepartment": "",
+        "ats_building": ats_business_unit_default(site_codigo) or "Main Building",
+        "ats_workstation": "",
+        "ats_responsible_person": responsavel or "",
+        "ats_action_description": descricao or "",
+        "ats_corrective_action": acao or "",
+        "ats_auditor_contact": "",
+        "ats_phone": "",
+        "ats_closure_due_date": prazo or (date.today() + timedelta(days=30)),
+        "ats_closure_due_date_gt90": None,
+        "ats_status": ats_status_from_pac(status),
+        "ats_close_date": None,
+        "ats_close_comment": "",
+        "ats_closure_person": "",
+        "ats_finding_reference_type": "",
+        "ats_reference_id": "",
+        "ats_multiple_email_cc": "",
+        "ats_closure_verification_person": "",
+        "ats_closure_verification_due_date": None,
+        "ats_reminder_email_days_prior": "",
+        "ats_capa_required": "No",
+        "ats_investigation_details": "",
+        "ats_root_cause": "",
+        "ats_basic_root_cause": "",
+        "ats_near_root_cause": "",
+    }
+
+def ats_attr(obj, field, default=None):
+    val = getattr(obj, field, None) if obj is not None else None
+    return default if val in [None, ""] else val
+
+def ats_payload_from_obj(db, obj, defaults=None):
+    defaults = defaults or {}
+    payload = {}
+    for f in ATS_DB_FIELDS:
+        payload[f] = ats_attr(obj, f, defaults.get(f))
+    return payload
+
+def aplicar_campos_ats(obj, dados):
+    for f in ATS_DB_FIELDS:
+        if f in dados:
+            setattr(obj, f, dados.get(f))
+
+def ats_date_input(label, value=None, key=None, optional=False):
+    atual = as_date(value)
+    if optional:
+        usar = st.checkbox(f"Informar {label.lower()}", value=bool(atual), key=f"{key}_usar")
+        if not usar:
+            return None
+    return st.date_input(label, atual or date.today(), key=key)
+
+def render_ats_fields(prefix, defaults=None, titulo="Campos Gensuite ATS"):
+    d = defaults or {}
+    dados = {}
+    with st.expander(titulo, expanded=False):
+        st.caption("Campos alinhados ao template de upload do Gensuite ATS.")
+        c1, c2, c3 = st.columns(3)
+        dados["ats_group"] = ats_selectbox("Group", ATS_GROUP_OPTIONS, d.get("ats_group"), key=f"{prefix}_ats_group")
+        dados["ats_business_unit"] = c2.selectbox("Business Unit", ats_add_current_value(ATS_BRAZIL_SITE_OPTIONS, d.get("ats_business_unit")), index=ats_add_current_value(ATS_BRAZIL_SITE_OPTIONS, d.get("ats_business_unit")).index(str(d.get("ats_business_unit")).strip()) if d.get("ats_business_unit") and str(d.get("ats_business_unit")).strip() in ats_add_current_value(ATS_BRAZIL_SITE_OPTIONS, d.get("ats_business_unit")) else 0, key=f"{prefix}_ats_business_unit")
+        dados["ats_action_title"] = c3.text_input("Action Title (Name / Number)", value=str(d.get("ats_action_title") or ""), key=f"{prefix}_ats_action_title")
+        c1, c2, c3 = st.columns(3)
+        dados["ats_action_date"] = c1.date_input("Action Date", as_date(d.get("ats_action_date")) or date.today(), key=f"{prefix}_ats_action_date")
+        dados["ats_audit_action_type"] = ats_selectbox("Audit/Action Type", ATS_AUDIT_TYPE_OPTIONS, d.get("ats_audit_action_type"), key=f"{prefix}_ats_audit_action_type")
+        dados["ats_action_type"] = c3.selectbox("Action Type", ats_add_current_value(ATS_ACTION_TYPE_OPTIONS, d.get("ats_action_type")), index=ats_add_current_value(ATS_ACTION_TYPE_OPTIONS, d.get("ats_action_type")).index(str(d.get("ats_action_type")).strip()) if d.get("ats_action_type") and str(d.get("ats_action_type")).strip() in ats_add_current_value(ATS_ACTION_TYPE_OPTIONS, d.get("ats_action_type")) else 0, key=f"{prefix}_ats_action_type")
+        c1, c2, c3 = st.columns(3)
+        dados["ats_action_category"] = c1.selectbox("Action Category", ats_add_current_value(ATS_CATEGORY_OPTIONS, d.get("ats_action_category")), index=ats_add_current_value(ATS_CATEGORY_OPTIONS, d.get("ats_action_category")).index(str(d.get("ats_action_category")).strip()) if d.get("ats_action_category") and str(d.get("ats_action_category")).strip() in ats_add_current_value(ATS_CATEGORY_OPTIONS, d.get("ats_action_category")) else 0, key=f"{prefix}_ats_action_category")
+        dados["ats_finding_element"] = c2.text_input("Finding Element", value=str(d.get("ats_finding_element") or ""), key=f"{prefix}_ats_finding_element")
+        dados["ats_finding_citations"] = c3.text_input("Finding Citation(s)", value=str(d.get("ats_finding_citations") or ""), key=f"{prefix}_ats_finding_citations")
+        c1, c2, c3, c4 = st.columns(4)
+        dados["ats_number_items"] = int(c1.number_input("Number of Items in Action", min_value=1, value=int(d.get("ats_number_items") or 1), step=1, key=f"{prefix}_ats_number_items"))
+        dados["ats_repeat_action"] = c2.selectbox("Repeat Action?", ats_add_current_value(ATS_YES_NO_OPTIONS, d.get("ats_repeat_action")), index=ats_add_current_value(ATS_YES_NO_OPTIONS, d.get("ats_repeat_action")).index(str(d.get("ats_repeat_action")).strip()) if d.get("ats_repeat_action") and str(d.get("ats_repeat_action")).strip() in ats_add_current_value(ATS_YES_NO_OPTIONS, d.get("ats_repeat_action")) else 1, key=f"{prefix}_ats_repeat_action")
+        dados["ats_risk_category"] = c3.selectbox("Risk Category", ats_add_current_value(ATS_RISK_CATEGORY_OPTIONS, d.get("ats_risk_category")), index=ats_add_current_value(ATS_RISK_CATEGORY_OPTIONS, d.get("ats_risk_category")).index(str(d.get("ats_risk_category")).strip()) if d.get("ats_risk_category") and str(d.get("ats_risk_category")).strip() in ats_add_current_value(ATS_RISK_CATEGORY_OPTIONS, d.get("ats_risk_category")) else 1, key=f"{prefix}_ats_risk_category")
+        dados["ats_closure_category"] = c4.selectbox("Closure Category", ats_add_current_value(ATS_CLOSURE_CATEGORY_OPTIONS, d.get("ats_closure_category")), index=ats_add_current_value(ATS_CLOSURE_CATEGORY_OPTIONS, d.get("ats_closure_category")).index(str(d.get("ats_closure_category")).strip()) if d.get("ats_closure_category") and str(d.get("ats_closure_category")).strip() in ats_add_current_value(ATS_CLOSURE_CATEGORY_OPTIONS, d.get("ats_closure_category")) else 5, key=f"{prefix}_ats_closure_category")
+        c1, c2, c3 = st.columns(3)
+        dados["ats_department"] = c1.selectbox("Dept", ats_add_current_value(ATS_DEPT_OPTIONS, d.get("ats_department")), index=ats_add_current_value(ATS_DEPT_OPTIONS, d.get("ats_department")).index(str(d.get("ats_department")).strip()) if d.get("ats_department") and str(d.get("ats_department")).strip() in ats_add_current_value(ATS_DEPT_OPTIONS, d.get("ats_department")) else 0, key=f"{prefix}_ats_department")
+        dados["ats_subdepartment"] = c2.text_input("Sub-Dept", value=str(d.get("ats_subdepartment") or ""), key=f"{prefix}_ats_subdepartment")
+        dados["ats_building"] = c3.selectbox("Building", ats_add_current_value(ATS_BUILDING_OPTIONS, d.get("ats_building")), index=ats_add_current_value(ATS_BUILDING_OPTIONS, d.get("ats_building")).index(str(d.get("ats_building")).strip()) if d.get("ats_building") and str(d.get("ats_building")).strip() in ats_add_current_value(ATS_BUILDING_OPTIONS, d.get("ats_building")) else 0, key=f"{prefix}_ats_building")
+        c1, c2, c3 = st.columns(3)
+        dados["ats_workstation"] = c1.text_input("Workstation", value=str(d.get("ats_workstation") or ""), key=f"{prefix}_ats_workstation")
+        dados["ats_responsible_person"] = c2.text_input("Responsible Person", value=str(d.get("ats_responsible_person") or ""), key=f"{prefix}_ats_responsible_person")
+        dados["ats_auditor_contact"] = c3.text_input("Auditor/Contact", value=str(d.get("ats_auditor_contact") or ""), key=f"{prefix}_ats_auditor_contact")
+        dados["ats_action_description"] = st.text_area("Action Description", value=str(d.get("ats_action_description") or ""), height=90, key=f"{prefix}_ats_action_description")
+        dados["ats_corrective_action"] = st.text_area("Action Corrective Action", value=str(d.get("ats_corrective_action") or ""), height=90, key=f"{prefix}_ats_corrective_action")
+        c1, c2, c3, c4 = st.columns(4)
+        dados["ats_phone"] = c1.text_input("Phone", value=str(d.get("ats_phone") or ""), key=f"{prefix}_ats_phone")
+        dados["ats_closure_due_date"] = c2.date_input("Closure Due Date", as_date(d.get("ats_closure_due_date")) or date.today() + timedelta(days=30), key=f"{prefix}_ats_closure_due_date")
+        dados["ats_status"] = c3.selectbox("Status", ats_add_current_value(ATS_STATUS_OPTIONS, d.get("ats_status")), index=ats_add_current_value(ATS_STATUS_OPTIONS, d.get("ats_status")).index(str(d.get("ats_status")).strip()) if d.get("ats_status") and str(d.get("ats_status")).strip() in ats_add_current_value(ATS_STATUS_OPTIONS, d.get("ats_status")) else 0, key=f"{prefix}_ats_status")
+        dados["ats_capa_required"] = c4.selectbox("CAPA Required", ats_add_current_value(ATS_YES_NO_OPTIONS, d.get("ats_capa_required")), index=ats_add_current_value(ATS_YES_NO_OPTIONS, d.get("ats_capa_required")).index(str(d.get("ats_capa_required")).strip()) if d.get("ats_capa_required") and str(d.get("ats_capa_required")).strip() in ats_add_current_value(ATS_YES_NO_OPTIONS, d.get("ats_capa_required")) else 1, key=f"{prefix}_ats_capa_required")
+        c1, c2, c3 = st.columns(3)
+        dados["ats_close_date"] = ats_date_input("Close Date", d.get("ats_close_date"), key=f"{prefix}_ats_close_date", optional=True)
+        dados["ats_closure_verification_due_date"] = ats_date_input("Closure Verification Due Date", d.get("ats_closure_verification_due_date"), key=f"{prefix}_ats_closure_verification_due_date", optional=True)
+        dados["ats_closure_due_date_gt90"] = ats_date_input("Closure Due Date >90 day", d.get("ats_closure_due_date_gt90"), key=f"{prefix}_ats_closure_due_date_gt90", optional=True)
+        c1, c2, c3 = st.columns(3)
+        dados["ats_close_comment"] = c1.text_input("Close Comment", value=str(d.get("ats_close_comment") or ""), key=f"{prefix}_ats_close_comment")
+        dados["ats_closure_person"] = c2.text_input("Closure Person", value=str(d.get("ats_closure_person") or ""), key=f"{prefix}_ats_closure_person")
+        dados["ats_closure_verification_person"] = c3.text_input("Closure Verification Person", value=str(d.get("ats_closure_verification_person") or ""), key=f"{prefix}_ats_closure_verification_person")
+        c1, c2, c3 = st.columns(3)
+        dados["ats_finding_reference_type"] = c1.text_input("Finding Reference Type", value=str(d.get("ats_finding_reference_type") or ""), key=f"{prefix}_ats_finding_reference_type")
+        dados["ats_reference_id"] = c2.text_input("Reference ID", value=str(d.get("ats_reference_id") or ""), key=f"{prefix}_ats_reference_id")
+        dados["ats_reminder_email_days_prior"] = c3.text_input("Reminder Email Days Prior", value=str(d.get("ats_reminder_email_days_prior") or ""), key=f"{prefix}_ats_reminder_email_days_prior")
+        dados["ats_multiple_email_cc"] = st.text_input("Multiple Email CC", value=str(d.get("ats_multiple_email_cc") or ""), key=f"{prefix}_ats_multiple_email_cc")
+        dados["ats_investigation_details"] = st.text_area("Investigation Details", value=str(d.get("ats_investigation_details") or ""), height=80, key=f"{prefix}_ats_investigation_details")
+        c1, c2, c3 = st.columns(3)
+        dados["ats_root_cause"] = c1.text_input("Root Cause", value=str(d.get("ats_root_cause") or ""), key=f"{prefix}_ats_root_cause")
+        dados["ats_basic_root_cause"] = c2.text_input("Basic Root Cause", value=str(d.get("ats_basic_root_cause") or ""), key=f"{prefix}_ats_basic_root_cause")
+        dados["ats_near_root_cause"] = c3.text_input("Near Root Cause", value=str(d.get("ats_near_root_cause") or ""), key=f"{prefix}_ats_near_root_cause")
+    return dados
+
+def ats_template_row_from_obj(db, obj, origem_modulo=""):
+    site = db.get(Site, getattr(obj, "site_id", None)) if getattr(obj, "site_id", None) else None
+    site_codigo = site.codigo if site else None
+    if origem_modulo == "Proteções de Máquinas":
+        descricao = getattr(obj, "descricao_desvio", "") or ""
+        acao = getattr(obj, "comentarios", "") or getattr(obj, "verificacao_eficacia", "") or ""
+        categoria = ATS_CATEGORIA_NR12_DEFAULT
+        prioridade = getattr(obj, "classificacao", None)
+        titulo = f"PAC Máquina {getattr(obj, 'id', '')}"
+        origem = "Safety Inspection"
+    else:
+        descricao = getattr(obj, "descricao", "") or ""
+        acao = getattr(obj, "acao_corretiva", "") or ""
+        categoria = ATS_CATEGORIA_EHS_DEFAULT
+        prioridade = getattr(obj, "prioridade_criticidade", None)
+        titulo = f"PAC Auditoria EHS {getattr(obj, 'id', '')}"
+        origem = "Standards / Directives"
+    defaults = ats_defaults_genericos(
+        db,
+        getattr(obj, "site_id", None),
+        titulo=titulo,
+        descricao=descricao,
+        acao=acao,
+        responsavel=getattr(obj, "responsavel", "") or "",
+        area=getattr(obj, "area_responsavel", "") or "",
+        prazo=getattr(obj, "prazo", None),
+        status=getattr(obj, "status", None),
+        categoria=categoria,
+        prioridade=prioridade,
+        origem=origem,
+    )
+    p = ats_payload_from_obj(db, obj, defaults)
+    if not p.get("ats_close_date") and getattr(obj, "data_conclusao", None):
+        p["ats_close_date"] = getattr(obj, "data_conclusao", None)
+    if not p.get("ats_close_comment") and getattr(obj, "evidencia_conclusao", None):
+        p["ats_close_comment"] = getattr(obj, "evidencia_conclusao", None)
+    return [p.get(f) for f in ATS_DB_FIELDS]
+
+def df_ats_gensuite(db, ids):
+    rows = []
+    for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids)).order_by(PACNR12.id.desc()).all():
+        rows.append(ats_template_row_from_obj(db, p, "Proteções de Máquinas"))
+    for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids)).order_by(PACEHS.id.desc()).all():
+        rows.append(ats_template_row_from_obj(db, p, "Auditoria Cruzada EHS"))
+    return pd.DataFrame(rows, columns=ATS_TEMPLATE_HEADERS)
 def calcular_status_documento(doc):
     if not doc: return "Ausente"
     if not doc.data_validade: return "Sem vencimento"
@@ -1504,13 +1888,20 @@ def gerar_pac_automatico_nr12(db,ver,r,resp=""):
     if db.query(PACNR12).filter_by(verificacao_id=ver.id,item_checklist=pergunta).first(): return
     critico = bool(getattr(r,"item_critico_snapshot",False)) or bool(r.item and r.item.item_critico)
     clas="Crítico" if critico else "Maior"
-    db.add(PACNR12(origem=ver.tipo,site_id=ver.site_id,maquina_id=ver.maquina_id,verificacao_id=ver.id,item_checklist=pergunta,descricao_desvio=r.comentario_evidencia or pergunta,classificacao=clas,responsavel=resp,area_responsavel="A definir",prazo=date.today()+timedelta(days=15 if clas=="Crítico" else 30),status="Aberta"))
+    prazo = date.today()+timedelta(days=15 if clas=="Crítico" else 30)
+    pac = PACNR12(origem=ver.tipo,site_id=ver.site_id,maquina_id=ver.maquina_id,verificacao_id=ver.id,item_checklist=pergunta,descricao_desvio=r.comentario_evidencia or pergunta,classificacao=clas,responsavel=resp,area_responsavel="A definir",prazo=prazo,status="Aberta")
+    aplicar_campos_ats(pac, ats_defaults_genericos(db, ver.site_id, titulo=f"PAC Proteções de Máquinas {ver.id}", descricao=r.comentario_evidencia or pergunta, acao="A definir", responsavel=resp, area="A definir", prazo=prazo, status="Aberta", categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=clas, origem="Safety Inspection"))
+    db.add(pac)
 def gerar_pac_automatico_ehs(db,a,r,resp=""):
     if db.query(PACEHS).filter_by(auditoria_id=a.id,requisito_id=r.requisito_id).first(): return
     criticidade = getattr(r, "criticidade_snapshot", None) or (r.requisito.criticidade if r.requisito else "Média")
     pergunta = getattr(r, "pergunta_snapshot", None) or (r.requisito.pergunta if r.requisito else "Requisito de checklist")
     tipo="Não conformidade crítica" if r.status=="Não Conforme" and criticidade=="Alta" else "Não conformidade maior" if r.status=="Não Conforme" else "Observação"
-    db.add(PACEHS(auditoria_id=a.id,site_id=a.site_auditado_id,requisito_id=r.requisito_id,tipo_achado=tipo,descricao=r.comentario_auditor or pergunta,evidencia=r.evidencia_verificada,risco="A avaliar",causa_raiz="A definir",acao_imediata="A definir",acao_corretiva="A definir",responsavel=resp,area_responsavel="A definir",prazo=date.today()+timedelta(days=15 if tipo=="Não conformidade crítica" else 30),status="Aberta",prioridade_criticidade="Alta" if tipo=="Não conformidade crítica" else "Média"))
+    prioridade = "Alta" if tipo=="Não conformidade crítica" else "Média"
+    prazo = date.today()+timedelta(days=15 if tipo=="Não conformidade crítica" else 30)
+    pac = PACEHS(auditoria_id=a.id,site_id=a.site_auditado_id,requisito_id=r.requisito_id,tipo_achado=tipo,descricao=r.comentario_auditor or pergunta,evidencia=r.evidencia_verificada,risco="A avaliar",causa_raiz="A definir",acao_imediata="A definir",acao_corretiva="A definir",responsavel=resp,area_responsavel="A definir",prazo=prazo,status="Aberta",prioridade_criticidade=prioridade)
+    aplicar_campos_ats(pac, ats_defaults_genericos(db, a.site_auditado_id, titulo=f"PAC Auditoria EHS {a.id}", descricao=r.comentario_auditor or pergunta, acao="A definir", responsavel=resp, area="A definir", prazo=prazo, status="Aberta", categoria=ATS_CATEGORIA_EHS_DEFAULT, prioridade=prioridade, origem="Standards / Directives"))
+    db.add(pac)
 def gerar_excel(sheets):
     out=io.BytesIO()
     with pd.ExcelWriter(out,engine="openpyxl") as w:
@@ -2354,7 +2745,7 @@ def df_docs(db,ids):
 def df_ver(db,ids):
     return pd.DataFrame([{"ID":v.id,"Site":site_code(db,v.site_id),"Máquina":v.maquina.codigo if v.maquina else "—","Tipo":v.tipo,"Data":fmt_date(v.data_verificacao),"Responsável":v.responsavel,"Resultado":v.resultado,"Pontuação %":v.pontuacao,"NC crítica":"Sim" if v.possui_nc_critica else "Não","Próxima":fmt_date(v.proxima_verificacao),"Observações":v.observacoes} for v in db.query(VerificacaoNR12).filter(VerificacaoNR12.site_id.in_(ids)).order_by(VerificacaoNR12.id.desc())])
 def df_pac_nr12(db,ids):
-    return pd.DataFrame([{"ID":p.id,"Site":site_code(db,p.site_id),"Máquina":p.maquina.codigo if p.maquina else "—","Origem":p.origem,"Classificação":p.classificacao,"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else p.status,"Responsável":p.responsavel,"Área":p.area_responsavel,"Prazo":fmt_date(p.prazo),"Desvio":p.descricao_desvio,"Evidência":p.evidencia_conclusao,"Validação EHS":"Sim" if p.validacao_ehs else "Não","Eficácia":p.verificacao_eficacia} for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids)).order_by(PACNR12.id.desc())])
+    return pd.DataFrame([{"ID":p.id,"Site":site_code(db,p.site_id),"Máquina":p.maquina.codigo if p.maquina else "—","Origem":p.origem,"Classificação":p.classificacao,"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else p.status,"Responsável":p.responsavel,"Área":p.area_responsavel,"Prazo":fmt_date(p.prazo),"Desvio":p.descricao_desvio,"Evidência":p.evidencia_conclusao,"Validação EHS":"Sim" if p.validacao_ehs else "Não","Eficácia":p.verificacao_eficacia,"ATS Group":p.ats_group,"ATS Business Unit":p.ats_business_unit,"ATS Action Type":p.ats_action_type,"ATS Category":p.ats_action_category,"ATS Closure Category":p.ats_closure_category} for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids)).order_by(PACNR12.id.desc())])
 def df_moc(db,ids):
     return pd.DataFrame([{"ID":m.id,"Site":site_code(db,m.site_id),"Máquina":m.maquina.codigo if m.maquina else "—","Tipo":m.tipo_mudanca,"Descrição":m.descricao,"Solicitante":m.solicitante,"Área":m.area_solicitante,"Data":fmt_date(m.data),"Impacta segurança":"Sim" if m.impacta_seguranca else "Não","Exige MOC":"Sim" if m.exige_moc else "Não","Status":m.status,"EHS":"Sim" if m.aprovacao_ehs else "Não","Manutenção":"Sim" if m.aprovacao_manutencao else "Não","Engenharia":"Sim" if m.aprovacao_engenharia else "Não","Produção":"Sim" if m.aprovacao_producao else "Não","Auditoria pós":"Sim" if m.necessita_auditoria_pos_mudanca else "Não","Treinamento":"Sim" if m.necessita_treinamento else "Não","Validação final":"Sim" if m.validacao_final else "Não"} for m in db.query(MOCNR12).filter(MOCNR12.site_id.in_(ids)).order_by(MOCNR12.id.desc())])
 def df_aud(db,ids):
@@ -2364,7 +2755,7 @@ def df_aud(db,ids):
         rows.append({"ID":a.id,"Ano":a.ano,"Ciclo":a.ciclo,"Site auditado":site_code(db,a.site_auditado_id),"Site auditor líder":site_code(db,a.site_auditor_lider_id),"Site auditor apoio":site_code(db,a.site_auditor_apoio_id),"Auditor líder":a.auditor_lider,"Auditor apoio":a.auditor_apoio,"Data planejada":fmt_date(a.data_planejada),"Início":fmt_date(a.data_inicio),"Fim":fmt_date(a.data_fim),"Status":a.status,"Conformidade %":a.conformidade_percentual,"Maturidade":a.maturidade_media,"Escopo":a.escopo})
     db.commit(); return pd.DataFrame(rows)
 def df_pac_ehs(db,ids):
-    return pd.DataFrame([{"ID":p.id,"Site":site_code(db,p.site_id),"Auditoria":p.auditoria_id,"Requisito":p.requisito.pergunta if p.requisito else "—","Tipo de achado":p.tipo_achado,"Descrição":p.descricao,"Evidência":p.evidencia,"Risco":p.risco,"Causa raiz":p.causa_raiz,"Ação imediata":p.acao_imediata,"Ação corretiva":p.acao_corretiva,"Responsável":p.responsavel,"Área":p.area_responsavel,"Prazo":fmt_date(p.prazo),"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else p.status,"Prioridade":p.prioridade_criticidade,"Validação EHS":"Sim" if p.validacao_ehs else "Não","Eficácia":p.verificacao_eficacia} for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids)).order_by(PACEHS.id.desc())])
+    return pd.DataFrame([{"ID":p.id,"Site":site_code(db,p.site_id),"Auditoria":p.auditoria_id,"Requisito":p.requisito.pergunta if p.requisito else "—","Tipo de achado":p.tipo_achado,"Descrição":p.descricao,"Evidência":p.evidencia,"Risco":p.risco,"Causa raiz":p.causa_raiz,"Ação imediata":p.acao_imediata,"Ação corretiva":p.acao_corretiva,"Responsável":p.responsavel,"Área":p.area_responsavel,"Prazo":fmt_date(p.prazo),"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else p.status,"Prioridade":p.prioridade_criticidade,"Validação EHS":"Sim" if p.validacao_ehs else "Não","Eficácia":p.verificacao_eficacia,"ATS Group":p.ats_group,"ATS Business Unit":p.ats_business_unit,"ATS Action Type":p.ats_action_type,"ATS Category":p.ats_action_category,"ATS Closure Category":p.ats_closure_category} for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids)).order_by(PACEHS.id.desc())])
 
 
 def dashboard_integrado(db,u):
@@ -3275,8 +3666,12 @@ def nr12_pac(db,u):
                 resp=st.text_input("Responsável")
                 area=st.text_input("Área")
                 desc=st.text_area("Descrição do desvio")
+                ats_defaults = ats_defaults_genericos(db, sites[site], titulo="PAC manual de Proteções de Máquinas", descricao=desc, acao="", responsavel=resp, area=area, prazo=prazo, status=stat, categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=clas, origem="Safety Inspection")
+                ats_dados = render_ats_fields("nr12_pac_manual", ats_defaults)
                 if st.form_submit_button("Salvar",use_container_width=True):
-                    db.add(PACNR12(origem="Manual",site_id=sites[site],maquina_id=None if maq=="—" else opts[maq],classificacao=clas,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao_desvio=desc))
+                    pac = PACNR12(origem="Manual",site_id=sites[site],maquina_id=None if maq=="—" else opts[maq],classificacao=clas,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao_desvio=desc)
+                    aplicar_campos_ats(pac, ats_dados)
+                    db.add(pac)
                     db.commit()
                     st.success("PAC salvo.")
                     st.rerun()
@@ -3290,7 +3685,10 @@ def nr12_pac(db,u):
                 p.evidencia_conclusao=st.text_area("Evidência de conclusão",p.evidencia_conclusao or "")
                 p.validacao_ehs=st.checkbox("Validação EHS",p.validacao_ehs)
                 p.verificacao_eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
+                ats_defaults = ats_defaults_genericos(db, p.site_id, titulo=f"PAC Proteções de Máquinas {p.id}", descricao=p.descricao_desvio or "", acao=p.comentarios or "", responsavel=p.responsavel or "", area=p.area_responsavel or "", prazo=p.prazo, status=p.status, categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=p.classificacao, origem=p.origem or "Safety Inspection")
+                ats_dados = render_ats_fields(f"nr12_pac_edit_{p.id}", ats_payload_from_obj(db, p, ats_defaults))
                 if st.form_submit_button("Atualizar",use_container_width=True):
+                    aplicar_campos_ats(p, ats_dados)
                     if p.status=="Concluída" and not p.evidencia_conclusao:
                         st.error("PAC concluído exige evidência.")
                     elif p.status=="Concluída" and p.classificacao=="Crítico" and not p.validacao_ehs:
@@ -3871,8 +4269,14 @@ def ehs_pac(db,u):
                 causa=st.text_area("Causa raiz")
                 aci=st.text_area("Ação imediata")
                 acc=st.text_area("Ação corretiva")
+                ats_defaults = ats_defaults_genericos(db, sites[site], titulo="PAC manual de Auditoria EHS", descricao=desc, acao=acc, responsavel=resp, area=area, prazo=prazo, status=stat, categoria=ATS_CATEGORIA_EHS_DEFAULT, prioridade=pr, origem="Standards / Directives")
+                ats_defaults["ats_investigation_details"] = causa or risco or ""
+                ats_defaults["ats_root_cause"] = causa or ""
+                ats_dados = render_ats_fields("ehs_pac_manual", ats_defaults)
                 if st.form_submit_button("Salvar PAC EHS",use_container_width=True):
-                    db.add(PACEHS(site_id=sites[site],tipo_achado=tipo,prioridade_criticidade=pr,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao=desc,evidencia=evid,risco=risco,causa_raiz=causa,acao_imediata=aci,acao_corretiva=acc))
+                    pac = PACEHS(site_id=sites[site],tipo_achado=tipo,prioridade_criticidade=pr,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao=desc,evidencia=evid,risco=risco,causa_raiz=causa,acao_imediata=aci,acao_corretiva=acc)
+                    aplicar_campos_ats(pac, ats_dados)
+                    db.add(pac)
                     db.commit()
                     st.success("PAC salvo.")
                     st.rerun()
@@ -3894,7 +4298,12 @@ def ehs_pac(db,u):
                 validacao=st.checkbox("Validação EHS",p.validacao_ehs)
                 eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
                 status_eficacia=st.selectbox("Status da eficácia",["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"],index=["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"].index(p.status_eficacia) if p.status_eficacia in ["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"] else 0)
+                ats_defaults = ats_defaults_genericos(db, p.site_id, titulo=f"PAC Auditoria EHS {p.id}", descricao=p.descricao or "", acao=p.acao_corretiva or "", responsavel=p.responsavel or "", area=p.area_responsavel or "", prazo=p.prazo, status=p.status, categoria=ATS_CATEGORIA_EHS_DEFAULT, prioridade=p.prioridade_criticidade, origem="Standards / Directives")
+                ats_defaults["ats_investigation_details"] = p.causa_raiz or p.risco or ""
+                ats_defaults["ats_root_cause"] = p.causa_raiz or ""
+                ats_dados = render_ats_fields(f"ehs_pac_edit_{p.id}", ats_payload_from_obj(db, p, ats_defaults))
                 if st.form_submit_button("Atualizar status",use_container_width=True):
+                    aplicar_campos_ats(p, ats_dados)
                     if novo_status=="Concluída" and not evidencia:
                         st.error("PAC concluído exige evidência de conclusão.")
                     else:
@@ -9270,6 +9679,25 @@ def relatorios_integrados_submodulos_home(db,u):
     df=relatorios_integrados_df(db,u); c1,c2,c3,c4=st.columns(4)
     c1.metric("Sites avaliáveis", len(df)); c2.metric("Prioritários", int((df["Status executivo"]=="Prioritário").sum()) if not df.empty else 0); c3.metric("Em atenção", int((df["Status executivo"]=="Atenção").sum()) if not df.empty else 0); c4.metric("Controlados", int((df["Status executivo"]=="Controlado").sum()) if not df.empty else 0)
 
+
+def ats_gensuite_export_page(db,u):
+    header("Exportação Gensuite ATS", "Download das ações corretivas no mesmo layout do template de upload ATS/Gensuite.")
+    ids = visible_site_ids(u, db)
+    df = df_ats_gensuite(db, ids)
+    section("Base de ações para upload")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Ações exportáveis", len(df))
+    c2.metric("Sites no escopo", len(ids))
+    c3.metric("Colunas do template", len(ATS_TEMPLATE_HEADERS))
+    st.caption("A planilha exportada segue a ordem dos campos do template ATS. Para usar, copie as linhas de ações e cole na aba Audits do arquivo .xlsm do Gensuite.")
+    if df.empty:
+        empty_state("Nenhuma ação corretiva cadastrada para o escopo visível.")
+        return
+    df_preview = df.head(200).copy()
+    df_preview.columns = ats_headers_unicos(df_preview.columns)
+    st.dataframe(df_preview.astype(str), use_container_width=True, hide_index=True)
+    download_excel_button("Baixar ações no layout ATS/Gensuite", "acoes_corretivas_template_gensuite_ats.xlsx", {"Audits": df}, key="download_ats_gensuite_acoes")
+
 def relatorio_executivo_integrado_page(db,u):
     header("Relatório Executivo Integrado", "PDF sucinto com indicadores críticos, principais problemas e foco de trabalho por site.")
     update_vencidos(db); base=relatorios_integrados_df(db,u)
@@ -9616,6 +10044,7 @@ def route(db,u):
         paginas={
             RELATORIOS_HOME_PAGE: relatorios_integrados_submodulos_home,
             RELATORIOS_EXECUTIVO_PAGE: relatorio_executivo_integrado_page,
+            "Exportação Gensuite ATS": ats_gensuite_export_page,
         }
         page=st.session_state.get("page_relatorios",RELATORIOS_HOME_PAGE)
         paginas.get(page,relatorios_integrados_submodulos_home)(db,u)
