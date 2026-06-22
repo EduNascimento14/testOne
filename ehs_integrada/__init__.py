@@ -1,1 +1,0 @@
-"""Plataforma EHS Integrada."""
