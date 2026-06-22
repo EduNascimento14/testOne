@@ -1570,12 +1570,66 @@ def identificar_pac_vencido(prazo,status): return bool(as_date(prazo) and as_dat
 
 
 def ats_headers_unicos(headers=None):
+    """Retorna cabeçalhos únicos apenas para pré-visualização.
+
+    O template ATS possui cabeçalhos repetidos, como Closure Due Date.
+    O DataFrame de exportação mantém os nomes originais, mas a prévia do Streamlit
+    precisa de nomes únicos. Não use ``headers or ...`` aqui porque ``headers`` pode
+    ser um pandas.Index, cuja avaliação booleana gera ValueError.
+    """
+    base = ATS_TEMPLATE_HEADERS if headers is None else list(headers)
     vistos = {}
     saida = []
-    for h in headers or ATS_TEMPLATE_HEADERS:
+    for h in base:
+        h = str(h)
         vistos[h] = vistos.get(h, 0) + 1
         saida.append(h if vistos[h] == 1 else f"{h} ({vistos[h]})")
     return saida
+
+ATS_EHS_CATEGORY_BY_DIRECTIVE = {
+    "4.12.01": "EHS Management",
+    "4.12.02": "EHS Management",
+    "4.12.03": "EHS Management",
+    "4.12.04": "EHS Management",
+    "4.12.05": "EHS Management",
+    "4.12.06": "Incident & Injury Recordkeeping",
+    "4.12.07": "Chemical Management",
+    "4.12.08": "Electrical Safety",
+    "4.12.09": "Emergency Planning & Response",
+    "4.12.10": "Training",
+    "4.12.11": "Machine Guarding",
+    "4.12.12": "Ergonomics",
+    "4.12.13": "High Risk Operations",
+    "4.12.14": "Personal Protective Equipment",
+    "4.12.15": "Drivers Safety/Pedestrian Safety",
+    "4.12.16": "Contractor Safety",
+    "4.12.17": "Walking & Working Surfaces",
+    "4.12.18": "High Risk Operations",
+}
+
+def ats_codigo_diretriz(texto):
+    m = re.search(r"4\.12\.\d{2}", str(texto or ""))
+    return m.group(0) if m else ""
+
+def ats_categoria_por_diretriz_texto(texto, fallback=None):
+    codigo = ats_codigo_diretriz(texto)
+    return ATS_EHS_CATEGORY_BY_DIRECTIVE.get(codigo, fallback or ATS_CATEGORIA_EHS_DEFAULT)
+
+def ats_normalizar_dept(area):
+    val = str(area or "").strip()
+    if not val or val in ["—", "A definir", "N/A", "Não definido"]:
+        return "EHS"
+    mapa = {
+        "manutenção": "Maintenance", "manutencao": "Maintenance",
+        "engenharia": "Engineering", "produção": "Production", "producao": "Production",
+        "operações": "Operations", "operacoes": "Operations", "operação": "Operations", "operacao": "Operations",
+        "facilities": "Facilities", "almoxarifado": "Warehouse", "armazém": "Warehouse", "armazem": "Warehouse",
+        "qualidade": "Quality", "logística": "Logistics", "logistica": "Logistics",
+        "recebimento": "Receiving", "expedição": "Shipping", "expedicao": "Shipping",
+        "ehs": "EHS", "segurança": "EHS", "seguranca": "EHS", "hse": "EHS",
+    }
+    chave = unicodedata.normalize("NFKD", val).encode("ascii", "ignore").decode("ascii").lower()
+    return mapa.get(chave, val)
 
 def ats_add_current_value(options, value):
     opts = [str(x) for x in (options or []) if str(x or "").strip()]
@@ -1617,10 +1671,12 @@ def ats_group_default(site_codigo):
 def ats_business_unit_default(site_codigo):
     return ATS_SITE_TO_BUSINESS_UNIT.get(normalize_site_code(site_codigo), str(site_codigo or ""))
 
-def ats_defaults_genericos(db, site_id=None, titulo="", descricao="", acao="", responsavel="", area="", prazo=None, status="Aberta", categoria=None, prioridade=None, origem=None):
+def ats_defaults_genericos(db, site_id=None, titulo="", descricao="", acao="", responsavel="", area="", prazo=None, status="Aberta", categoria=None, prioridade=None, origem=None, finding_element="", finding_citations="", reference_id="", investigation_details="", root_cause=""):
     site = db.get(Site, site_id) if site_id else None
     site_codigo = site.codigo if site else None
     data_base = date.today()
+    due = as_date(prazo) or (date.today() + timedelta(days=30))
+    risco = ats_risk_from_priority(prioridade)
     return {
         "ats_group": ats_group_default(site_codigo),
         "ats_business_unit": ats_business_unit_default(site_codigo),
@@ -1629,36 +1685,36 @@ def ats_defaults_genericos(db, site_id=None, titulo="", descricao="", acao="", r
         "ats_audit_action_type": origem or "Standards / Directives",
         "ats_action_type": "Risk Management",
         "ats_action_category": categoria or ATS_CATEGORIA_EHS_DEFAULT,
-        "ats_finding_element": "",
-        "ats_finding_citations": "",
+        "ats_finding_element": finding_element or "EHS",
+        "ats_finding_citations": finding_citations or "",
         "ats_number_items": 1,
         "ats_repeat_action": "No",
-        "ats_risk_category": ats_risk_from_priority(prioridade),
-        "ats_closure_category": ats_closure_category_from_dates(data_base, prazo),
-        "ats_department": area or "EHS",
+        "ats_risk_category": risco,
+        "ats_closure_category": ats_closure_category_from_dates(data_base, due),
+        "ats_department": ats_normalizar_dept(area),
         "ats_subdepartment": "",
         "ats_building": ats_business_unit_default(site_codigo) or "Main Building",
-        "ats_workstation": "",
+        "ats_workstation": "Plant Wide",
         "ats_responsible_person": responsavel or "",
         "ats_action_description": descricao or "",
-        "ats_corrective_action": acao or "",
+        "ats_corrective_action": acao or "A definir",
         "ats_auditor_contact": "",
         "ats_phone": "",
-        "ats_closure_due_date": prazo or (date.today() + timedelta(days=30)),
-        "ats_closure_due_date_gt90": None,
+        "ats_closure_due_date": due,
+        "ats_closure_due_date_gt90": due if ats_closure_category_from_dates(data_base, due) == ">90 day" else None,
         "ats_status": ats_status_from_pac(status),
         "ats_close_date": None,
         "ats_close_comment": "",
         "ats_closure_person": "",
-        "ats_finding_reference_type": "",
-        "ats_reference_id": "",
+        "ats_finding_reference_type": "Internal Audit",
+        "ats_reference_id": reference_id or "",
         "ats_multiple_email_cc": "",
         "ats_closure_verification_person": "",
-        "ats_closure_verification_due_date": None,
-        "ats_reminder_email_days_prior": "",
-        "ats_capa_required": "No",
-        "ats_investigation_details": "",
-        "ats_root_cause": "",
+        "ats_closure_verification_due_date": due + timedelta(days=7),
+        "ats_reminder_email_days_prior": "7",
+        "ats_capa_required": "Yes" if risco == "High" else "No",
+        "ats_investigation_details": investigation_details or "",
+        "ats_root_cause": root_cause or "",
         "ats_basic_root_cause": "",
         "ats_near_root_cause": "",
     }
@@ -1749,18 +1805,32 @@ def ats_template_row_from_obj(db, obj, origem_modulo=""):
     site_codigo = site.codigo if site else None
     if origem_modulo == "Proteções de Máquinas":
         descricao = getattr(obj, "descricao_desvio", "") or ""
-        acao = getattr(obj, "comentarios", "") or getattr(obj, "verificacao_eficacia", "") or ""
+        acao = getattr(obj, "comentarios", "") or getattr(obj, "verificacao_eficacia", "") or "A definir"
         categoria = ATS_CATEGORIA_NR12_DEFAULT
         prioridade = getattr(obj, "classificacao", None)
-        titulo = f"PAC Máquina {getattr(obj, 'id', '')}"
+        titulo = getattr(obj, "ats_action_title", None) or f"PAC Máquina {getattr(obj, 'id', '')}"
         origem = "Safety Inspection"
+        finding_element = "Diretriz EHS 4.12.11 - Segurança de Equipamentos e Máquinas"
+        finding_citations = "Diretriz EHS 4.12.11; NR-12"
+        reference_id = getattr(obj, "ats_reference_id", None) or f"PAC-MAQ-{getattr(obj, 'id', '')}"
+        investigation_details = getattr(obj, "item_checklist", "") or descricao
+        root_cause = "A definir"
     else:
-        descricao = getattr(obj, "descricao", "") or ""
-        acao = getattr(obj, "acao_corretiva", "") or ""
-        categoria = ATS_CATEGORIA_EHS_DEFAULT
+        req = getattr(obj, "requisito", None)
+        diretriz_txt = getattr(getattr(req, "diretiva", None), "categoria", "") if req else ""
+        pergunta_txt = getattr(req, "pergunta", "") if req else ""
+        descricao = getattr(obj, "descricao", "") or pergunta_txt or ""
+        acao = getattr(obj, "acao_corretiva", "") or "A definir"
+        categoria = ats_categoria_por_diretriz_texto(diretriz_txt or pergunta_txt or descricao)
         prioridade = getattr(obj, "prioridade_criticidade", None)
-        titulo = f"PAC Auditoria EHS {getattr(obj, 'id', '')}"
+        titulo = getattr(obj, "ats_action_title", None) or f"PAC Auditoria EHS {getattr(obj, 'id', '')}"
         origem = "Standards / Directives"
+        codigo_diretriz = ats_codigo_diretriz(diretriz_txt or pergunta_txt or descricao)
+        finding_element = diretriz_txt or "Diretrizes EHS 4.12"
+        finding_citations = f"Diretriz EHS {codigo_diretriz}" if codigo_diretriz else "Diretrizes EHS 4.12"
+        reference_id = getattr(obj, "ats_reference_id", None) or (f"AUD-EHS-{getattr(obj, 'auditoria_id', '')}" if getattr(obj, "auditoria_id", None) else f"PAC-EHS-{getattr(obj, 'id', '')}")
+        investigation_details = getattr(obj, "causa_raiz", "") or getattr(obj, "risco", "") or getattr(obj, "evidencia", "") or ""
+        root_cause = getattr(obj, "causa_raiz", "") or "A definir"
     defaults = ats_defaults_genericos(
         db,
         getattr(obj, "site_id", None),
@@ -1768,18 +1838,25 @@ def ats_template_row_from_obj(db, obj, origem_modulo=""):
         descricao=descricao,
         acao=acao,
         responsavel=getattr(obj, "responsavel", "") or "",
-        area=getattr(obj, "area_responsavel", "") or "",
+        area=getattr(obj, "area_responsavel", "") or "EHS",
         prazo=getattr(obj, "prazo", None),
         status=getattr(obj, "status", None),
         categoria=categoria,
         prioridade=prioridade,
         origem=origem,
+        finding_element=finding_element,
+        finding_citations=finding_citations,
+        reference_id=reference_id,
+        investigation_details=investigation_details,
+        root_cause=root_cause,
     )
     p = ats_payload_from_obj(db, obj, defaults)
     if not p.get("ats_close_date") and getattr(obj, "data_conclusao", None):
         p["ats_close_date"] = getattr(obj, "data_conclusao", None)
     if not p.get("ats_close_comment") and getattr(obj, "evidencia_conclusao", None):
         p["ats_close_comment"] = getattr(obj, "evidencia_conclusao", None)
+    if p.get("ats_status") == "Closed" and not p.get("ats_closure_person"):
+        p["ats_closure_person"] = getattr(obj, "responsavel", "") or ""
     return [p.get(f) for f in ATS_DB_FIELDS]
 
 def df_ats_gensuite(db, ids):
@@ -1890,7 +1967,13 @@ def gerar_pac_automatico_nr12(db,ver,r,resp=""):
     clas="Crítico" if critico else "Maior"
     prazo = date.today()+timedelta(days=15 if clas=="Crítico" else 30)
     pac = PACNR12(origem=ver.tipo,site_id=ver.site_id,maquina_id=ver.maquina_id,verificacao_id=ver.id,item_checklist=pergunta,descricao_desvio=r.comentario_evidencia or pergunta,classificacao=clas,responsavel=resp,area_responsavel="A definir",prazo=prazo,status="Aberta")
-    aplicar_campos_ats(pac, ats_defaults_genericos(db, ver.site_id, titulo=f"PAC Proteções de Máquinas {ver.id}", descricao=r.comentario_evidencia or pergunta, acao="A definir", responsavel=resp, area="A definir", prazo=prazo, status="Aberta", categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=clas, origem="Safety Inspection"))
+    aplicar_campos_ats(pac, ats_defaults_genericos(
+        db, ver.site_id, titulo=f"PAC Proteções de Máquinas {ver.id}", descricao=r.comentario_evidencia or pergunta,
+        acao="A definir", responsavel=resp, area="Maintenance", prazo=prazo, status="Aberta",
+        categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=clas, origem="Safety Inspection",
+        finding_element="Diretriz EHS 4.12.11 - Segurança de Equipamentos e Máquinas", finding_citations="Diretriz EHS 4.12.11; NR-12",
+        reference_id=f"VER-MAQ-{ver.id}", investigation_details=pergunta, root_cause="A definir"
+    ))
     db.add(pac)
 def gerar_pac_automatico_ehs(db,a,r,resp=""):
     if db.query(PACEHS).filter_by(auditoria_id=a.id,requisito_id=r.requisito_id).first(): return
@@ -1900,7 +1983,15 @@ def gerar_pac_automatico_ehs(db,a,r,resp=""):
     prioridade = "Alta" if tipo=="Não conformidade crítica" else "Média"
     prazo = date.today()+timedelta(days=15 if tipo=="Não conformidade crítica" else 30)
     pac = PACEHS(auditoria_id=a.id,site_id=a.site_auditado_id,requisito_id=r.requisito_id,tipo_achado=tipo,descricao=r.comentario_auditor or pergunta,evidencia=r.evidencia_verificada,risco="A avaliar",causa_raiz="A definir",acao_imediata="A definir",acao_corretiva="A definir",responsavel=resp,area_responsavel="A definir",prazo=prazo,status="Aberta",prioridade_criticidade=prioridade)
-    aplicar_campos_ats(pac, ats_defaults_genericos(db, a.site_auditado_id, titulo=f"PAC Auditoria EHS {a.id}", descricao=r.comentario_auditor or pergunta, acao="A definir", responsavel=resp, area="A definir", prazo=prazo, status="Aberta", categoria=ATS_CATEGORIA_EHS_DEFAULT, prioridade=prioridade, origem="Standards / Directives"))
+    diretriz_txt = getattr(getattr(r.requisito, "diretiva", None), "categoria", "") if getattr(r, "requisito", None) else ""
+    codigo_diretriz = ats_codigo_diretriz(diretriz_txt or pergunta)
+    aplicar_campos_ats(pac, ats_defaults_genericos(
+        db, a.site_auditado_id, titulo=f"PAC Auditoria EHS {a.id}", descricao=r.comentario_auditor or pergunta,
+        acao="A definir", responsavel=resp, area="EHS", prazo=prazo, status="Aberta",
+        categoria=ats_categoria_por_diretriz_texto(diretriz_txt or pergunta), prioridade=prioridade, origem="Standards / Directives",
+        finding_element=diretriz_txt or "Diretrizes EHS 4.12", finding_citations=(f"Diretriz EHS {codigo_diretriz}" if codigo_diretriz else "Diretrizes EHS 4.12"),
+        reference_id=f"AUD-EHS-{a.id}", investigation_details=r.evidencia_verificada or "", root_cause="A definir"
+    ))
     db.add(pac)
 def gerar_excel(sheets):
     out=io.BytesIO()
@@ -3666,7 +3757,7 @@ def nr12_pac(db,u):
                 resp=st.text_input("Responsável")
                 area=st.text_input("Área")
                 desc=st.text_area("Descrição do desvio")
-                ats_defaults = ats_defaults_genericos(db, sites[site], titulo="PAC manual de Proteções de Máquinas", descricao=desc, acao="", responsavel=resp, area=area, prazo=prazo, status=stat, categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=clas, origem="Safety Inspection")
+                ats_defaults = ats_defaults_genericos(db, sites[site], titulo="PAC manual de Proteções de Máquinas", descricao=desc, acao="A definir", responsavel=resp, area=area or "Maintenance", prazo=prazo, status=stat, categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=clas, origem="Safety Inspection", finding_element="Diretriz EHS 4.12.11 - Segurança de Equipamentos e Máquinas", finding_citations="Diretriz EHS 4.12.11; NR-12")
                 ats_dados = render_ats_fields("nr12_pac_manual", ats_defaults)
                 if st.form_submit_button("Salvar",use_container_width=True):
                     pac = PACNR12(origem="Manual",site_id=sites[site],maquina_id=None if maq=="—" else opts[maq],classificacao=clas,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao_desvio=desc)
@@ -3685,7 +3776,7 @@ def nr12_pac(db,u):
                 p.evidencia_conclusao=st.text_area("Evidência de conclusão",p.evidencia_conclusao or "")
                 p.validacao_ehs=st.checkbox("Validação EHS",p.validacao_ehs)
                 p.verificacao_eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
-                ats_defaults = ats_defaults_genericos(db, p.site_id, titulo=f"PAC Proteções de Máquinas {p.id}", descricao=p.descricao_desvio or "", acao=p.comentarios or "", responsavel=p.responsavel or "", area=p.area_responsavel or "", prazo=p.prazo, status=p.status, categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=p.classificacao, origem=p.origem or "Safety Inspection")
+                ats_defaults = ats_defaults_genericos(db, p.site_id, titulo=f"PAC Proteções de Máquinas {p.id}", descricao=p.descricao_desvio or "", acao=p.comentarios or "A definir", responsavel=p.responsavel or "", area=p.area_responsavel or "Maintenance", prazo=p.prazo, status=p.status, categoria=ATS_CATEGORIA_NR12_DEFAULT, prioridade=p.classificacao, origem=p.origem or "Safety Inspection", finding_element="Diretriz EHS 4.12.11 - Segurança de Equipamentos e Máquinas", finding_citations="Diretriz EHS 4.12.11; NR-12", reference_id=f"PAC-MAQ-{p.id}", investigation_details=p.item_checklist or p.descricao_desvio or "", root_cause="A definir")
                 ats_dados = render_ats_fields(f"nr12_pac_edit_{p.id}", ats_payload_from_obj(db, p, ats_defaults))
                 if st.form_submit_button("Atualizar",use_container_width=True):
                     aplicar_campos_ats(p, ats_dados)
@@ -4269,9 +4360,7 @@ def ehs_pac(db,u):
                 causa=st.text_area("Causa raiz")
                 aci=st.text_area("Ação imediata")
                 acc=st.text_area("Ação corretiva")
-                ats_defaults = ats_defaults_genericos(db, sites[site], titulo="PAC manual de Auditoria EHS", descricao=desc, acao=acc, responsavel=resp, area=area, prazo=prazo, status=stat, categoria=ATS_CATEGORIA_EHS_DEFAULT, prioridade=pr, origem="Standards / Directives")
-                ats_defaults["ats_investigation_details"] = causa or risco or ""
-                ats_defaults["ats_root_cause"] = causa or ""
+                ats_defaults = ats_defaults_genericos(db, sites[site], titulo="PAC manual de Auditoria EHS", descricao=desc, acao=acc, responsavel=resp, area=area, prazo=prazo, status=stat, categoria=ATS_CATEGORIA_EHS_DEFAULT, prioridade=pr, origem="Standards / Directives", finding_element="Diretrizes EHS 4.12", finding_citations="Diretrizes EHS 4.12", investigation_details=causa or risco or "", root_cause=causa or "")
                 ats_dados = render_ats_fields("ehs_pac_manual", ats_defaults)
                 if st.form_submit_button("Salvar PAC EHS",use_container_width=True):
                     pac = PACEHS(site_id=sites[site],tipo_achado=tipo,prioridade_criticidade=pr,status=stat,prazo=prazo,responsavel=resp,area_responsavel=area,descricao=desc,evidencia=evid,risco=risco,causa_raiz=causa,acao_imediata=aci,acao_corretiva=acc)
@@ -4298,9 +4387,10 @@ def ehs_pac(db,u):
                 validacao=st.checkbox("Validação EHS",p.validacao_ehs)
                 eficacia=st.text_area("Verificação de eficácia",p.verificacao_eficacia or "")
                 status_eficacia=st.selectbox("Status da eficácia",["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"],index=["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"].index(p.status_eficacia) if p.status_eficacia in ["Não avaliada","Eficaz","Parcialmente eficaz","Ineficaz"] else 0)
-                ats_defaults = ats_defaults_genericos(db, p.site_id, titulo=f"PAC Auditoria EHS {p.id}", descricao=p.descricao or "", acao=p.acao_corretiva or "", responsavel=p.responsavel or "", area=p.area_responsavel or "", prazo=p.prazo, status=p.status, categoria=ATS_CATEGORIA_EHS_DEFAULT, prioridade=p.prioridade_criticidade, origem="Standards / Directives")
-                ats_defaults["ats_investigation_details"] = p.causa_raiz or p.risco or ""
-                ats_defaults["ats_root_cause"] = p.causa_raiz or ""
+                req = getattr(p, "requisito", None)
+                diretriz_txt = getattr(getattr(req, "diretiva", None), "categoria", "") if req else ""
+                codigo_diretriz = ats_codigo_diretriz(diretriz_txt or (p.descricao or ""))
+                ats_defaults = ats_defaults_genericos(db, p.site_id, titulo=f"PAC Auditoria EHS {p.id}", descricao=p.descricao or "", acao=p.acao_corretiva or "", responsavel=p.responsavel or "", area=p.area_responsavel or "", prazo=p.prazo, status=p.status, categoria=ats_categoria_por_diretriz_texto(diretriz_txt or (p.descricao or "")), prioridade=p.prioridade_criticidade, origem="Standards / Directives", finding_element=diretriz_txt or "Diretrizes EHS 4.12", finding_citations=(f"Diretriz EHS {codigo_diretriz}" if codigo_diretriz else "Diretrizes EHS 4.12"), reference_id=(f"AUD-EHS-{p.auditoria_id}" if p.auditoria_id else f"PAC-EHS-{p.id}"), investigation_details=p.causa_raiz or p.risco or "", root_cause=p.causa_raiz or "")
                 ats_dados = render_ats_fields(f"ehs_pac_edit_{p.id}", ats_payload_from_obj(db, p, ats_defaults))
                 if st.form_submit_button("Atualizar status",use_container_width=True):
                     aplicar_campos_ats(p, ats_dados)
@@ -9689,7 +9779,7 @@ def ats_gensuite_export_page(db,u):
     c1.metric("Ações exportáveis", len(df))
     c2.metric("Sites no escopo", len(ids))
     c3.metric("Colunas do template", len(ATS_TEMPLATE_HEADERS))
-    st.caption("A planilha exportada segue a ordem dos campos do template ATS. Para usar, copie as linhas de ações e cole na aba Audits do arquivo .xlsm do Gensuite.")
+    st.caption("A planilha exportada segue a ordem dos campos do template ATS. Os campos principais já são preenchidos a partir do site, módulo, criticidade, prazo e status; revise apenas os itens que precisarem de ajuste antes de colar na aba Audits do .xlsm do Gensuite.")
     if df.empty:
         empty_state("Nenhuma ação corretiva cadastrada para o escopo visível.")
         return
