@@ -45,13 +45,16 @@ SITE_INFO_PADRAO = SITES_LAG
 SITE_NOMES_PADRAO = {k: v["nome"] for k, v in SITE_INFO_PADRAO.items()}
 SITE_GRUPOS_PADRAO = {k: v["grupo"] for k, v in SITE_INFO_PADRAO.items()}
 SITE_DIVISOES_PADRAO = {k: v.get("divisao", v.get("grupo", k)) for k, v in SITE_INFO_PADRAO.items()}
-PERFIS = ["Gerencial LAG", "Técnico de EHS", "Visualizador"]
+PERFIL_PERSONALIZADO = "Perfil personalizado"
+PERFIS = ["Gerencial LAG", "Técnico de EHS", "Visualizador", PERFIL_PERSONALIZADO]
 USUARIOS_PADRAO = [
     ("Eduardo", "Gerencial LAG", "Corporativo", "Capitu", True),
 ]
 PERFIL_MASTER = "Gerencial LAG"
 PERFIL_TECNICO_EHS = "Técnico de EHS"
 PERFIL_VISUALIZADOR = "Visualizador"
+NOME_MODULO_PENDENCIAS = "Central de Pendências Integrada"
+NOME_MODULO_PAC_UNIFICADO = "Ações Corretivas"
 SENHA_PADRAO_NOVO_USUARIO = "123456"
 STATUS_MAQUINA = ["Conforme","Não conforme"]
 CRITICIDADES = ["Alta","Média","Baixa"]
@@ -71,6 +74,8 @@ MODULO_COLOR_MAP = {
     "legal": {"border": "#0891b2", "bg": "#ecfeff", "icon": "⚖️"},
     "relatorios": {"border": "#0f172a", "bg": "#f8fafc", "icon": "📑"},
     "bases": {"border": "#0f172a", "bg": "#f8fafc", "icon": "📥"},
+    "pendencias": {"border": "#dc2626", "bg": "#fef2f2", "icon": "🚦"},
+    "pac": {"border": "#7c3aed", "bg": "#f5f3ff", "icon": "🛠️"},
 }
 NR12_HOME_PAGE = "Submódulos da Sustentação"
 NR12_SUBMODULOS = {
@@ -239,6 +244,10 @@ NOME_MODULO_RELATORIOS = "Relatórios Integrados"
 RELATORIOS_HOME_PAGE = "Submódulos de Relatórios Integrados"
 RELATORIOS_EXECUTIVO_PAGE = "Relatório Executivo Integrado"
 NOME_MODULO_BASES = "Atualização de Bases"
+
+APP_STANDALONE_PAGES = ["home", AJUDA_PAGE, "Usuários e Acessos", NOME_MODULO_BASES, NOME_MODULO_PENDENCIAS, NOME_MODULO_PAC_UNIFICADO]
+APP_MODULE_KEYS = ["nr12", "ehs", "energia", "nearmiss", "legal", "relatorios"]
+DEFAULT_PLOTLY_COLORWAY = ["#2563eb", "#16a34a", "#f97316", "#7c3aed", "#0891b2", "#dc2626", "#64748b", "#f59e0b"]
 BASES_PAGE = "Central de Atualização de Bases"
 RELATORIOS_SUBMODULOS = {
     "Relatórios Executivos": {
@@ -814,9 +823,77 @@ class Usuario(Base):
     senha_hash=Column(String(160))
     senha_salt=Column(String(80))
     is_master=Column(Boolean,default=False)
+    perfil_personalizado_id=Column(Integer,ForeignKey("perfis_acesso_personalizados.id"))
     criado_em=Column(DateTime,default=datetime.utcnow)
     atualizado_em=Column(DateTime,default=datetime.utcnow)
     site=relationship("Site")
+    perfil_personalizado_obj=relationship("PerfilAcessoPersonalizado")
+
+class PerfilAcessoPersonalizado(Base):
+    __tablename__="perfis_acesso_personalizados"
+    id=Column(Integer,primary_key=True)
+    nome=Column(String(120),unique=True,nullable=False)
+    descricao=Column(Text)
+    visao_lag=Column(Boolean,default=False)
+    ativo=Column(Boolean,default=True)
+    criado_em=Column(DateTime,default=datetime.utcnow)
+    atualizado_em=Column(DateTime,default=datetime.utcnow)
+    criado_por=Column(String(120))
+
+class PermissaoAcessoPagina(Base):
+    __tablename__="permissoes_acesso_paginas"
+    id=Column(Integer,primary_key=True)
+    perfil_id=Column(Integer,ForeignKey("perfis_acesso_personalizados.id"),nullable=False)
+    modulo=Column(String(80),nullable=False)
+    pagina=Column(String(180),nullable=False)
+    pode_visualizar=Column(Boolean,default=False)
+    pode_editar=Column(Boolean,default=False)
+    pode_exportar=Column(Boolean,default=False)
+    perfil=relationship("PerfilAcessoPersonalizado")
+    __table_args__=(UniqueConstraint("perfil_id","modulo","pagina",name="uq_perfil_pagina"),)
+
+class RascunhoFormulario(Base):
+    __tablename__="rascunhos_formularios"
+    id=Column(Integer,primary_key=True)
+    usuario_id=Column(Integer,ForeignKey("usuarios.id"))
+    chave=Column(String(220),nullable=False)
+    modulo=Column(String(80))
+    pagina=Column(String(180))
+    dados_json=Column(Text)
+    atualizado_em=Column(DateTime,default=datetime.utcnow)
+    usuario=relationship("Usuario")
+    __table_args__=(UniqueConstraint("usuario_id","chave",name="uq_rascunho_usuario_chave"),)
+
+class BaseVersaoHistorico(Base):
+    __tablename__="bases_versoes_historico"
+    id=Column(Integer,primary_key=True)
+    modulo=Column(String(80),nullable=False)
+    base_nome=Column(String(180),nullable=False)
+    nome_arquivo=Column(String(260))
+    linhas=Column(Integer,default=0)
+    usuario=Column(String(120))
+    observacoes=Column(Text)
+    criado_em=Column(DateTime,default=datetime.utcnow)
+
+class PACUnificado(Base):
+    __tablename__="pac_unificado"
+    id=Column(Integer,primary_key=True)
+    origem_modulo=Column(String(80),nullable=False)
+    origem_tabela=Column(String(80),nullable=False)
+    origem_id=Column(Integer,nullable=False)
+    site_id=Column(Integer,ForeignKey("sites.id"))
+    titulo=Column(String(180))
+    descricao=Column(Text)
+    responsavel=Column(String(180))
+    prazo=Column(Date)
+    status=Column(String(80))
+    criticidade=Column(String(80))
+    ats_json=Column(Text)
+    criado_em=Column(DateTime,default=datetime.utcnow)
+    atualizado_em=Column(DateTime,default=datetime.utcnow)
+    site=relationship("Site")
+    __table_args__=(UniqueConstraint("origem_tabela","origem_id",name="uq_pac_unificado_origem"),)
+
 class MaquinaNR12(Base):
     __tablename__="maquinas_nr12"
     id=Column(Integer,primary_key=True); codigo=Column(String(80),unique=True,nullable=False); site_id=Column(Integer,ForeignKey("sites.id"),nullable=False)
@@ -1091,6 +1168,7 @@ def ensure_schema_updates():
     safe_add_column("usuarios", "senha_hash", "VARCHAR(160)")
     safe_add_column("usuarios", "senha_salt", "VARCHAR(80)")
     safe_add_column("usuarios", "is_master", "BOOLEAN DEFAULT 0")
+    safe_add_column("usuarios", "perfil_personalizado_id", "INTEGER")
     safe_add_column("usuarios", "criado_em", "DATETIME")
     safe_add_column("usuarios", "atualizado_em", "DATETIME")
     safe_add_column("maquinas_nr12", "risco_maquina", "VARCHAR(80) DEFAULT 'Apreciação de risco não realizada'")
@@ -1395,6 +1473,8 @@ def normalizar_perfil_acesso(perfil):
         PERFIL_MASTER: PERFIL_MASTER,
         PERFIL_TECNICO_EHS: PERFIL_TECNICO_EHS,
         PERFIL_VISUALIZADOR: PERFIL_VISUALIZADOR,
+        PERFIL_PERSONALIZADO: PERFIL_PERSONALIZADO,
+        "Personalizado": PERFIL_PERSONALIZADO,
     }
     return mapa.get(str(perfil or "").strip(), PERFIL_VISUALIZADOR)
 
@@ -1493,34 +1573,140 @@ def init_db():
             db.add(a); db.flush(); gerar_checklist_automatico_ehs(db,a.id,False); db.commit()
     finally: db.close()
 
+
+def lista_paginas_permissao():
+    paginas=[]
+    def add(modulo, pagina, label=None):
+        item=(modulo, pagina, label or pagina)
+        if item not in paginas:
+            paginas.append(item)
+    add("home", "home", "Página inicial")
+    add("ajuda", AJUDA_PAGE, AJUDA_PAGE)
+    add("usuarios", "Usuários e Acessos", "Usuários e Acessos")
+    add("bases", NOME_MODULO_BASES, NOME_MODULO_BASES)
+    add("pendencias", NOME_MODULO_PENDENCIAS, NOME_MODULO_PENDENCIAS)
+    add("pac", NOME_MODULO_PAC_UNIFICADO, NOME_MODULO_PAC_UNIFICADO)
+    for modulo, home, submods in [("nr12", NR12_HOME_PAGE, NR12_SUBMODULOS),("ehs", EHS_HOME_PAGE, EHS_SUBMODULOS),("energia", ENERGIA_HOME_PAGE, ENERGIA_SUBMODULOS),("nearmiss", NEARMISS_HOME_PAGE, NEARMISS_SUBMODULOS),("legal", LEGAL_HOME_PAGE, LEGAL_SUBMODULOS),("relatorios", RELATORIOS_HOME_PAGE, RELATORIOS_SUBMODULOS)]:
+        add(modulo, home, home)
+        for cfg in submods.values():
+            for pg in cfg.get("paginas", []): add(modulo, pg, pg)
+    return paginas
+
+def perfil_personalizado_usuario(u):
+    if not u or normalizar_perfil_acesso(getattr(u, "perfil", None)) != PERFIL_PERSONALIZADO: return None
+    return getattr(u, "perfil_personalizado_obj", None)
+
+def usuario_personalizado_tem_permissao(u, modulo=None, pagina=None, tipo="visualizar"):
+    perfil=perfil_personalizado_usuario(u)
+    if not perfil or not getattr(perfil,"ativo",False): return False
+    try:
+        db_tmp=SessionLocal(); perms=db_tmp.query(PermissaoAcessoPagina).filter_by(perfil_id=perfil.id).all(); db_tmp.close()
+    except Exception:
+        perms=[]
+    for p in perms:
+        if modulo and p.modulo!=modulo: continue
+        if pagina and p.pagina!=pagina: continue
+        if tipo=="editar" and p.pode_editar: return True
+        if tipo=="exportar" and (p.pode_exportar or p.pode_editar): return True
+        if tipo=="visualizar" and (p.pode_visualizar or p.pode_editar or p.pode_exportar): return True
+    return False
+
+def is_custom_lag_user(u):
+    perfil=perfil_personalizado_usuario(u)
+    return bool(perfil and getattr(perfil,"visao_lag",False))
+
 def can_admin(u): return is_master_user(u)
+
+def can_access_page(u, modulo, pagina):
+    if not u or not getattr(u,"ativo",False): return False
+    if modulo in ["home","ajuda"]: return True
+    if is_super_admin_user(u): return True
+    if modulo in ["usuarios","bases"]: return False
+    perfil=normalizar_perfil_acesso(getattr(u,"perfil",None))
+    if perfil==PERFIL_PERSONALIZADO: return usuario_personalizado_tem_permissao(u,modulo,pagina,"visualizar")
+    if is_master_user(u): return True
+    if pagina in ["Logs do Sistema"]: return False
+    return perfil in [PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR]
+
+def can_access_module(u, modulo):
+    if modulo in ["home","ajuda"]: return True
+    if modulo in ["usuarios","bases"]: return is_super_admin_user(u)
+    if normalizar_perfil_acesso(getattr(u,"perfil",None))==PERFIL_PERSONALIZADO:
+        return usuario_personalizado_tem_permissao(u,modulo,None,"visualizar")
+    return bool(u and getattr(u,"ativo",False))
+
+def can_edit_page(u, modulo, pagina=None):
+    if not u or not getattr(u,"ativo",False): return False
+    if is_super_admin_user(u): return True
+    if modulo in ["usuarios","bases"]: return False
+    perfil=normalizar_perfil_acesso(getattr(u,"perfil",None))
+    if perfil==PERFIL_PERSONALIZADO: return usuario_personalizado_tem_permissao(u,modulo,pagina,"editar") or (pagina is None and usuario_personalizado_tem_permissao(u,modulo,None,"editar"))
+    if is_master_user(u): return True
+    return perfil==PERFIL_TECNICO_EHS
+
+def can_export_page(u, modulo, pagina=None):
+    if not u or not getattr(u,"ativo",False): return False
+    if is_master_user(u): return True
+    perfil=normalizar_perfil_acesso(getattr(u,"perfil",None))
+    if perfil==PERFIL_PERSONALIZADO: return usuario_personalizado_tem_permissao(u,modulo,pagina,"exportar") or (pagina is None and usuario_personalizado_tem_permissao(u,modulo,None,"exportar"))
+    return perfil in [PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR]
+
+def _ctx_to_modulo(ctx):
+    c=str(ctx or "").lower()
+    if any(x in c for x in ["auditoria","ehs","diretriz"]): return "ehs"
+    if any(x in c for x in ["energia","emiss"]): return "energia"
+    if any(x in c for x in ["near","concern"]): return "nearmiss"
+    if any(x in c for x in ["legal","obrig"]): return "legal"
+    if any(x in c for x in ["relatorio","ats","gensuite"]): return "relatorios"
+    if any(x in c for x in ["pac","acao","ação"]): return "pac"
+    return "nr12"
+
 def can_edit(u,ctx="geral"):
-    if not u or not getattr(u, "ativo", False):
-        return False
-    if is_master_user(u):
-        return True
-    return normalizar_perfil_acesso(getattr(u, "perfil", None)) == PERFIL_TECNICO_EHS
+    return can_edit_page(u,_ctx_to_modulo(ctx),None)
+
 def visible_site_ids(u,db):
-    if not u or not getattr(u, "ativo", False):
-        return []
-    if is_master_user(u):
-        return [s.id for s in db.query(Site).filter(Site.codigo!="Corporativo",Site.ativo==True).all()]
+    if not u or not getattr(u,"ativo",False): return []
+    if is_master_user(u) or is_custom_lag_user(u): return [s.id for s in db.query(Site).filter(Site.codigo!="Corporativo",Site.ativo==True).all()]
     return [u.site_id] if u.site_id else []
 
 def visible_site_codes(u,db):
-    if not u or not getattr(u, "ativo", False):
-        return []
-    if is_master_user(u):
-        return [s.codigo for s in db.query(Site).filter(Site.codigo!="Corporativo",Site.ativo==True).all()]
-    return [u.site.codigo] if getattr(u, "site", None) and u.site.codigo != "Corporativo" else []
+    if not u or not getattr(u,"ativo",False): return []
+    if is_master_user(u) or is_custom_lag_user(u): return [s.codigo for s in db.query(Site).filter(Site.codigo!="Corporativo",Site.ativo==True).all()]
+    return [u.site.codigo] if getattr(u,"site",None) and u.site.codigo!="Corporativo" else []
 
-def filtrar_df_por_site_codigo(df,u,db,coluna="Site código"):
-    if df is None or df.empty or is_master_user(u):
+def filtrar_df_por_site_codigo(df, u, db, coluna_site="Site"):
+    if df is None or getattr(df, "empty", True) or not u or coluna_site not in getattr(df, "columns", []):
         return df
-    codigos = set(visible_site_codes(u,db))
-    if not codigos or coluna not in df.columns:
+    codigos=set(visible_site_codes(u,db))
+    if not codigos:
         return df.iloc[0:0].copy()
-    return df[df[coluna].astype(str).isin(codigos)].copy()
+    if is_master_user(u) or is_custom_lag_user(u):
+        return df.copy()
+    base=df.copy()
+    serie=base[coluna_site].astype(str).str.upper().str.strip()
+    return base[serie.isin({str(c).upper().strip() for c in codigos})].copy()
+
+def filtro_site_padrao(db,u,key_prefix="filtro_site",incluir_todos=True,codigos=None):
+    codigos_base=codigos or visible_site_codes(u,db)
+    if not codigos_base: return []
+    if len(codigos_base)==1 or not incluir_todos: return codigos_base
+    opcoes=["Todos"]+codigos_base
+    selecionado=st.multiselect("Site",opcoes,default=["Todos"],key=f"{key_prefix}_site")
+    if not selecionado or "Todos" in selecionado: return codigos_base
+    return [x for x in selecionado if x in codigos_base]
+
+def render_filtros_padrao(db,u,df=None,key_prefix="filtro_padrao",col_site="Site",incluir_periodo=False):
+    filtros={"sites":visible_site_codes(u,db),"data_inicio":None,"data_fim":None}
+    cols=st.columns(3 if incluir_periodo else 1)
+    op_sites=filtros["sites"]
+    if df is not None and col_site in getattr(df,"columns",[]):
+        op_sites=[x for x in op_sites if x in set(df[col_site].astype(str))] or filtros["sites"]
+    with cols[0]: filtros["sites"]=filtro_site_padrao(db,u,key_prefix,True,op_sites)
+    if incluir_periodo:
+        with cols[1]: filtros["data_inicio"]=st.date_input("Data inicial",value=date.today()-timedelta(days=365),key=f"{key_prefix}_dt_ini")
+        with cols[2]: filtros["data_fim"]=st.date_input("Data final",value=date.today(),key=f"{key_prefix}_dt_fim")
+    return filtros
+
 
 def registrar_log(db, usuario, modulo, entidade, entidade_id, acao, campo=None, valor_anterior=None, valor_novo=None, observacao=None):
     try:
@@ -2717,6 +2903,8 @@ def login_page(db):
             st.session_state.usuario_id = usuario.id
             st.session_state.usuario_nome = usuario.nome
             st.session_state.modulo = "home"
+            registrar_log(db, usuario, "Autenticação", "Usuario", usuario.id, "login", observacao="Login realizado")
+            db.commit()
             st.success("Login realizado com sucesso.")
             st.rerun()
         else:
@@ -2749,6 +2937,14 @@ def render_user_context_sidebar(db,u):
             st.rerun()
         if st.sidebar.button("📥 Atualização de bases", use_container_width=True, key="sidebar_atualizacao_bases"):
             st.session_state.modulo="bases"
+            st.rerun()
+    if can_access_module(u,"pendencias"):
+        if st.sidebar.button("🚦 Pendências integradas", use_container_width=True, key="sidebar_pendencias_integradas"):
+            st.session_state.modulo="pendencias"
+            st.rerun()
+    if can_access_module(u,"pac"):
+        if st.sidebar.button("🛠️ Ações corretivas", use_container_width=True, key="sidebar_pac_unificado"):
+            st.session_state.modulo="pac"
             st.rerun()
     st.sidebar.divider()
 
@@ -2788,24 +2984,23 @@ def submodulos_visiveis(modulo, u):
         "legal": LEGAL_SUBMODULOS,
         "relatorios": RELATORIOS_SUBMODULOS,
     }.get(modulo, {})
-    # As rotinas de atualização/importação de bases ficam centralizadas
-    # no módulo administrativo "Atualização de Bases".
-    proibidas = {
-        "Atualizar Base",
-        "Actual Hours",
-        "Atualizar Base Near Miss",
-        "Atualizar Base Legal",
-        "Atualizar Procedimentos de Alto Risco",
-    }
+    paginas_centralizadas = {"Atualizar Base", "Actual Hours", "Atualizar Base Near Miss", "Atualizar Base Legal", "Atualizar Procedimentos de Alto Risco"}
     out = {}
     for nome, cfg in base.items():
-        paginas = [p for p in cfg.get("paginas", []) if p not in proibidas]
-        if not paginas:
-            continue
-        novo = dict(cfg)
-        novo["paginas"] = paginas
-        out[nome] = novo
+        paginas = []
+        for p in cfg.get("paginas", []):
+            if p in paginas_centralizadas:
+                continue
+            if p == "Logs do Sistema" and not can_admin(u):
+                continue
+            if can_access_page(u, modulo, p):
+                paginas.append(p)
+        if paginas:
+            novo = dict(cfg)
+            novo["paginas"] = paginas
+            out[nome] = novo
     return out
+
 
 def bases_status_df(db):
     """Resumo simples das últimas cargas registradas por base oficial."""
@@ -2854,6 +3049,7 @@ def bases_atualizacoes_page(db,u):
         "Near Miss",
         "Legislação",
         "Procedimentos de Alto Risco",
+        "Histórico de versões",
     ])
     with tabs[0]:
         energia_atualizar_base(db,u)
@@ -2865,86 +3061,274 @@ def bases_atualizacoes_page(db,u):
         legal_atualizar_base(db,u)
     with tabs[4]:
         procedimentos_ar_atualizar_base(db,u)
+    with tabs[5]:
+        section("Histórico de versões das bases")
+        hist=bases_versoes_df(db)
+        if hist.empty:
+            empty_state("Nenhuma versão de base registrada.")
+        else:
+            st.dataframe(hist,use_container_width=True,hide_index=True)
+            download_excel_button("Exportar histórico","historico_versoes_bases.xlsx",{"Histórico":hist},key="download_historico_bases")
+
+
+def registrar_versao_base(db, modulo, base_nome, nome_arquivo=None, linhas=0, usuario=None, observacoes=None):
+    try:
+        nome_usuario = usuario.nome if hasattr(usuario, "nome") else str(usuario or "Sistema")
+        db.add(BaseVersaoHistorico(modulo=modulo, base_nome=base_nome, nome_arquivo=nome_arquivo, linhas=int(linhas or 0), usuario=nome_usuario, observacoes=observacoes, criado_em=datetime.utcnow()))
+        registrar_log(db, usuario, modulo, "BaseVersaoHistorico", None, "atualizar_base", observacao=f"{base_nome}: {linhas} linha(s)")
+    except Exception:
+        logging.exception("Falha ao registrar versão de base")
+
+def bases_versoes_df(db):
+    rows=[]
+    for h in db.query(BaseVersaoHistorico).order_by(BaseVersaoHistorico.criado_em.desc()).limit(200):
+        rows.append({"Data": h.criado_em.strftime("%d/%m/%Y %H:%M") if h.criado_em else "—", "Módulo": h.modulo, "Base": h.base_nome, "Arquivo": h.nome_arquivo or "—", "Linhas": h.linhas or 0, "Usuário": h.usuario or "—", "Observações": h.observacoes or "—"})
+    return pd.DataFrame(rows)
+
+def carregar_rascunho(db, u, chave, default=None):
+    default=default or {}
+    try:
+        if not u: return dict(default)
+        obj=db.query(RascunhoFormulario).filter_by(usuario_id=u.id,chave=chave).first()
+        if not obj or not obj.dados_json: return dict(default)
+        dados=json.loads(obj.dados_json); base=dict(default); base.update(dados if isinstance(dados,dict) else {})
+        return base
+    except Exception: return dict(default)
+
+def salvar_rascunho(db, u, chave, modulo, pagina, dados):
+    try:
+        if not u: return
+        obj=db.query(RascunhoFormulario).filter_by(usuario_id=u.id,chave=chave).first()
+        if not obj:
+            obj=RascunhoFormulario(usuario_id=u.id,chave=chave,modulo=modulo,pagina=pagina); db.add(obj)
+        obj.dados_json=json.dumps(dados,ensure_ascii=False,default=str); obj.atualizado_em=datetime.utcnow(); db.flush()
+    except Exception: logging.exception("Falha ao salvar rascunho")
+
+def limpar_rascunho(db,u,chave):
+    try:
+        if not u: return
+        obj=db.query(RascunhoFormulario).filter_by(usuario_id=u.id,chave=chave).first()
+        if obj: db.delete(obj); db.flush()
+    except Exception: pass
+
+def pac_unificado_df(db,u):
+    rows=[]; ids=visible_site_ids(u,db)
+    for p in db.query(PACNR12).filter(PACNR12.site_id.in_(ids)).all():
+        rows.append({"Módulo":"Proteções de Máquinas","Origem":"pac_nr12","ID origem":p.id,"Site":site_code(db,p.site_id),"Título":getattr(p,"ats_action_title",None) or f"PAC Proteções {p.id}","Descrição":p.descricao_desvio or getattr(p,"ats_action_description",None) or "—","Responsável":p.responsavel or getattr(p,"ats_responsible_person",None) or "—","Prazo":as_date(p.prazo or getattr(p,"ats_closure_due_date",None)),"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else (p.status or "—"),"Criticidade":p.classificacao or getattr(p,"ats_risk_category",None) or "—","Categoria ATS":getattr(p,"ats_action_category",None) or "—"})
+    for p in db.query(PACEHS).filter(PACEHS.site_id.in_(ids)).all():
+        rows.append({"Módulo":"Auditoria Cruzada EHS","Origem":"pac_ehs","ID origem":p.id,"Site":site_code(db,p.site_id),"Título":getattr(p,"ats_action_title",None) or f"PAC Auditoria {p.id}","Descrição":p.descricao or getattr(p,"ats_action_description",None) or "—","Responsável":p.responsavel or getattr(p,"ats_responsible_person",None) or "—","Prazo":as_date(p.prazo or getattr(p,"ats_closure_due_date",None)),"Status":"Vencida" if identificar_pac_vencido(p.prazo,p.status) else (p.status or "—"),"Criticidade":p.prioridade_criticidade or getattr(p,"ats_risk_category",None) or "—","Categoria ATS":getattr(p,"ats_action_category",None) or "—"})
+    df=pd.DataFrame(rows)
+    if not df.empty:
+        df["Prazo ordenação"]=pd.to_datetime(df["Prazo"],errors="coerce"); df["Prazo"]=df["Prazo"].apply(fmt_date); df=df.sort_values(["Status","Prazo ordenação"],na_position="last").drop(columns=["Prazo ordenação"])
+    return df
+
+def sincronizar_pac_unificado(db):
+    try:
+        for tabela, modulo, cls in [("pac_nr12","Proteções de Máquinas",PACNR12),("pac_ehs","Auditoria Cruzada EHS",PACEHS)]:
+            for p in db.query(cls).all():
+                obj=db.query(PACUnificado).filter_by(origem_tabela=tabela,origem_id=p.id).first()
+                if not obj:
+                    obj=PACUnificado(origem_tabela=tabela,origem_id=p.id,origem_modulo=modulo,criado_em=datetime.utcnow()); db.add(obj)
+                obj.site_id=getattr(p,"site_id",None); obj.titulo=getattr(p,"ats_action_title",None) or f"{modulo} {p.id}"; obj.descricao=getattr(p,"descricao_desvio",None) or getattr(p,"descricao",None) or getattr(p,"ats_action_description",None); obj.responsavel=getattr(p,"responsavel",None) or getattr(p,"ats_responsible_person",None); obj.prazo=as_date(getattr(p,"prazo",None) or getattr(p,"ats_closure_due_date",None)); obj.status=getattr(p,"status",None) or getattr(p,"ats_status",None); obj.criticidade=getattr(p,"classificacao",None) or getattr(p,"prioridade_criticidade",None) or getattr(p,"ats_risk_category",None); obj.ats_json=json.dumps(ats_payload_from_obj(db,p),ensure_ascii=False,default=str); obj.atualizado_em=datetime.utcnow()
+        db.flush()
+    except Exception: logging.exception("Falha ao sincronizar PAC unificado")
+
+def pac_unificado_page(db,u):
+    header(NOME_MODULO_PAC_UNIFICADO, "Consulta única dos planos de ação corretiva no padrão Gensuite ATS")
+    if not can_access_module(u,"pac"): alert_card("Acesso não autorizado para esta página."); return
+    sincronizar_pac_unificado(db); db.commit(); df=pac_unificado_df(db,u)
+    if df.empty: empty_state("Nenhuma ação corretiva cadastrada para o escopo atual."); return
+    filtros=render_filtros_padrao(db,u,df,key_prefix="pac_unificado",col_site="Site"); f=df.copy()
+    if filtros["sites"]: f=f[f["Site"].isin(filtros["sites"])]
+    c1,c2,c3,c4=st.columns(4); c1.metric("Ações",len(f)); c2.metric("Vencidas",int((f["Status"]=="Vencida").sum())); c3.metric("Abertas",int(f["Status"].isin(["Aberta","Em andamento","Aguardando validação"]).sum())); c4.metric("Sites",f["Site"].nunique())
+    if not f.empty:
+        graf=f.groupby(["Site","Status"],as_index=False).size().rename(columns={"size":"Quantidade"}); plotly_chart_safe(px.bar(graf,x="Site",y="Quantidade",color="Status",title="Ações corretivas por site e status",text="Quantidade"),use_container_width=True)
+    st.dataframe(f,use_container_width=True,hide_index=True)
+    if can_export_page(u,"pac",NOME_MODULO_PAC_UNIFICADO): download_excel_button("Exportar ações corretivas","acoes_corretivas_unificadas.xlsx",{"Ações":f.drop(columns=[c for c in ["Origem","ID origem"] if c in f.columns])},key="download_pac_unificado")
+
+def pendencias_integradas_df(db,u):
+    rows=[]; ids=visible_site_ids(u,db); hoje=date.today()
+    for m in db.query(MaquinaNR12).filter(MaquinaNR12.site_id.in_(ids)).all():
+        if calcular_status_maquina_nr12(db,m)!="Conforme": rows.append({"Módulo":"Proteções de Máquinas","Tipo":"Máquina não conforme","Site":site_code(db,m.site_id),"Descrição":f"{m.codigo} - {m.nome}","Responsável":m.responsavel_area or "—","Prazo":fmt_date(m.data_prevista_adequacao),"Prioridade":m.criticidade or "Média","Status":"Aberta"})
+        if m.proxima_auditoria and m.proxima_auditoria <= hoje + timedelta(days=30): rows.append({"Módulo":"Proteções de Máquinas","Tipo":"Auditoria próxima/vencida","Site":site_code(db,m.site_id),"Descrição":f"{m.codigo} - próxima auditoria","Responsável":m.responsavel_area or "—","Prazo":fmt_date(m.proxima_auditoria),"Prioridade":m.criticidade or "Média","Status":"Vencida" if m.proxima_auditoria<hoje else "Próxima"})
+    for _,r in pac_unificado_df(db,u).iterrows():
+        if str(r.get("Status")) in ["Vencida","Aberta","Em andamento","Aguardando validação"]: rows.append({"Módulo":r.get("Módulo"),"Tipo":"PAC / Ação corretiva","Site":r.get("Site"),"Descrição":r.get("Descrição"),"Responsável":r.get("Responsável"),"Prazo":r.get("Prazo"),"Prioridade":r.get("Criticidade"),"Status":r.get("Status")})
+    try:
+        ndf=near_miss_df(db); ndf=filtrar_df_por_site_codigo(ndf,u,db,"Site código")
+        if not ndf.empty:
+            npend=ndf[ndf["Status do prazo"].isin(["Aberto vencido","Aberto sem prazo"])]
+            for _,r in npend.head(1000).iterrows(): rows.append({"Módulo":"Near Miss","Tipo":r.get("Status do prazo"),"Site":r.get("Site código"),"Descrição":r.get("Descrição","—"),"Responsável":r.get("Responsável","—"),"Prazo":fmt_date(r.get("Closure Due Date")),"Prioridade":"Alta" if r.get("Status do prazo")=="Aberto vencido" else "Média","Status":r.get("Status do prazo")})
+    except Exception: pass
+    try:
+        ldf=legal_df(db); ldf=filtrar_df_por_site_codigo(ldf,u,db,"Site código")
+        if not ldf.empty:
+            pend=ldf[~ldf["Status obrigação"].astype(str).isin(["Atendida","Atendido","Real Sem Obrigação"])]
+            for _,r in pend.head(1000).iterrows(): rows.append({"Módulo":"Legislação e Obrigações","Tipo":"Obrigação pendente","Site":r.get("Site código"),"Descrição":r.get("Obrigação","—"),"Responsável":"EHS","Prazo":"—","Prioridade":"Alta" if "Não" in str(r.get("Status obrigação")) else "Média","Status":r.get("Status obrigação")})
+    except Exception: pass
+    return pd.DataFrame(rows)
+
+def pendencias_integradas_page(db,u):
+    header(NOME_MODULO_PENDENCIAS,"Visão consolidada das pendências críticas, prazos e ações por site")
+    if not can_access_module(u,"pendencias"): alert_card("Acesso não autorizado para esta página."); return
+    sincronizar_pac_unificado(db); db.commit(); df=pendencias_integradas_df(db,u)
+    if df.empty: empty_state("Nenhuma pendência identificada para o escopo atual."); return
+    filtros=render_filtros_padrao(db,u,df,key_prefix="pendencias_integradas",col_site="Site"); f=df.copy()
+    if filtros["sites"]: f=f[f["Site"].isin(filtros["sites"])]
+    c1,c2,c3,c4=st.columns(4); c1.metric("Pendências",len(f)); c2.metric("Sites",f["Site"].nunique()); c3.metric("Alta prioridade",int((f["Prioridade"].astype(str)=="Alta").sum())); c4.metric("Vencidas",int(f["Status"].astype(str).str.contains("Vencida|vencido",case=False,na=False).sum()))
+    resumo=f.groupby(["Módulo"],as_index=False).size().rename(columns={"size":"Quantidade"}).sort_values("Quantidade",ascending=False); plotly_chart_safe(px.bar(resumo,x="Quantidade",y="Módulo",orientation="h",title="Pendências por módulo",text="Quantidade"),use_container_width=True)
+    st.dataframe(f,use_container_width=True,hide_index=True)
+    if can_export_page(u,"pendencias",NOME_MODULO_PENDENCIAS): download_excel_button("Exportar pendências integradas","pendencias_integradas.xlsx",{"Pendências":f},key="download_pendencias_integradas")
+
+
+def permissoes_df(db, perfil_id):
+    rows=[]
+    perms={(p.modulo,p.pagina):p for p in db.query(PermissaoAcessoPagina).filter_by(perfil_id=perfil_id).all()} if perfil_id else {}
+    for modulo,pagina,label in lista_paginas_permissao():
+        p=perms.get((modulo,pagina))
+        rows.append({"Módulo":modulo,"Página":pagina,"Visualizar":bool(p.pode_visualizar) if p else False,"Editar":bool(p.pode_editar) if p else False,"Exportar":bool(p.pode_exportar) if p else False})
+    return pd.DataFrame(rows)
+
+def salvar_permissoes_personalizadas(db, perfil, df_perm):
+    existentes={(p.modulo,p.pagina):p for p in db.query(PermissaoAcessoPagina).filter_by(perfil_id=perfil.id).all()}
+    for _,r in df_perm.iterrows():
+        modulo=str(r.get("Módulo") or "")
+        pagina=str(r.get("Página") or "")
+        if not modulo or not pagina: continue
+        obj=existentes.get((modulo,pagina))
+        if not obj:
+            obj=PermissaoAcessoPagina(perfil_id=perfil.id,modulo=modulo,pagina=pagina)
+            db.add(obj)
+        obj.pode_visualizar=bool(r.get("Visualizar")) or bool(r.get("Editar")) or bool(r.get("Exportar"))
+        obj.pode_editar=bool(r.get("Editar"))
+        obj.pode_exportar=bool(r.get("Exportar"))
+    perfil.atualizado_em=datetime.utcnow()
+    db.flush()
 
 def usuarios_admin_page(db,u):
-    header("Usuários e Acessos", "Gestão de logins, perfis e segmentação por site")
+    header("Usuários e Acessos", "Gestão de logins, perfis, permissões e segmentação por site")
     if not is_super_admin_user(u):
         alert_card("Acesso restrito ao administrador principal.")
         return
     sites = {s.codigo: s.id for s in db.query(Site).filter(Site.ativo==True).order_by(Site.codigo).all()}
     site_opts_todos = list(sites.keys())
     site_opts_locais = [k for k in sites.keys() if k != "Corporativo"]
-    usuarios = db.query(Usuario).order_by(Usuario.nome).all()
-    df = pd.DataFrame([{
-        "ID": x.id,
-        "Login/Nome": x.nome,
-        "Perfil": normalizar_perfil_acesso(x.perfil),
-        "Escopo": "Todos os sites / LAG" if is_master_user(x) else (x.site.codigo if x.site else "—"),
-        "Ativo": "Sim" if x.ativo else "Não",
-        "Master": "Sim" if is_master_user(x) else "Não",
-        "Atualizado em": fmt_date(getattr(x,"atualizado_em",None)),
-    } for x in usuarios])
-    section("Usuários cadastrados")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    section("Criar novo usuário")
-    with st.form("novo_usuario_form"):
-        c1,c2,c3 = st.columns(3)
-        nome = c1.text_input("Login/Nome")
-        perfil = c2.selectbox("Perfil", [PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR], help="Gerencial LAG visualiza todos os sites e consolidados LAG.")
-        site = c3.selectbox("Site", site_opts_todos, index=site_opts_todos.index("Corporativo") if "Corporativo" in site_opts_todos else 0, help="Para Gerencial LAG, o escopo será todos os sites.")
-        senha = st.text_input("Senha inicial", value=SENHA_PADRAO_NOVO_USUARIO, type="password")
-        criar = st.form_submit_button("Criar usuário", use_container_width=True, type="primary")
-    if criar:
-        perfil_norm = normalizar_perfil_acesso(perfil)
-        is_master_novo = perfil_norm == PERFIL_MASTER
-        site_final = "Corporativo" if is_master_novo else site
-        if not nome.strip():
-            st.error("Informe o login/nome.")
-        elif db.query(Usuario).filter(Usuario.nome.ilike(nome.strip())).first():
-            st.error("Já existe usuário com esse login/nome.")
-        elif not is_master_novo and site_final == "Corporativo":
-            st.error("Perfis Técnico de EHS e Visualizador devem estar vinculados a um site específico.")
-        else:
-            obj = Usuario(nome=nome.strip(), perfil=perfil_norm, site_id=sites.get(site_final), ativo=True, is_master=is_master_novo, criado_em=datetime.utcnow(), atualizado_em=datetime.utcnow())
-            set_user_password(obj, senha or SENHA_PADRAO_NOVO_USUARIO)
-            db.add(obj); db.flush()
-            escopo_log = "Todos os sites / LAG" if is_master_novo else site_final
-            registrar_log(db,u,"Usuários e Acessos","Usuario",obj.id,"criar",observacao=f"Usuário {obj.nome} criado para {escopo_log}")
-            db.commit(); st.success("Usuário criado."); st.rerun()
-    section("Editar usuário existente")
-    editaveis = [x for x in usuarios if not is_super_admin_user(x)]
-    if not editaveis:
-        empty_state("Nenhum usuário editável além do administrador principal.")
-        return
-    labels = {x.id: f"{x.nome} — {normalizar_perfil_acesso(x.perfil)} — {'Todos os sites / LAG' if is_master_user(x) else (x.site.codigo if x.site else '—')}" for x in editaveis}
-    uid = st.selectbox("Selecionar usuário", list(labels.keys()), format_func=lambda x: labels.get(x,str(x)), key="usuario_editar_select")
-    obj = db.get(Usuario, int(uid))
-    if obj:
-        perfil_atual = normalizar_perfil_acesso(obj.perfil)
-        site_atual = "Corporativo" if is_master_user(obj) else (obj.site.codigo if obj.site else (site_opts_locais[0] if site_opts_locais else "Corporativo"))
-        with st.form("editar_usuario_form"):
+    tabs=st.tabs(["Usuários", "Perfis personalizados", "Matriz de acesso"])
+    with tabs[0]:
+        usuarios = db.query(Usuario).order_by(Usuario.nome).all()
+        df = pd.DataFrame([{
+            "ID": x.id,
+            "Login/Nome": x.nome,
+            "Perfil": normalizar_perfil_acesso(x.perfil),
+            "Perfil personalizado": x.perfil_personalizado_obj.nome if getattr(x,"perfil_personalizado_obj",None) else "—",
+            "Escopo": "Todos os sites / LAG" if is_master_user(x) or is_custom_lag_user(x) else (x.site.codigo if x.site else "—"),
+            "Ativo": "Sim" if x.ativo else "Não",
+            "Atualizado em": fmt_date(getattr(x,"atualizado_em",None)),
+        } for x in usuarios])
+        section("Usuários cadastrados")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        perfis_custom=db.query(PerfilAcessoPersonalizado).filter_by(ativo=True).order_by(PerfilAcessoPersonalizado.nome).all()
+        nomes_custom=[p.nome for p in perfis_custom]
+        mapa_custom={p.nome:p for p in perfis_custom}
+        perfis_opcoes=[PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR] + ([PERFIL_PERSONALIZADO] if nomes_custom else [])
+        section("Criar novo usuário")
+        with st.form("novo_usuario_form"):
             c1,c2,c3 = st.columns(3)
-            novo_perfil = c1.selectbox("Perfil", [PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR], index=[PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR].index(perfil_atual) if perfil_atual in [PERFIL_MASTER, PERFIL_TECNICO_EHS, PERFIL_VISUALIZADOR] else 2)
-            novo_site = c2.selectbox("Site", site_opts_todos, index=site_opts_todos.index(site_atual) if site_atual in site_opts_todos else 0, help="Para Gerencial LAG, o escopo será todos os sites.")
-            ativo = c3.checkbox("Ativo", value=bool(obj.ativo))
-            nova_senha = st.text_input("Nova senha (opcional)", type="password")
-            salvar = st.form_submit_button("Salvar alterações", use_container_width=True)
-        if salvar:
-            novo_perfil = normalizar_perfil_acesso(novo_perfil)
-            is_master_editado = novo_perfil == PERFIL_MASTER
-            site_final = "Corporativo" if is_master_editado else novo_site
-            if not is_master_editado and site_final == "Corporativo":
-                st.error("Perfis Técnico de EHS e Visualizador devem estar vinculados a um site específico.")
-                st.stop()
-            obj.perfil = novo_perfil
-            obj.site_id = sites.get(site_final)
-            obj.ativo = bool(ativo)
-            obj.is_master = is_master_editado
-            obj.atualizado_em = datetime.utcnow()
-            if nova_senha:
-                set_user_password(obj, nova_senha)
-            registrar_log(db,u,"Usuários e Acessos","Usuario",obj.id,"editar",observacao=f"Usuário {obj.nome} atualizado")
-            db.commit(); st.success("Usuário atualizado."); st.rerun()
+            nome = c1.text_input("Login/Nome")
+            perfil = c2.selectbox("Perfil", perfis_opcoes)
+            perfil_custom_nome = None
+            if perfil == PERFIL_PERSONALIZADO:
+                perfil_custom_nome = c3.selectbox("Perfil personalizado", nomes_custom)
+                perfil_custom_obj = mapa_custom.get(perfil_custom_nome)
+                site_choices = ["Corporativo"] + site_opts_locais if perfil_custom_obj and perfil_custom_obj.visao_lag else site_opts_locais
+            else:
+                perfil_custom_obj = None
+                site_choices = site_opts_todos if perfil == PERFIL_MASTER else site_opts_locais
+                c3.caption("Escopo definido pelo perfil")
+            site = st.selectbox("Site / Escopo", site_choices, index=site_choices.index("Corporativo") if "Corporativo" in site_choices else 0)
+            senha = st.text_input("Senha inicial", value=SENHA_PADRAO_NOVO_USUARIO, type="password")
+            criar = st.form_submit_button("Criar usuário", use_container_width=True, type="primary")
+        if criar:
+            perfil_norm = normalizar_perfil_acesso(perfil)
+            is_master_novo = perfil_norm == PERFIL_MASTER
+            custom_obj = mapa_custom.get(perfil_custom_nome) if perfil_norm == PERFIL_PERSONALIZADO else None
+            site_final = "Corporativo" if is_master_novo or (custom_obj and custom_obj.visao_lag and site == "Corporativo") else site
+            if not nome.strip(): st.error("Informe o login/nome.")
+            elif db.query(Usuario).filter(Usuario.nome.ilike(nome.strip())).first(): st.error("Já existe usuário com esse login/nome.")
+            elif perfil_norm == PERFIL_PERSONALIZADO and not custom_obj: st.error("Selecione um perfil personalizado ativo.")
+            elif not is_master_novo and not (custom_obj and custom_obj.visao_lag) and site_final == "Corporativo": st.error("Selecione um site operacional para este perfil.")
+            else:
+                obj = Usuario(nome=nome.strip(), perfil=perfil_norm, site_id=sites.get(site_final), ativo=True, is_master=is_master_novo, perfil_personalizado_id=custom_obj.id if custom_obj else None, criado_em=datetime.utcnow(), atualizado_em=datetime.utcnow())
+                set_user_password(obj, senha or SENHA_PADRAO_NOVO_USUARIO)
+                db.add(obj); db.flush(); registrar_log(db,u,"Usuários e Acessos","Usuario",obj.id,"criar",observacao=f"Usuário {obj.nome} criado")
+                db.commit(); st.success("Usuário criado."); st.rerun()
+        section("Editar usuário existente")
+        editaveis=[x for x in usuarios if not is_super_admin_user(x)]
+        if editaveis:
+            labels={x.id:f"{x.nome} — {normalizar_perfil_acesso(x.perfil)}" for x in editaveis}
+            uid=st.selectbox("Selecionar usuário", list(labels.keys()), format_func=lambda x:labels.get(x,str(x)), key="usuario_editar_select")
+            obj=db.get(Usuario,int(uid))
+            if obj:
+                perfil_atual=normalizar_perfil_acesso(obj.perfil)
+                custom_atual=obj.perfil_personalizado_obj.nome if getattr(obj,"perfil_personalizado_obj",None) else (nomes_custom[0] if nomes_custom else None)
+                with st.form("editar_usuario_form"):
+                    c1,c2,c3=st.columns(3)
+                    novo_perfil=c1.selectbox("Perfil", perfis_opcoes, index=perfis_opcoes.index(perfil_atual) if perfil_atual in perfis_opcoes else 2)
+                    novo_custom_nome=None
+                    if novo_perfil==PERFIL_PERSONALIZADO:
+                        novo_custom_nome=c2.selectbox("Perfil personalizado", nomes_custom, index=nomes_custom.index(custom_atual) if custom_atual in nomes_custom else 0)
+                        custom_obj=mapa_custom.get(novo_custom_nome)
+                        site_choices=["Corporativo"]+site_opts_locais if custom_obj and custom_obj.visao_lag else site_opts_locais
+                    else:
+                        custom_obj=None; site_choices=site_opts_todos if novo_perfil==PERFIL_MASTER else site_opts_locais; c2.caption("Perfil padrão")
+                    site_atual="Corporativo" if is_master_user(obj) or is_custom_lag_user(obj) else (obj.site.codigo if obj.site else (site_choices[0] if site_choices else "Corporativo"))
+                    novo_site=c3.selectbox("Site / Escopo", site_choices, index=site_choices.index(site_atual) if site_atual in site_choices else 0)
+                    ativo=st.checkbox("Ativo", value=bool(obj.ativo))
+                    nova_senha=st.text_input("Nova senha (opcional)", type="password")
+                    salvar=st.form_submit_button("Salvar alterações", use_container_width=True)
+                if salvar:
+                    novo_perfil=normalizar_perfil_acesso(novo_perfil)
+                    custom_obj=mapa_custom.get(novo_custom_nome) if novo_perfil==PERFIL_PERSONALIZADO else None
+                    is_master_editado=novo_perfil==PERFIL_MASTER
+                    site_final="Corporativo" if is_master_editado or (custom_obj and custom_obj.visao_lag and novo_site=="Corporativo") else novo_site
+                    if not is_master_editado and not (custom_obj and custom_obj.visao_lag) and site_final=="Corporativo": st.error("Selecione um site operacional para este perfil."); st.stop()
+                    obj.perfil=novo_perfil; obj.site_id=sites.get(site_final); obj.ativo=bool(ativo); obj.is_master=is_master_editado; obj.perfil_personalizado_id=custom_obj.id if custom_obj else None; obj.atualizado_em=datetime.utcnow()
+                    if nova_senha: set_user_password(obj,nova_senha)
+                    registrar_log(db,u,"Usuários e Acessos","Usuario",obj.id,"editar",observacao=f"Usuário {obj.nome} atualizado")
+                    db.commit(); st.success("Usuário atualizado."); st.rerun()
+        else: empty_state("Nenhum usuário editável além do administrador principal.")
+    with tabs[1]:
+        section("Criar perfil personalizado")
+        with st.form("criar_perfil_personalizado"):
+            c1,c2=st.columns([2,1]); nome_perfil=c1.text_input("Nome do perfil"); visao_lag=c2.checkbox("Permitir visão LAG / todos os sites", value=False); descricao=st.text_area("Descrição", height=80)
+            df_perm=permissoes_df(db,None); st.caption("Defina as permissões por página. Editar também permite visualizar.")
+            editado=st.data_editor(df_perm, use_container_width=True, hide_index=True, key="novo_perfil_perm_editor", disabled=["Módulo","Página"])
+            salvar_perfil=st.form_submit_button("Criar perfil personalizado", use_container_width=True, type="primary")
+        if salvar_perfil:
+            if not nome_perfil.strip(): st.error("Informe o nome do perfil.")
+            elif db.query(PerfilAcessoPersonalizado).filter(PerfilAcessoPersonalizado.nome.ilike(nome_perfil.strip())).first(): st.error("Já existe perfil personalizado com esse nome.")
+            else:
+                perfil=PerfilAcessoPersonalizado(nome=nome_perfil.strip(), descricao=descricao, visao_lag=bool(visao_lag), ativo=True, criado_por=u.nome if u else "Sistema")
+                db.add(perfil); db.flush(); salvar_permissoes_personalizadas(db,perfil,editado); registrar_log(db,u,"Usuários e Acessos","PerfilAcessoPersonalizado",perfil.id,"criar",observacao=f"Perfil {perfil.nome} criado")
+                db.commit(); st.success("Perfil personalizado criado."); st.rerun()
+        section("Editar perfil personalizado")
+        perfis=db.query(PerfilAcessoPersonalizado).order_by(PerfilAcessoPersonalizado.nome).all()
+        if perfis:
+            labels={p.id:f"{p.nome} — {'ativo' if p.ativo else 'inativo'}" for p in perfis}
+            pid=st.selectbox("Selecionar perfil", list(labels.keys()), format_func=lambda x:labels.get(x,str(x)), key="perfil_custom_editar")
+            perfil=db.get(PerfilAcessoPersonalizado,int(pid))
+            if perfil:
+                with st.form("editar_perfil_personalizado"):
+                    c1,c2,c3=st.columns([2,1,1]); perfil.nome=c1.text_input("Nome", value=perfil.nome); visao_lag_edit=c2.checkbox("Visão LAG", value=bool(perfil.visao_lag)); ativo_edit=c3.checkbox("Ativo", value=bool(perfil.ativo)); perfil.descricao=st.text_area("Descrição", value=perfil.descricao or "", height=80)
+                    df_perm=permissoes_df(db,perfil.id); editado=st.data_editor(df_perm, use_container_width=True, hide_index=True, key=f"perfil_perm_editor_{perfil.id}", disabled=["Módulo","Página"])
+                    salvar_edit=st.form_submit_button("Salvar perfil", use_container_width=True)
+                if salvar_edit:
+                    perfil.visao_lag=bool(visao_lag_edit); perfil.ativo=bool(ativo_edit); perfil.atualizado_em=datetime.utcnow(); salvar_permissoes_personalizadas(db,perfil,editado); registrar_log(db,u,"Usuários e Acessos","PerfilAcessoPersonalizado",perfil.id,"editar",observacao=f"Perfil {perfil.nome} atualizado")
+                    db.commit(); st.success("Perfil atualizado."); st.rerun()
+        else: empty_state("Nenhum perfil personalizado cadastrado.")
+    with tabs[2]:
+        section("Matriz de páginas disponíveis")
+        st.dataframe(pd.DataFrame(lista_paginas_permissao(), columns=["Módulo","Página","Descrição"]), use_container_width=True, hide_index=True)
+
 
 def _auto_streamlit_key(prefix, base=""):
     chave_contador = f"_{prefix}_auto_counter"
@@ -2956,12 +3340,18 @@ def _auto_streamlit_key(prefix, base=""):
 def plotly_chart_safe(fig, *args, **kwargs):
     try:
         fig.update_layout(
-            font=dict(color="#111827"),
-            title_font=dict(color="#111827"),
-            legend=dict(font=dict(color="#111827")),
+            template="plotly_white",
+            font=dict(color="#111827", family="Arial, sans-serif", size=12),
+            title_font=dict(color="#111827", size=18),
+            legend=dict(font=dict(color="#111827"), orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(255,255,255,1)",
+            margin=dict(l=24, r=24, t=64, b=36),
+            colorway=DEFAULT_PLOTLY_COLORWAY,
+            hoverlabel=dict(bgcolor="#ffffff", font_size=12, font_color="#111827"),
         )
-        fig.update_xaxes(tickfont=dict(color="#111827"), title_font=dict(color="#111827"))
-        fig.update_yaxes(tickfont=dict(color="#111827"), title_font=dict(color="#111827"))
+        fig.update_xaxes(showgrid=False, tickfont=dict(color="#111827"), title_font=dict(color="#111827"), zeroline=False)
+        fig.update_yaxes(gridcolor="#e5e7eb", tickfont=dict(color="#111827"), title_font=dict(color="#111827"), zeroline=False)
         for tr in fig.data:
             try:
                 if getattr(tr, "text", None) is not None:
@@ -2979,6 +3369,7 @@ def plotly_chart_safe(fig, *args, **kwargs):
     if kwargs.get("key") is None:
         kwargs["key"] = _auto_streamlit_key("plotly_chart", getattr(fig, "layout", ""))
     return st.__getattribute__("plotly_chart")(fig, *args, **kwargs)
+
 def download_excel_button(label,file,sheets,key=None):
     if key is None:
         key = _auto_streamlit_key("download_excel", f"{label}|{file}")
@@ -3057,83 +3448,55 @@ def dashboard_integrado(db,u):
     else:
         empty_state("Nenhum alerta crítico ou vencido identificado.")
 
+
+def _home_module_button(titulo, descricao, modulo_destino, pagina_key=None, pagina_home=None, color_key=None, button_label=None, key=None):
+    mc=MODULO_COLOR_MAP.get(color_key or modulo_destino, MODULO_COLOR_MAP.get("relatorios"))
+    module_card(titulo, descricao, mc["icon"], mc["border"], mc["bg"])
+    if st.button(button_label or f"Acessar {titulo}", use_container_width=True, key=key or f"home_{modulo_destino}"):
+        st.session_state.modulo=modulo_destino
+        if pagina_key and pagina_home:
+            st.session_state[pagina_key]=pagina_home
+            st.session_state[f"nav_{modulo_destino}"]=pagina_home
+            st.session_state[f"submodulo_{modulo_destino}"]=""
+        st.rerun()
+
 def home_page(db,u):
     header("Plataforma Integrada EHS","Sustentação de Proteções de Máquinas, Auditorias Cruzadas, Controle de Energia e Emissões, Near Miss, Legislação e Relatórios Integrados")
     section("Módulos")
-    c1,c2=st.columns(2)
-    with c1:
-        mc=MODULO_COLOR_MAP["maquinas"]
-        module_card(NOME_MODULO_MAQUINAS,"Inventário, documentos, checklists, PAC, pendências e relatórios de proteções de máquinas.",mc["icon"],mc["border"],mc["bg"])
-        if st.button(f"Acessar {NOME_MODULO_MAQUINAS}",use_container_width=True):
-            st.session_state.modulo="nr12"
-            st.session_state.page_nr12=NR12_HOME_PAGE
-            st.session_state.nav_nr12=NR12_HOME_PAGE
-            st.session_state.submodulo_nr12=""
-            st.rerun()
-        ec=MODULO_COLOR_MAP["energia"]
-        module_card("Controle de Energia e Emissões","Consumo de energia, gás natural, CO₂, gastos, eficiência energética, R12, FY e análise I-REC.",ec["icon"],ec["border"],ec["bg"])
-        if st.button("Acessar Controle de Energia",use_container_width=True):
-            st.session_state.modulo="energia"
-            st.session_state.page_energia=ENERGIA_HOME_PAGE
-            st.session_state.nav_energia=ENERGIA_HOME_PAGE
-            st.session_state.submodulo_energia=""
-            st.rerun()
-        rc=MODULO_COLOR_MAP["relatorios"]
-        module_card(NOME_MODULO_RELATORIOS,"PDF executivo unificado com principais indicadores, sites prioritários e foco de trabalho por unidade.",rc["icon"],rc["border"],rc["bg"])
-        if st.button("Acessar Relatórios Integrados",use_container_width=True):
-            st.session_state.modulo="relatorios"
-            st.session_state.page_relatorios=RELATORIOS_HOME_PAGE
-            st.session_state.nav_relatorios=RELATORIOS_HOME_PAGE
-            st.session_state.submodulo_relatorios=""
-            st.rerun()
-    with c2:
-        ac=MODULO_COLOR_MAP["auditoria"]
-        module_card("Auditoria Cruzada de Diretrizes de EHS","Planejamento, checklist incorporado, evidências, maturidade, PAC e relatórios.",ac["icon"],ac["border"],ac["bg"])
-        if st.button("Acessar Auditoria Cruzada",use_container_width=True):
-            st.session_state.modulo="ehs"
-            st.session_state.page_ehs=EHS_HOME_PAGE
-            st.session_state.nav_ehs=EHS_HOME_PAGE
-            st.session_state.submodulo_ehs=""
-            st.rerun()
-        nm=MODULO_COLOR_MAP["nearmiss"]
-        module_card("Near Miss","Concern Reports, near misses, acompanhamento de prazos, fechamento no prazo e pendências por site/divisão.",nm["icon"],nm["border"],nm["bg"])
-        if st.button("Acessar Near Miss",use_container_width=True):
-            st.session_state.modulo="nearmiss"
-            st.session_state.page_nearmiss=NEARMISS_HOME_PAGE
-            st.session_state.nav_nearmiss=NEARMISS_HOME_PAGE
-            st.session_state.submodulo_nearmiss=""
-            st.rerun()
-        lg=MODULO_COLOR_MAP["legal"]
-        module_card(NOME_MODULO_LEGAL,"Atendimento legal por legislação e por obrigação, base LIRA Jundiaí e consolidado dos demais sites.",lg["icon"],lg["border"],lg["bg"])
-        if st.button("Acessar Legislação e Obrigações",use_container_width=True):
-            st.session_state.modulo="legal"
-            st.session_state.page_legal=LEGAL_HOME_PAGE
-            st.session_state.nav_legal=LEGAL_HOME_PAGE
-            st.session_state.submodulo_legal=""
-            st.rerun()
-
+    cards=[]
+    if can_access_module(u,"nr12"):
+        cards.append((NOME_MODULO_MAQUINAS,"Inventário, documentos, checklists, ações corretivas, pendências e relatórios de proteções de máquinas.","nr12","page_nr12",NR12_HOME_PAGE,"maquinas",f"Acessar {NOME_MODULO_MAQUINAS}"))
+    if can_access_module(u,"ehs"):
+        cards.append(("Auditoria Cruzada de Diretrizes de EHS","Planejamento, checklist de diretrizes, evidências, maturidade, ações corretivas e relatórios.","ehs","page_ehs",EHS_HOME_PAGE,"auditoria","Acessar Auditoria Cruzada"))
+    if can_access_module(u,"energia"):
+        cards.append(("Controle de Energia e Emissões","Consumo de energia, gás natural, CO2, gastos, eficiência energética, R12, FY e análise I-REC.","energia","page_energia",ENERGIA_HOME_PAGE,"energia","Acessar Controle de Energia"))
+    if can_access_module(u,"nearmiss"):
+        cards.append(("Near Miss","Concern Reports, near misses, acompanhamento de prazos, fechamento no prazo e pendências por site/divisão.","nearmiss","page_nearmiss",NEARMISS_HOME_PAGE,"nearmiss","Acessar Near Miss"))
+    if can_access_module(u,"legal"):
+        cards.append((NOME_MODULO_LEGAL,"Atendimento legal por legislação e por obrigação, base LIRA Jundiaí e consolidado dos demais sites.","legal","page_legal",LEGAL_HOME_PAGE,"legal","Acessar Legislação e Obrigações"))
+    if can_access_module(u,"relatorios"):
+        cards.append((NOME_MODULO_RELATORIOS,"PDF executivo unificado com principais indicadores, sites prioritários e foco de trabalho por unidade.","relatorios","page_relatorios",RELATORIOS_HOME_PAGE,"relatorios","Acessar Relatórios Integrados"))
+    if can_access_module(u,"pendencias"):
+        cards.append((NOME_MODULO_PENDENCIAS,"Visão consolidada de pendências, prazos vencidos, obrigações abertas e ações corretivas.","pendencias",None,None,"pendencias","Acessar Central de Pendências"))
+    if can_access_module(u,"pac"):
+        cards.append((NOME_MODULO_PAC_UNIFICADO,"Consulta única dos planos de ação corretiva no padrão Gensuite ATS.","pac",None,None,"pac","Acessar Ações Corretivas"))
+    for i in range(0,len(cards),2):
+        cols=st.columns(2)
+        for col,card in zip(cols,cards[i:i+2]):
+            with col:
+                _home_module_button(*card, key=f"home_card_{card[2]}_{i}")
     if is_super_admin_user(u):
         section("Administração")
         c_admin1, c_admin2, c_space = st.columns([1,1,2])
         with c_admin1:
-            module_card("Usuários e Acessos", "Criação de logins, perfis e segmentação por site.", "👥", "#0f172a", "#f8fafc")
+            module_card("Usuários e Acessos", "Criação de logins, perfis, permissões e segmentação por site.", "👥", "#0f172a", "#f8fafc")
             if st.button("Acessar Usuários e Acessos", use_container_width=True, key="home_usuarios_acessos"):
-                st.session_state.modulo="usuarios"
-                st.rerun()
+                st.session_state.modulo="usuarios"; st.rerun()
         with c_admin2:
             module_card(NOME_MODULO_BASES, "Importação e manutenção centralizada das bases oficiais da plataforma.", "📥", "#0f172a", "#f8fafc")
             if st.button("Acessar Atualização de Bases", use_container_width=True, key="home_atualizacao_bases"):
-                st.session_state.modulo="bases"
-                st.rerun()
-
+                st.session_state.modulo="bases"; st.rerun()
     dashboard_integrado(db,u)
-
-    section("Ajuda")
-    c_help, c_empty = st.columns([1,3])
-    with c_help:
-        if st.button("❔ Abrir ajuda rápida", use_container_width=True, key="home_ajuda_rapida"):
-            st.session_state.modulo="ajuda"
-            st.rerun()
 
 def nr12_submodulos_home(db,u):
     header(NOME_MODULO_MAQUINAS, "Escolha um submódulo para visualizar, editar ou governar as informações de sustentação.")
@@ -3319,6 +3682,11 @@ def nr12_inventario(db,u):
             alert_card("Nenhum site disponível para cadastro conforme o perfil do usuário.")
         else:
             with st.expander("Cadastrar máquina"):
+                draft_key=f"cadastro_maquina_{u.id if u else 'anon'}"
+                draft=carregar_rascunho(db,u,draft_key,{})
+                for _k,_v in draft.items():
+                    if _k.startswith("maq_new_") and _k not in st.session_state:
+                        st.session_state[_k]=_v
                 a,b,c=st.columns(3)
                 with a:
                     cod=st.text_input("Código*", key="maq_new_codigo")
@@ -3351,7 +3719,14 @@ def nr12_inventario(db,u):
                         st.caption("Máquina conforme: data prevista para adequação não aplicável.")
                 st.caption("Laudo, ART, apreciação de risco, manual e treinamento devem ser controlados pela aba Documentos de Proteções de Máquinas.")
                 obs=st.text_area("Observações", key="maq_new_obs")
-                if st.button("Salvar máquina",use_container_width=True,key="maq_new_salvar"):
+                col_rasc,col_salvar=st.columns([1,1])
+                if col_rasc.button("Salvar rascunho",use_container_width=True,key="maq_new_salvar_rascunho"):
+                    campos=["maq_new_codigo","maq_new_site","maq_new_area","maq_new_linha","maq_new_nome","maq_new_fabricante","maq_new_modelo","maq_new_serie","maq_new_ano","maq_new_tipo","maq_new_resp","maq_new_criticidade","maq_new_risco","maq_new_status","maq_new_prox","maq_new_data_prevista_adequacao","maq_new_obs"]
+                    dados={k:st.session_state.get(k) for k in campos if k in st.session_state}
+                    salvar_rascunho(db,u,draft_key,NOME_MODULO_MAQUINAS,"Inventário de Máquinas",dados)
+                    db.commit()
+                    st.success("Rascunho salvo.")
+                if col_salvar.button("Salvar máquina",use_container_width=True,key="maq_new_salvar"):
                     ok_limite, limite_prox_calc, msg_limite = validar_data_dentro_limite(db,"Auditoria EHS",crit,prox,date.today())
                     if not ok_limite:
                         st.error(msg_limite)
@@ -3366,6 +3741,7 @@ def nr12_inventario(db,u):
                         )
                         db.add(nova); db.flush()
                         registrar_log(db,u,NOME_MODULO_MAQUINAS,"MaquinaNR12",nova.id,"criar",observacao=f"Máquina {cod} cadastrada")
+                        limpar_rascunho(db,u,draft_key)
                         db.commit()
                         st.success("Máquina cadastrada.")
                         st.rerun()
@@ -5264,6 +5640,7 @@ def procedimentos_ar_atualizar_base(db,u):
                 if regs:
                     db.bulk_insert_mappings(ProcedimentoAltoRiscoRegistro, regs)
                 db.add(ProcedimentoAltoRiscoUploadHistorico(nome_arquivo=up.name, linhas_importadas=len(regs), usuario=u.nome if u else "—", observacoes="Substituição manual da base de procedimentos"))
+                registrar_versao_base(db, "ehs", "Procedimentos de Alto Risco", up.name, len(regs), u, "Substituição manual da base de procedimentos")
                 db.commit()
                 st.cache_data.clear()
                 st.success("Base de procedimentos atualizada.")
@@ -7852,6 +8229,7 @@ def energia_atualizar_base(db,u):
         for _, r in parsed.iterrows():
             db.add(EnergiaRegistro(**r.to_dict()))
         db.add(EnergiaUploadHistorico(tipo_base="Energia/Gás/Emissões", nome_arquivo=f"{up_energia.name} + {up_emissoes.name}", usuario=u.nome if u else "", observacoes=f"{len(parsed)} linhas importadas; emissões vindas da planilha EMISSOES."))
+        registrar_versao_base(db, "energia", "Energia, gás e emissões", f"{up_energia.name} + {up_emissoes.name}", len(parsed), u, "Base principal de consumo, custo e emissões")
         db.commit()
         st.cache_data.clear()
         st.success("Base de energia, gás e emissões atualizada com sucesso.")
@@ -7879,6 +8257,7 @@ def energia_actual_hours_page(db,u):
                         ).delete()
                         db.add(EnergiaActualHours(**r.to_dict()))
                     db.add(EnergiaUploadHistorico(tipo_base="Actual Hours", nome_arquivo=up.name, usuario=u.nome if u else "", observacoes=f"{len(parsed)} linhas importadas"))
+                    registrar_versao_base(db, "energia", "Actual Hours", up.name, len(parsed), u, "Importação de horas trabalhadas")
                     db.commit()
                     st.cache_data.clear()
                     st.success("Actual Hours importado/atualizado.")
@@ -8829,6 +9208,7 @@ def near_miss_atualizar_base(db,u):
             db.bulk_insert_mappings(NearMissRegistro, records)
             for f in files:
                 db.add(NearMissUploadHistorico(nome_arquivo=f.name, linhas_importadas=len(records), usuario=u.nome if u else "Sistema", observacoes="Base sobrescrita"))
+            registrar_versao_base(db, "nearmiss", "Concern Reports / Near Miss", ", ".join([f.name for f in files])[:260], len(records), u, "Base sobrescrita")
             registrar_log(db,u,"Near Miss","NearMissRegistro",None,"atualizar_base",observacao=f"{len(records)} registros importados")
             db.commit()
             st.cache_data.clear()
@@ -9571,6 +9951,7 @@ def legal_atualizar_base(db,u):
                     if regs:
                         db.bulk_insert_mappings(LegalRegistro,regs)
                     db.add(LegalUploadHistorico(nome_arquivo=", ".join([f.name for f in files])[:260],tipo_base=tipo_hist,linhas_importadas=len(regs),usuario=u.nome if u else "—",observacoes=f"Atualização: {modo}"))
+                    registrar_versao_base(db, "legal", f"Legislação e Obrigações - {tipo_hist}", ", ".join([f.name for f in files])[:260], len(regs), u, f"Atualização: {modo}")
                     registrar_log(db,u,NOME_MODULO_LEGAL,"LegalRegistro",None,"sobrescrever",observacao=f"{len(regs)} registros importados | {modo}")
                     db.commit()
                     st.cache_data.clear()
@@ -10025,7 +10406,7 @@ def render_sidebar(db,u):
     st.sidebar.divider()
     if mod in ["energia", "nearmiss", "legal", "ehs"]:
         mostrar_ultima_atualizacao_modulo(db, mod, u, local="sidebar")
-    if mod=="ajuda":
+    if mod in ["ajuda", "pendencias", "pac", "usuarios", "bases"]:
         return
     if mod=="nr12":
         all_pages=[NR12_HOME_PAGE]
@@ -10052,7 +10433,7 @@ def render_sidebar(db,u):
             sub_opcoes=list(submodulos_visiveis("nr12",u).keys())
             idx=sub_opcoes.index(sub_atual) if sub_atual in sub_opcoes else 0
             sub=st.sidebar.selectbox("Submódulo",sub_opcoes,index=idx,key="submodulo_nr12")
-            pages=[p for p in NR12_SUBMODULOS[sub]["paginas"] if p!="Logs do Sistema" or can_admin(u)]
+            pages=submodulos_visiveis("nr12",u)[sub]["paginas"]
             if current not in pages:
                 current=pages[0] if pages else NR12_HOME_PAGE
                 st.session_state.page_nr12=current
@@ -10196,7 +10577,7 @@ def render_sidebar(db,u):
 
     elif mod=="relatorios":
         all_pages=[RELATORIOS_HOME_PAGE]
-        for nome,cfg in RELATORIOS_SUBMODULOS.items():
+        for nome,cfg in submodulos_visiveis("relatorios",u).items():
             for p in cfg["paginas"]:
                 if p not in all_pages:
                     all_pages.append(p)
@@ -10210,14 +10591,14 @@ def render_sidebar(db,u):
             st.session_state.page_relatorios=selected
         else:
             sub_atual=None
-            for nome,cfg in RELATORIOS_SUBMODULOS.items():
+            for nome,cfg in submodulos_visiveis("relatorios",u).items():
                 if current in cfg["paginas"]:
                     sub_atual=nome
                     break
-            sub_opcoes=list(RELATORIOS_SUBMODULOS.keys())
+            sub_opcoes=list(submodulos_visiveis("relatorios",u).keys())
             idx=sub_opcoes.index(sub_atual) if sub_atual in sub_opcoes else 0
             sub=st.sidebar.selectbox("Submódulo",sub_opcoes,index=idx,key="submodulo_relatorios")
-            pages=RELATORIOS_SUBMODULOS[sub]["paginas"]
+            pages=submodulos_visiveis("relatorios",u)[sub]["paginas"]
             if current not in pages:
                 current=pages[0] if pages else RELATORIOS_HOME_PAGE
                 st.session_state.page_relatorios=current
@@ -10232,6 +10613,9 @@ def route(db,u):
     mod=st.session_state.get("modulo","home")
     if mod != "home":
         render_breadcrumb()
+    if not can_access_module(u, mod) and mod not in ["home", "ajuda"]:
+        alert_card("Acesso não autorizado para este módulo.")
+        return
     if mod=="home": home_page(db,u)
     elif mod=="ajuda":
         ajuda_rapida_page(db,u)
@@ -10239,6 +10623,10 @@ def route(db,u):
         usuarios_admin_page(db,u)
     elif mod=="bases":
         bases_atualizacoes_page(db,u)
+    elif mod=="pendencias":
+        pendencias_integradas_page(db,u)
+    elif mod=="pac":
+        pac_unificado_page(db,u)
     elif mod=="nr12":
         paginas={
             NR12_HOME_PAGE:nr12_submodulos_home,
@@ -10255,6 +10643,8 @@ def route(db,u):
             "Logs do Sistema":logs_sistema_page,
         }
         page=st.session_state.get("page_nr12",NR12_HOME_PAGE)
+        if not can_access_page(u,"nr12",page):
+            alert_card("Acesso não autorizado para esta página."); return
         paginas.get(page,nr12_submodulos_home)(db,u)
     elif mod=="ehs":
         paginas={
@@ -10269,6 +10659,8 @@ def route(db,u):
             "Logs do Sistema": logs_sistema_page,
         }
         page=st.session_state.get("page_ehs",EHS_HOME_PAGE)
+        if not can_access_page(u,"ehs",page):
+            alert_card("Acesso não autorizado para esta página."); return
         paginas.get(page,ehs_submodulos_home)(db,u)
     elif mod=="energia":
         paginas={
@@ -10282,6 +10674,8 @@ def route(db,u):
             "Parâmetros": energia_parametros_page,
         }
         page=st.session_state.get("page_energia",ENERGIA_HOME_PAGE)
+        if not can_access_page(u,"energia",page):
+            alert_card("Acesso não autorizado para esta página."); return
         paginas.get(page,energia_submodulos_home)(db,u)
 
     elif mod=="nearmiss":
@@ -10294,6 +10688,8 @@ def route(db,u):
             "Relatórios Near Miss": near_miss_relatorios_page,
         }
         page=st.session_state.get("page_nearmiss",NEARMISS_HOME_PAGE)
+        if not can_access_page(u,"nearmiss",page):
+            alert_card("Acesso não autorizado para esta página."); return
         paginas.get(page,near_miss_submodulos_home)(db,u)
 
     elif mod=="legal":
@@ -10304,6 +10700,8 @@ def route(db,u):
             "Base Legal Consolidada": legal_base_page,
                     }
         page=st.session_state.get("page_legal",LEGAL_HOME_PAGE)
+        if not can_access_page(u,"legal",page):
+            alert_card("Acesso não autorizado para esta página."); return
         paginas.get(page,legal_submodulos_home)(db,u)
 
     elif mod=="relatorios":
@@ -10313,6 +10711,8 @@ def route(db,u):
             "Exportação Gensuite ATS": ats_gensuite_export_page,
         }
         page=st.session_state.get("page_relatorios",RELATORIOS_HOME_PAGE)
+        if not can_access_page(u,"relatorios",page):
+            alert_card("Acesso não autorizado para esta página."); return
         paginas.get(page,relatorios_integrados_submodulos_home)(db,u)
 
 
